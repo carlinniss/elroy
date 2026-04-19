@@ -6,7 +6,7 @@ export async function GET() {
       });
       const data = await response.json();
       const remaining = data.character_limit - data.character_count;
-      const resetDate = new Date(data.next_character_count_reset_unix * 1000).toLocaleDateString();W
+      const resetDate = new Date(data.next_character_count_reset_unix * 1000).toLocaleDateString();
   
       return new Response(JSON.stringify({ remaining, resetDate }), {
         headers: { "Content-Type": "application/json" },
