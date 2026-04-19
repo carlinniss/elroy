@@ -9,10 +9,10 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "ai": "^6.1.0",
-    "@ai-sdk/google": "^3.1.0",
-    "zod": "^4.3.6",
-    "next": "^16.2.4",
+    "ai": "^5.0.0",
+    "@ai-sdk/google": "^3.0.0",
+    "zod": "^3.23.8",
+    "next": "^15.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tmi.js": "^1.8.5"
