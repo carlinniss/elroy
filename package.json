@@ -1,0 +1,26 @@
+{
+    "name": "elroy-ai-bot",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "dev": "next dev",
+        "build": "next build",
+        "start": "next start"
+    },
+    "dependencies": {
+        "@ai-sdk/google": "^3.0.64",
+        "ai": "^6.0.168",
+        "elevenlabs": "^0.1.0",
+        "next": "14.2.0",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "tmi.js": "^1.8.5"
+    },
+    "devDependencies": {
+        "@types/node": "^20",
+        "@types/react": "^18",
+        "@types/react-dom": "^18",
+        "@types/tmi.js": "^1.8.6",
+        "typescript": "^5"
+    }
+}
