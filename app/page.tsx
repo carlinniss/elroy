@@ -84,11 +84,20 @@ function BongContent() {
   const startBot = async () => {
     if (isActive) return;
     const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
     const client = new tmi.Client({ identity: { username: chan, password: process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN! }, channels: [chan] });
     client.on('message', (_c: string, t: tmi.ChatUserstate, m: string, s: boolean) => {
       if (s) return;
       if (m.toLowerCase() === '!quota') return processBongLogic('', t.username, true);
-      if (m.toLowerCase() === '!gong') return toggleGong(t.username);
+      if (m.toLowerCase() === '!gong') {
+        const username = (t.username || '').toLowerCase();
+        const isBroadcaster = username === normalizedChannel;
+        const isModerator = t.mod === true;
+        if (isBroadcaster || isModerator) {
+          return toggleGong(t.username);
+        }
+        return;
+      }
       if (m.toLowerCase().startsWith('!ask')) return processBongLogic(m.slice(4), t.username);
     });
     await client.connect();
