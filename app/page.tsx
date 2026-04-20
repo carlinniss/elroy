@@ -81,6 +81,27 @@ function BongContent() {
     clientRef.current?.say(channel, user ? `@${user} gong ${nextState ? 'on' : 'off'}.` : `gong ${nextState ? 'on' : 'off'}.`);
   }, []);
 
+  const stopBot = useCallback(async (announceUser?: string) => {
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    const client = clientRef.current;
+    if (client) {
+      try {
+        if (announceUser) {
+          await client.say(channel, `@${announceUser} Elroy is off.`);
+        }
+        await client.disconnect();
+      } catch (e) {
+        console.warn(e);
+      }
+      clientRef.current = null;
+    }
+    setIsActive(false);
+  }, []);
+
   const startBot = async () => {
     if (isActive) return;
     const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
@@ -95,6 +116,15 @@ function BongContent() {
         const isModerator = t.mod === true;
         if (isBroadcaster || isModerator) {
           return toggleGong(t.username);
+        }
+        return;
+      }
+      if (m.toLowerCase() === '!elroyoff') {
+        const username = (t.username || '').toLowerCase();
+        const isBroadcaster = username === normalizedChannel;
+        const isModerator = t.mod === true;
+        if (isBroadcaster || isModerator) {
+          return void stopBot(t.username);
         }
         return;
       }
