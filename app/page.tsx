@@ -14,6 +14,22 @@ function BongContent() {
   const clientRef = useRef<tmi.Client | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const gongEnabledRef = useRef(true);
+  const recentChatRef = useRef<Array<{ user: string; text: string }>>([]);
+
+  const rememberChatLine = useCallback((user: string, text: string) => {
+    const normalized = text.trim();
+    if (!normalized) return;
+    recentChatRef.current = [{ user, text: normalized }, ...recentChatRef.current].slice(0, 12);
+  }, []);
+
+  const buildChatAwarePrompt = useCallback(() => {
+    const recent = recentChatRef.current.slice(0, 8);
+    if (!recent.length) {
+      return "No one is chatting yet. Drop a longer, welcoming OG check-in and invite chat to ask a question.";
+    }
+    const lines = recent.map((entry) => `- ${entry.user}: ${entry.text}`).join("\n");
+    return `Use the recent Twitch chat to make a topical OG comment (not random). Reference the vibe, themes, or jokes from these messages:\n${lines}\nKeep it natural and conversational for stream chat.`;
+  }, []);
 
   const runDiagnostics = useCallback(async () => {
     try {
@@ -51,7 +67,8 @@ function BongContent() {
         clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate}.`);
         return;
       }
-      const res = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: input }) });
+      const fullPrompt = `${input}\n\nResponse requirements:\n- Make your response about 2x your normal length.\n- Aim for roughly 220-320 characters.\n- Keep the same OG personality and rhythm.`;
+      const res = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: fullPrompt }) });
       const data = await res.json();
       setLog(p => [{ text: data.text }, ...p].slice(0, 5));
       clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, user ? `@${user} ${data.text}` : data.text);
@@ -68,10 +85,10 @@ function BongContent() {
   const startAutoCommentary = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
-      processBongLogic("Drop a random short piece of 710 OG wisdom.");
+      processBongLogic(buildChatAwarePrompt());
       startAutoCommentary();
     }, Math.random() * (300000 - 180000) + 180000); // 3-5 mins
-  }, [processBongLogic]);
+  }, [buildChatAwarePrompt, processBongLogic]);
 
   const toggleGong = useCallback((user?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
@@ -109,10 +126,14 @@ function BongContent() {
     const client = new tmi.Client({ identity: { username: chan, password: process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN! }, channels: [chan] });
     client.on('message', (_c: string, t: tmi.ChatUserstate, m: string, s: boolean) => {
       if (s) return;
+      const username = t.username || 'viewer';
+      if (!m.startsWith('!')) {
+        rememberChatLine(username, m);
+      }
       if (m.toLowerCase() === '!quota') return processBongLogic('', t.username, true);
       if (m.toLowerCase() === '!gong') {
-        const username = (t.username || '').toLowerCase();
-        const isBroadcaster = username === normalizedChannel;
+        const normalizedUser = (t.username || '').toLowerCase();
+        const isBroadcaster = normalizedUser === normalizedChannel;
         const isModerator = t.mod === true;
         if (isBroadcaster || isModerator) {
           return toggleGong(t.username);
@@ -120,8 +141,8 @@ function BongContent() {
         return;
       }
       if (m.toLowerCase() === '!elroyoff') {
-        const username = (t.username || '').toLowerCase();
-        const isBroadcaster = username === normalizedChannel;
+        const normalizedUser = (t.username || '').toLowerCase();
+        const isBroadcaster = normalizedUser === normalizedChannel;
         const isModerator = t.mod === true;
         if (isBroadcaster || isModerator) {
           return void stopBot(t.username);
