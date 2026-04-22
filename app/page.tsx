@@ -14,7 +14,7 @@ function BongContent() {
   const clientRef = useRef<tmi.Client | null>(null);
   const gongEnabledRef = useRef(true);
   const recentChatRef = useRef<Array<{ user: string; text: string }>>([]);
-  const chatMessageCountRef = useRef(0);
+  const chatCharacterCountRef = useRef(0);
 
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
@@ -111,7 +111,7 @@ function BongContent() {
     if (isActive) return;
     const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
-    chatMessageCountRef.current = 0;
+    chatCharacterCountRef.current = 0;
     const client = new tmi.Client({ identity: { username: chan, password: process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN! }, channels: [chan] });
     client.on('message', (_c: string, t: tmi.ChatUserstate, m: string, s: boolean) => {
       if (s) return;
@@ -123,9 +123,9 @@ function BongContent() {
         rememberChatLine(username, m);
         const isWizebot = normalizedUser === 'wizebot';
         if (!isWizebot && !isBroadcaster) {
-          chatMessageCountRef.current += 1;
-          if (chatMessageCountRef.current >= 20) {
-            chatMessageCountRef.current = 0;
+          chatCharacterCountRef.current += m.trim().length;
+          if (chatCharacterCountRef.current >= 60) {
+            chatCharacterCountRef.current = 0;
             void processBongLogic(buildChatAwarePrompt());
           }
         }
@@ -150,8 +150,8 @@ function BongContent() {
     await client.connect();
     clientRef.current = client;
     setIsActive(true);
-    clientRef.current?.say(chan, 'im alive!');
-    setTimeout(() => speak('im alive!'), gongEnabledRef.current ? 1600 : 0);
+    clientRef.current?.say(chan, 'I AM ALIVE!');
+    setTimeout(() => speak('I AM ALIVE!'), gongEnabledRef.current ? 1600 : 0);
   };
 
   useEffect(() => { if (searchParams.get('autostart') === 'true') startBot(); }, [searchParams]);
