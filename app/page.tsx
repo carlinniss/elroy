@@ -12,9 +12,9 @@ function BongContent() {
   const [diagnostics, setDiagnostics] = useState({ chat: "...", speech: "...", sound: "...", quota: "..." });
 
   const clientRef = useRef<tmi.Client | null>(null);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
   const gongEnabledRef = useRef(true);
   const recentChatRef = useRef<Array<{ user: string; text: string }>>([]);
+  const chatMessageCountRef = useRef(0);
 
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
@@ -82,14 +82,6 @@ function BongContent() {
     } catch (e) { console.error(e); }
   }, [runDiagnostics]);
 
-  const startAutoCommentary = useCallback(() => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      processBongLogic(buildChatAwarePrompt());
-      startAutoCommentary();
-    }, Math.random() * (300000 - 180000) + 180000); // 3-5 mins
-  }, [buildChatAwarePrompt, processBongLogic]);
-
   const toggleGong = useCallback((user?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const nextState = !gongEnabledRef.current;
@@ -100,10 +92,6 @@ function BongContent() {
 
   const stopBot = useCallback(async (announceUser?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
     const client = clientRef.current;
     if (client) {
       try {
@@ -123,17 +111,27 @@ function BongContent() {
     if (isActive) return;
     const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
+    chatMessageCountRef.current = 0;
     const client = new tmi.Client({ identity: { username: chan, password: process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN! }, channels: [chan] });
     client.on('message', (_c: string, t: tmi.ChatUserstate, m: string, s: boolean) => {
       if (s) return;
       const username = t.username || 'viewer';
+      const normalizedUser = username.toLowerCase();
+      const isBroadcaster = normalizedUser === normalizedChannel;
+
       if (!m.startsWith('!')) {
         rememberChatLine(username, m);
+        const isWizebot = normalizedUser === 'wizebot';
+        if (!isWizebot && !isBroadcaster) {
+          chatMessageCountRef.current += 1;
+          if (chatMessageCountRef.current >= 20) {
+            chatMessageCountRef.current = 0;
+            void processBongLogic(buildChatAwarePrompt());
+          }
+        }
       }
       if (m.toLowerCase() === '!quota') return processBongLogic('', t.username, true);
       if (m.toLowerCase() === '!gong') {
-        const normalizedUser = (t.username || '').toLowerCase();
-        const isBroadcaster = normalizedUser === normalizedChannel;
         const isModerator = t.mod === true;
         if (isBroadcaster || isModerator) {
           return toggleGong(t.username);
@@ -141,8 +139,6 @@ function BongContent() {
         return;
       }
       if (m.toLowerCase() === '!elroyoff') {
-        const normalizedUser = (t.username || '').toLowerCase();
-        const isBroadcaster = normalizedUser === normalizedChannel;
         const isModerator = t.mod === true;
         if (isBroadcaster || isModerator) {
           return void stopBot(t.username);
@@ -154,7 +150,8 @@ function BongContent() {
     await client.connect();
     clientRef.current = client;
     setIsActive(true);
-    startAutoCommentary();
+    clientRef.current?.say(chan, 'im alive!');
+    setTimeout(() => speak('im alive!'), gongEnabledRef.current ? 1600 : 0);
   };
 
   useEffect(() => { if (searchParams.get('autostart') === 'true') startBot(); }, [searchParams]);
