@@ -75,7 +75,10 @@ function BongContent() {
         clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate}.`);
         return;
       }
-      const fullPrompt = `${input}\n\nResponse requirements:\n- Make your response about 2x your normal length.\n- Aim for roughly 220-320 characters.\n- Keep the same OG personality and rhythm.`;
+      const personalizationRule = user
+        ? `- Personalize the response directly for ${user} by name (say their username naturally in the message).`
+        : `- Keep it general for the whole chat, not aimed at one person.`;
+      const fullPrompt = `${input}\n\nResponse requirements:\n- Make your response about 2x your normal length.\n- Aim for roughly 220-320 characters.\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
       const res = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: fullPrompt }) });
       const data = await res.json();
       setLog(p => [{ text: data.text }, ...p].slice(0, 5));
