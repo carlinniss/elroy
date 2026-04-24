@@ -15,6 +15,7 @@ function BongContent() {
   const gongEnabledRef = useRef(true);
   const recentChatRef = useRef<Array<{ user: string; text: string }>>([]);
   const chatMessageCountRef = useRef(0);
+  const isSpeakingRef = useRef(false);
 
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
@@ -55,8 +56,14 @@ function BongContent() {
     try {
       const res = await fetch('/api/speech', { method: 'POST', body: JSON.stringify({ text }) });
       const audio = new Audio(URL.createObjectURL(await res.blob()));
+      isSpeakingRef.current = true;
+      audio.onended = () => { isSpeakingRef.current = false; };
+      audio.onerror = () => { isSpeakingRef.current = false; };
       await audio.play();
-    } catch (e) { console.warn("Audio blocked"); }
+    } catch (e) {
+      isSpeakingRef.current = false;
+      console.warn("Audio blocked");
+    }
   };
 
   const processBongLogic = useCallback(async (input: string, user?: string, isQuota = false) => {
@@ -145,7 +152,12 @@ function BongContent() {
         }
         return;
       }
-      if (m.toLowerCase().startsWith('!ask')) return processBongLogic(m.slice(4), t.username);
+      if (m.toLowerCase().startsWith('!ask')) {
+        const delayMs = isSpeakingRef.current ? 60_000 : 120_000;
+        return void setTimeout(() => {
+          void processBongLogic(m.slice(4), t.username);
+        }, delayMs);
+      }
     });
     await client.connect();
     clientRef.current = client;
