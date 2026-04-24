@@ -56,11 +56,24 @@ function BongContent() {
   const speak = async (text: string) => {
     try {
       const res = await fetch('/api/speech', { method: 'POST', body: JSON.stringify({ text }) });
-      const audio = new Audio(URL.createObjectURL(await res.blob()));
+      const audioUrl = URL.createObjectURL(await res.blob());
+      const audio = new Audio(audioUrl);
       isSpeakingRef.current = true;
-      audio.onended = () => { isSpeakingRef.current = false; };
-      audio.onerror = () => { isSpeakingRef.current = false; };
-      await audio.play();
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          isSpeakingRef.current = false;
+          URL.revokeObjectURL(audioUrl);
+          resolve();
+        };
+
+        audio.onended = finish;
+        audio.onerror = finish;
+        audio.play().catch(() => {
+          isSpeakingRef.current = false;
+          URL.revokeObjectURL(audioUrl);
+          resolve();
+        });
+      });
     } catch (e) {
       isSpeakingRef.current = false;
       console.warn("Audio blocked");
@@ -88,7 +101,11 @@ function BongContent() {
         const rip = new Audio('/sounds/bong.mp3');
         await rip.play().catch(() => {});
       }
-      setTimeout(() => speak(data.text), gongEnabledRef.current ? 1600 : 0);
+      const speechDelayMs = gongEnabledRef.current ? 1600 : 0;
+      if (speechDelayMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, speechDelayMs));
+      }
+      await speak(data.text);
       runDiagnostics();
     } catch (e) { console.error(e); }
   }, [runDiagnostics]);
