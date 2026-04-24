@@ -16,6 +16,7 @@ function BongContent() {
   const recentChatRef = useRef<Array<{ user: string; text: string }>>([]);
   const chatMessageCountRef = useRef(0);
   const isSpeakingRef = useRef(false);
+  const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
@@ -89,6 +90,13 @@ function BongContent() {
     } catch (e) { console.error(e); }
   }, [runDiagnostics]);
 
+  const queueBongLogic = useCallback((input: string, user?: string, isQuota = false) => {
+    responseQueueRef.current = responseQueueRef.current
+      .then(() => processBongLogic(input, user, isQuota))
+      .catch((e) => { console.error(e); });
+    return responseQueueRef.current;
+  }, [processBongLogic]);
+
   const toggleGong = useCallback((user?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const nextState = !gongEnabledRef.current;
@@ -133,11 +141,11 @@ function BongContent() {
           chatMessageCountRef.current += 1;
           if (chatMessageCountRef.current >= 60) {
             chatMessageCountRef.current = 0;
-            void processBongLogic(buildChatAwarePrompt());
+            void queueBongLogic(buildChatAwarePrompt());
           }
         }
       }
-      if (m.toLowerCase() === '!quota') return processBongLogic('', t.username, true);
+      if (m.toLowerCase() === '!quota') return queueBongLogic('', t.username, true);
       if (m.toLowerCase() === '!gong') {
         const isModerator = t.mod === true;
         if (isBroadcaster || isModerator) {
@@ -155,7 +163,7 @@ function BongContent() {
       if (m.toLowerCase().startsWith('!ask')) {
         const delayMs = isSpeakingRef.current ? 60_000 : 120_000;
         return void setTimeout(() => {
-          void processBongLogic(m.slice(4), t.username);
+          void queueBongLogic(m.slice(4), t.username);
         }, delayMs);
       }
     });
