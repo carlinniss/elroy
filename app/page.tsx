@@ -17,6 +17,7 @@ function BongContent() {
   const chatMessageCountRef = useRef(0);
   const isSpeakingRef = useRef(false);
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
@@ -53,7 +54,7 @@ function BongContent() {
   useEffect(() => { runDiagnostics(); }, [runDiagnostics]);
   useEffect(() => { gongEnabledRef.current = isGongOn; }, [isGongOn]);
 
-  const speak = async (text: string) => {
+  const speakNow = async (text: string) => {
     try {
       const res = await fetch('/api/speech', { method: 'POST', body: JSON.stringify({ text }) });
       const audioUrl = URL.createObjectURL(await res.blob());
@@ -79,6 +80,13 @@ function BongContent() {
       console.warn("Audio blocked");
     }
   };
+
+  const speak = useCallback((text: string) => {
+    speechQueueRef.current = speechQueueRef.current
+      .then(() => speakNow(text))
+      .catch((e) => { console.error(e); });
+    return speechQueueRef.current;
+  }, []);
 
   const processBongLogic = useCallback(async (input: string, user?: string, isQuota = false) => {
     try {
@@ -191,7 +199,10 @@ function BongContent() {
     clientRef.current = client;
     setIsActive(true);
     clientRef.current?.say(chan, 'I AM ALIVE!');
-    setTimeout(() => speak('I AM ALIVE!'), gongEnabledRef.current ? 1600 : 0);
+    const startupDelayMs = gongEnabledRef.current ? 1600 : 0;
+    void setTimeout(() => {
+      void speak('I AM ALIVE!');
+    }, startupDelayMs);
   };
 
   useEffect(() => { if (searchParams.get('autostart') === 'true') startBot(); }, [searchParams]);
