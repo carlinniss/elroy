@@ -8,11 +8,13 @@ function BongContent() {
   const [isActive, setIsActive] = useState(false);
   const [log, setLog] = useState<any[]>([]);
   const [isGongOn, setIsGongOn] = useState(true);
+  const [isVoiceOn, setIsVoiceOn] = useState(true);
   const searchParams = useSearchParams();
   const [diagnostics, setDiagnostics] = useState({ chat: "...", speech: "...", sound: "...", quota: "..." });
 
   const clientRef = useRef<tmi.Client | null>(null);
   const gongEnabledRef = useRef(true);
+  const voiceEnabledRef = useRef(true);
   const recentChatRef = useRef<Array<{ user: string; text: string }>>([]);
   const chatMessageCountRef = useRef(0);
   const isSpeakingRef = useRef(false);
@@ -53,6 +55,7 @@ function BongContent() {
 
   useEffect(() => { runDiagnostics(); }, [runDiagnostics]);
   useEffect(() => { gongEnabledRef.current = isGongOn; }, [isGongOn]);
+  useEffect(() => { voiceEnabledRef.current = isVoiceOn; }, [isVoiceOn]);
 
   const speakNow = async (text: string) => {
     try {
@@ -113,7 +116,9 @@ function BongContent() {
       if (speechDelayMs > 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, speechDelayMs));
       }
-      await speak(data.text);
+      if (voiceEnabledRef.current) {
+        await speak(data.text);
+      }
       runDiagnostics();
     } catch (e) { console.error(e); }
   }, [runDiagnostics]);
@@ -131,6 +136,13 @@ function BongContent() {
     gongEnabledRef.current = nextState;
     setIsGongOn(nextState);
     clientRef.current?.say(channel, user ? `@${user} gong ${nextState ? 'on' : 'off'}.` : `gong ${nextState ? 'on' : 'off'}.`);
+  }, []);
+
+  const setVoice = useCallback((enabled: boolean, user?: string) => {
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    voiceEnabledRef.current = enabled;
+    setIsVoiceOn(enabled);
+    clientRef.current?.say(channel, user ? `@${user} voice ${enabled ? 'on' : 'off'}.` : `voice ${enabled ? 'on' : 'off'}.`);
   }, []);
 
   const stopBot = useCallback(async (announceUser?: string) => {
@@ -188,6 +200,29 @@ function BongContent() {
         }
         return;
       }
+      if (m.toLowerCase() === '!voiceoff') {
+        const isModerator = t.mod === true;
+        if (isBroadcaster || isModerator) {
+          return setVoice(false, t.username);
+        }
+        return;
+      }
+      if (m.toLowerCase() === '!voiceon') {
+        const isModerator = t.mod === true;
+        if (isBroadcaster || isModerator) {
+          return setVoice(true, t.username);
+        }
+        return;
+      }
+      if (m.toLowerCase() === '!voicestatus') {
+        const isModerator = t.mod === true;
+        if (isBroadcaster || isModerator) {
+          const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+          const state = voiceEnabledRef.current ? 'on' : 'off';
+          clientRef.current?.say(channel, `@${t.username} voice is ${state}.`);
+        }
+        return;
+      }
       if (m.toLowerCase().startsWith('!ask')) {
         const delayMs = isSpeakingRef.current ? 60_000 : 120_000;
         return void setTimeout(() => {
@@ -200,9 +235,11 @@ function BongContent() {
     setIsActive(true);
     clientRef.current?.say(chan, 'I AM ALIVE!');
     const startupDelayMs = gongEnabledRef.current ? 1600 : 0;
-    void setTimeout(() => {
-      void speak('I AM ALIVE!');
-    }, startupDelayMs);
+    if (voiceEnabledRef.current) {
+      void setTimeout(() => {
+        void speak('I AM ALIVE!');
+      }, startupDelayMs);
+    }
   };
 
   useEffect(() => { if (searchParams.get('autostart') === 'true') startBot(); }, [searchParams]);

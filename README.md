@@ -66,6 +66,16 @@ Ensure your file structure is exact for Next.js routing:
 3.  Click **IGNITE BONG** to initialize the Twitch connection.
 4.  In your Twitch chat, type: `!ask Bong, why is 710 the best?`
 
+### Useful Chat Commands
+
+* `!ask <question>`: Ask Elroy something and get a chat reply.
+* `!quota`: Show remaining model quota.
+* `!gong`: Toggle bong sound effect (broadcaster/mod only).
+* `!voiceoff`: Disable voice playback but keep chat replies on (broadcaster/mod only).
+* `!voiceon`: Re-enable voice playback (broadcaster/mod only).
+* `!voicestatus`: Report whether voice playback is currently on or off (broadcaster/mod only).
+* `!elroyoff`: Disconnect Elroy from chat entirely (broadcaster/mod only).
+
 ## 🖥️ OBS Setup
 
 1.  Add a new **Browser Source** in OBS.
