@@ -13,6 +13,7 @@ function BongContent() {
   const [diagnostics, setDiagnostics] = useState({ chat: "...", speech: "...", sound: "...", quota: "..." });
 
   const clientRef = useRef<tmi.Client | null>(null);
+  const isConnectingRef = useRef(false);
   const gongEnabledRef = useRef(true);
   const voiceEnabledRef = useRef(true);
   const recentChatRef = useRef<Array<{ user: string; text: string }>>([]);
@@ -163,7 +164,8 @@ function BongContent() {
   }, []);
 
   const startBot = async () => {
-    if (isActive) return;
+    if (isActive || isConnectingRef.current) return;
+    isConnectingRef.current = true;
     const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
     chatMessageCountRef.current = 0;
@@ -230,15 +232,19 @@ function BongContent() {
         }, delayMs);
       }
     });
-    await client.connect();
-    clientRef.current = client;
-    setIsActive(true);
-    clientRef.current?.say(chan, 'I AM ALIVE!');
-    const startupDelayMs = gongEnabledRef.current ? 1600 : 0;
-    if (voiceEnabledRef.current) {
-      void setTimeout(() => {
-        void speak('I AM ALIVE!');
-      }, startupDelayMs);
+    try {
+      await client.connect();
+      clientRef.current = client;
+      setIsActive(true);
+      clientRef.current?.say(chan, 'I AM ALIVE!');
+      const startupDelayMs = gongEnabledRef.current ? 1600 : 0;
+      if (voiceEnabledRef.current) {
+        void setTimeout(() => {
+          void speak('I AM ALIVE!');
+        }, startupDelayMs);
+      }
+    } finally {
+      isConnectingRef.current = false;
     }
   };
 
