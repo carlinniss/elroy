@@ -20,6 +20,8 @@ function BongContent() {
   const isSpeakingRef = useRef(false);
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingAskTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasPendingAskRef = useRef(false);
 
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
@@ -148,6 +150,11 @@ function BongContent() {
   const stopBot = useCallback(async (announceUser?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const client = clientRef.current;
+    if (pendingAskTimeoutRef.current) {
+      clearTimeout(pendingAskTimeoutRef.current);
+      pendingAskTimeoutRef.current = null;
+    }
+    hasPendingAskRef.current = false;
     if (client) {
       try {
         if (announceUser) {
@@ -224,10 +231,16 @@ function BongContent() {
         return;
       }
       if (m.toLowerCase().startsWith('!ask')) {
+        if (hasPendingAskRef.current) return;
+        hasPendingAskRef.current = true;
         const delayMs = isSpeakingRef.current ? 60_000 : 120_000;
-        return void setTimeout(() => {
+        pendingAskTimeoutRef.current = setTimeout(() => {
+          pendingAskTimeoutRef.current = null;
+          hasPendingAskRef.current = false;
+          if (!clientRef.current) return;
           void queueBongLogic(m.slice(4), t.username);
         }, delayMs);
+        return;
       }
     });
     await client.connect();
