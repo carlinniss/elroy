@@ -18,6 +18,8 @@ function BongContent() {
   const recentChatRef = useRef<Array<{ user: string; text: string }>>([]);
   const chatMessageCountRef = useRef(0);
   const isSpeakingRef = useRef(false);
+  const askInFlightRef = useRef(false);
+  const pendingAskTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
 
@@ -145,8 +147,17 @@ function BongContent() {
     clientRef.current?.say(channel, user ? `@${user} voice ${enabled ? 'on' : 'off'}.` : `voice ${enabled ? 'on' : 'off'}.`);
   }, []);
 
+  const clearPendingAsk = useCallback(() => {
+    if (pendingAskTimeoutRef.current) {
+      clearTimeout(pendingAskTimeoutRef.current);
+      pendingAskTimeoutRef.current = null;
+    }
+    askInFlightRef.current = false;
+  }, []);
+
   const stopBot = useCallback(async (announceUser?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    clearPendingAsk();
     const client = clientRef.current;
     if (client) {
       try {
@@ -160,7 +171,7 @@ function BongContent() {
       clientRef.current = null;
     }
     setIsActive(false);
-  }, []);
+  }, [clearPendingAsk]);
 
   const startBot = async () => {
     if (isActive) return;
@@ -224,10 +235,17 @@ function BongContent() {
         return;
       }
       if (m.toLowerCase().startsWith('!ask')) {
+        if (askInFlightRef.current) return;
+        askInFlightRef.current = true;
         const delayMs = isSpeakingRef.current ? 60_000 : 120_000;
-        return void setTimeout(() => {
-          void queueBongLogic(m.slice(4), t.username);
+        pendingAskTimeoutRef.current = setTimeout(() => {
+          pendingAskTimeoutRef.current = null;
+          void queueBongLogic(m.slice(4), t.username)
+            .finally(() => {
+              askInFlightRef.current = false;
+            });
         }, delayMs);
+        return;
       }
     });
     await client.connect();
