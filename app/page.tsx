@@ -136,6 +136,7 @@ function BongContent() {
       if (botActiveRef.current && voiceEnabledRef.current) {
         await speak(data.text);
       }
+      if (!botActiveRef.current) return;
       runDiagnostics();
     } catch (e) { console.error(e); }
   }, [runDiagnostics]);
