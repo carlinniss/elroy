@@ -13,6 +13,7 @@ function BongContent() {
   const [diagnostics, setDiagnostics] = useState({ chat: "...", speech: "...", sound: "...", quota: "..." });
 
   const clientRef = useRef<tmi.Client | null>(null);
+  const botActiveRef = useRef(false);
   const gongEnabledRef = useRef(true);
   const voiceEnabledRef = useRef(true);
   const recentChatRef = useRef<Array<{ user: string; text: string }>>([]);
@@ -20,6 +21,9 @@ function BongContent() {
   const isSpeakingRef = useRef(false);
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const stopCurrentSpeechRef = useRef<(() => void) | null>(null);
+  const pendingAskTimeoutsRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
 
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
@@ -57,26 +61,36 @@ function BongContent() {
   useEffect(() => { gongEnabledRef.current = isGongOn; }, [isGongOn]);
   useEffect(() => { voiceEnabledRef.current = isVoiceOn; }, [isVoiceOn]);
 
+  const clearPendingAsks = useCallback(() => {
+    pendingAskTimeoutsRef.current.forEach((timeout) => clearTimeout(timeout));
+    pendingAskTimeoutsRef.current = [];
+  }, []);
+
   const speakNow = async (text: string) => {
     try {
+      if (!botActiveRef.current) return;
       const res = await fetch('/api/speech', { method: 'POST', body: JSON.stringify({ text }) });
+      if (!botActiveRef.current) return;
       const audioUrl = URL.createObjectURL(await res.blob());
       const audio = new Audio(audioUrl);
+      currentAudioRef.current = audio;
       isSpeakingRef.current = true;
       await new Promise<void>((resolve) => {
+        let isFinished = false;
         const finish = () => {
+          if (isFinished) return;
+          isFinished = true;
           isSpeakingRef.current = false;
+          if (currentAudioRef.current === audio) currentAudioRef.current = null;
+          if (stopCurrentSpeechRef.current === finish) stopCurrentSpeechRef.current = null;
           URL.revokeObjectURL(audioUrl);
           resolve();
         };
 
+        stopCurrentSpeechRef.current = finish;
         audio.onended = finish;
         audio.onerror = finish;
-        audio.play().catch(() => {
-          isSpeakingRef.current = false;
-          URL.revokeObjectURL(audioUrl);
-          resolve();
-        });
+        audio.play().catch(finish);
       });
     } catch (e) {
       isSpeakingRef.current = false;
@@ -93,9 +107,11 @@ function BongContent() {
 
   const processBongLogic = useCallback(async (input: string, user?: string, isQuota = false) => {
     try {
+      if (!botActiveRef.current) return;
       if (isQuota) {
         const res = await fetch('/api/quota');
         const d = await res.json();
+        if (!botActiveRef.current) return;
         clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate}.`);
         return;
       }
@@ -105,6 +121,7 @@ function BongContent() {
       const fullPrompt = `${input}\n\nResponse requirements:\n- Make your response about 2x your normal length.\n- Aim for roughly 220-320 characters.\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
       const res = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: fullPrompt }) });
       const data = await res.json();
+      if (!botActiveRef.current) return;
       setLog(p => [{ text: data.text }, ...p].slice(0, 5));
       clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, user ? `@${user} ${data.text}` : data.text);
       
@@ -116,7 +133,7 @@ function BongContent() {
       if (speechDelayMs > 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, speechDelayMs));
       }
-      if (voiceEnabledRef.current) {
+      if (botActiveRef.current && voiceEnabledRef.current) {
         await speak(data.text);
       }
       runDiagnostics();
@@ -147,6 +164,14 @@ function BongContent() {
 
   const stopBot = useCallback(async (announceUser?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    botActiveRef.current = false;
+    clearPendingAsks();
+    const currentAudio = currentAudioRef.current;
+    if (currentAudio) {
+      currentAudio.pause();
+      stopCurrentSpeechRef.current?.();
+    }
+    isSpeakingRef.current = false;
     const client = clientRef.current;
     if (client) {
       try {
@@ -160,10 +185,10 @@ function BongContent() {
       clientRef.current = null;
     }
     setIsActive(false);
-  }, []);
+  }, [clearPendingAsks]);
 
   const startBot = async () => {
-    if (isActive) return;
+    if (botActiveRef.current || isActive) return;
     const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
     chatMessageCountRef.current = 0;
@@ -225,12 +250,17 @@ function BongContent() {
       }
       if (m.toLowerCase().startsWith('!ask')) {
         const delayMs = isSpeakingRef.current ? 60_000 : 120_000;
-        return void setTimeout(() => {
+        const timeout = setTimeout(() => {
+          pendingAskTimeoutsRef.current = pendingAskTimeoutsRef.current.filter((pending) => pending !== timeout);
+          if (!botActiveRef.current) return;
           void queueBongLogic(m.slice(4), t.username);
         }, delayMs);
+        pendingAskTimeoutsRef.current.push(timeout);
+        return;
       }
     });
     await client.connect();
+    botActiveRef.current = true;
     clientRef.current = client;
     setIsActive(true);
     clientRef.current?.say(chan, 'I AM ALIVE!');
