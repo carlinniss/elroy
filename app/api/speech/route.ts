@@ -1,4 +1,9 @@
+import { requireOverlayAuth } from "@/lib/overlayAuth";
+
 export async function POST(req: Request) {
+  const unauthorized = requireOverlayAuth(req);
+  if (unauthorized) return unauthorized;
+
   try {
     const { text } = await req.json();
     const voiceId = process.env.ELEVENLABS_VOICE_ID || "pNInz6obpgDQGcFmaJgB";
