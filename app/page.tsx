@@ -10,6 +10,7 @@ function BongContent() {
   const [isGongOn, setIsGongOn] = useState(true);
   const [isVoiceOn, setIsVoiceOn] = useState(true);
   const searchParams = useSearchParams();
+  const controlSecret = searchParams.get('controlKey') || '';
   const [diagnostics, setDiagnostics] = useState({ chat: "...", speech: "...", sound: "...", quota: "..." });
 
   const clientRef = useRef<tmi.Client | null>(null);
@@ -20,6 +21,22 @@ function BongContent() {
   const isSpeakingRef = useRef(false);
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const apiHeaders = useCallback((json = false): HeadersInit => {
+    const headers: Record<string, string> = { 'x-overlay-control-secret': controlSecret };
+    if (json) headers['Content-Type'] = 'application/json';
+    return headers;
+  }, [controlSecret]);
+
+  const sayInChat = useCallback(async (message: string) => {
+    const res = await fetch('/api/twitch/say', {
+      method: 'POST',
+      headers: apiHeaders(true),
+      body: JSON.stringify({ message }),
+    });
+
+    if (!res.ok) throw new Error(`Twitch say failed: ${res.status}`);
+  }, [apiHeaders]);
 
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
@@ -38,10 +55,10 @@ function BongContent() {
 
   const runDiagnostics = useCallback(async () => {
     try {
-      const chat = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: 'ping' }) });
-      const speech = await fetch('/api/speech', { method: 'POST', body: JSON.stringify({ text: 'ping' }) });
+      const chat = await fetch('/api/chat', { method: 'POST', headers: apiHeaders(true), body: JSON.stringify({ prompt: 'ping' }) });
+      const speech = await fetch('/api/speech', { method: 'POST', headers: apiHeaders(true), body: JSON.stringify({ text: 'ping' }) });
       const sound = await fetch('/sounds/bong.mp3');
-      const quotaRes = await fetch('/api/quota');
+      const quotaRes = await fetch('/api/quota', { headers: apiHeaders() });
       const qData = await quotaRes.json();
 
       setDiagnostics({
@@ -51,15 +68,15 @@ function BongContent() {
         quota: `${qData.remaining.toLocaleString()} left`
       });
     } catch (e) { console.error(e); }
-  }, []);
+  }, [apiHeaders]);
 
   useEffect(() => { runDiagnostics(); }, [runDiagnostics]);
   useEffect(() => { gongEnabledRef.current = isGongOn; }, [isGongOn]);
   useEffect(() => { voiceEnabledRef.current = isVoiceOn; }, [isVoiceOn]);
 
-  const speakNow = async (text: string) => {
+  const speakNow = useCallback(async (text: string) => {
     try {
-      const res = await fetch('/api/speech', { method: 'POST', body: JSON.stringify({ text }) });
+      const res = await fetch('/api/speech', { method: 'POST', headers: apiHeaders(true), body: JSON.stringify({ text }) });
       const audioUrl = URL.createObjectURL(await res.blob());
       const audio = new Audio(audioUrl);
       isSpeakingRef.current = true;
@@ -82,31 +99,31 @@ function BongContent() {
       isSpeakingRef.current = false;
       console.warn("Audio blocked");
     }
-  };
+  }, [apiHeaders]);
 
   const speak = useCallback((text: string) => {
     speechQueueRef.current = speechQueueRef.current
       .then(() => speakNow(text))
       .catch((e) => { console.error(e); });
     return speechQueueRef.current;
-  }, []);
+  }, [speakNow]);
 
   const processBongLogic = useCallback(async (input: string, user?: string, isQuota = false) => {
     try {
       if (isQuota) {
-        const res = await fetch('/api/quota');
+        const res = await fetch('/api/quota', { headers: apiHeaders() });
         const d = await res.json();
-        clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate}.`);
+        await sayInChat(`@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate}.`);
         return;
       }
       const personalizationRule = user
         ? `- Personalize the response directly for ${user} by name (say their username naturally in the message).`
         : `- Keep it general for the whole chat, not aimed at one person.`;
       const fullPrompt = `${input}\n\nResponse requirements:\n- Make your response about 2x your normal length.\n- Aim for roughly 220-320 characters.\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
-      const res = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: fullPrompt }) });
+      const res = await fetch('/api/chat', { method: 'POST', headers: apiHeaders(true), body: JSON.stringify({ prompt: fullPrompt }) });
       const data = await res.json();
       setLog(p => [{ text: data.text }, ...p].slice(0, 5));
-      clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, user ? `@${user} ${data.text}` : data.text);
+      await sayInChat(user ? `@${user} ${data.text}` : data.text);
       
       if (gongEnabledRef.current) {
         const rip = new Audio('/sounds/bong.mp3');
@@ -121,7 +138,7 @@ function BongContent() {
       }
       runDiagnostics();
     } catch (e) { console.error(e); }
-  }, [runDiagnostics]);
+  }, [apiHeaders, runDiagnostics, sayInChat, speak]);
 
   const queueBongLogic = useCallback((input: string, user?: string, isQuota = false) => {
     responseQueueRef.current = responseQueueRef.current
@@ -131,27 +148,24 @@ function BongContent() {
   }, [processBongLogic]);
 
   const toggleGong = useCallback((user?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const nextState = !gongEnabledRef.current;
     gongEnabledRef.current = nextState;
     setIsGongOn(nextState);
-    clientRef.current?.say(channel, user ? `@${user} gong ${nextState ? 'on' : 'off'}.` : `gong ${nextState ? 'on' : 'off'}.`);
-  }, []);
+    void sayInChat(user ? `@${user} gong ${nextState ? 'on' : 'off'}.` : `gong ${nextState ? 'on' : 'off'}.`);
+  }, [sayInChat]);
 
   const setVoice = useCallback((enabled: boolean, user?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     voiceEnabledRef.current = enabled;
     setIsVoiceOn(enabled);
-    clientRef.current?.say(channel, user ? `@${user} voice ${enabled ? 'on' : 'off'}.` : `voice ${enabled ? 'on' : 'off'}.`);
-  }, []);
+    void sayInChat(user ? `@${user} voice ${enabled ? 'on' : 'off'}.` : `voice ${enabled ? 'on' : 'off'}.`);
+  }, [sayInChat]);
 
   const stopBot = useCallback(async (announceUser?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const client = clientRef.current;
     if (client) {
       try {
         if (announceUser) {
-          await client.say(channel, `@${announceUser} Elroy is off.`);
+          await sayInChat(`@${announceUser} Elroy is off.`);
         }
         await client.disconnect();
       } catch (e) {
@@ -160,14 +174,14 @@ function BongContent() {
       clientRef.current = null;
     }
     setIsActive(false);
-  }, []);
+  }, [sayInChat]);
 
   const startBot = async () => {
     if (isActive) return;
     const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
     chatMessageCountRef.current = 0;
-    const client = new tmi.Client({ identity: { username: chan, password: process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN! }, channels: [chan] });
+    const client = new tmi.Client({ channels: [chan] });
     client.on('message', (_c: string, t: tmi.ChatUserstate, m: string, s: boolean) => {
       if (s) return;
       const username = t.username || 'viewer';
@@ -217,9 +231,8 @@ function BongContent() {
       if (m.toLowerCase() === '!voicestatus') {
         const isModerator = t.mod === true;
         if (isBroadcaster || isModerator) {
-          const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
           const state = voiceEnabledRef.current ? 'on' : 'off';
-          clientRef.current?.say(channel, `@${t.username} voice is ${state}.`);
+          void sayInChat(`@${t.username} voice is ${state}.`);
         }
         return;
       }
@@ -233,7 +246,7 @@ function BongContent() {
     await client.connect();
     clientRef.current = client;
     setIsActive(true);
-    clientRef.current?.say(chan, 'I AM ALIVE!');
+    await sayInChat('I AM ALIVE!');
     const startupDelayMs = gongEnabledRef.current ? 1600 : 0;
     if (voiceEnabledRef.current) {
       void setTimeout(() => {
