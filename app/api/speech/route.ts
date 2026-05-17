@@ -1,4 +1,9 @@
+import { requireOverlayAuth } from "@/lib/overlayAuth";
+
 export async function POST(req: Request) {
+  const authError = requireOverlayAuth(req);
+  if (authError) return authError;
+
   try {
     const { text } = await req.json();
     const voiceId = process.env.ELEVENLABS_VOICE_ID || "pNInz6obpgDQGcFmaJgB";
@@ -12,6 +17,10 @@ export async function POST(req: Request) {
         voice_settings: { stability: 0.5, similarity_boost: 0.75 },
       }),
     });
+
+    if (!response.ok) {
+      return new Response("Speech provider refused the request", { status: response.status });
+    }
 
     const audioBuffer = await response.arrayBuffer();
     return new Response(audioBuffer, { headers: { "Content-Type": "audio/mpeg" } });

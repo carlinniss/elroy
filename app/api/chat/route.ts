@@ -1,7 +1,11 @@
 import { google } from "@ai-sdk/google";
 import { generateText } from "ai";
+import { requireOverlayAuth } from "@/lib/overlayAuth";
 
 export async function POST(req: Request) {
+  const authError = requireOverlayAuth(req);
+  if (authError) return authError;
+
   try {
     const { prompt } = await req.json();
     const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
