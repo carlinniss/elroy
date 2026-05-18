@@ -1,4 +1,9 @@
-export async function GET() {
+import { requireOverlayControl } from "@/lib/overlayAuth";
+
+export async function GET(req: Request) {
+  const authError = requireOverlayControl(req);
+  if (authError) return authError;
+
   try {
     const res = await fetch("https://api.elevenlabs.io/v1/user/subscription", {
       method: "GET",
