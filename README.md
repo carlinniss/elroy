@@ -36,8 +36,10 @@ Bong Bot is a high-performance, AI-driven Twitch overlay and chat assistant. It 
     Create a `.env.local` file in the root directory and add your keys:
     ```text
     NEXT_PUBLIC_TWITCH_CHANNEL=your_channel_name
-    NEXT_PUBLIC_TWITCH_OAUTH_TOKEN=oauth:your_token_here
-    GEMINI_API_KEY=your_google_ai_studio_key
+    TWITCH_BOT_USERNAME=your_bot_username
+    TWITCH_OAUTH_TOKEN=oauth:your_token_here
+    OVERLAY_CONTROL_SECRET=make_this_long_and_random
+    GOOGLE_GENERATIVE_AI_API_KEY=your_google_ai_studio_key
     ELEVENLABS_API_KEY=your_elevenlabs_key
     ELEVENLABS_VOICE_ID=pNInz6obpgDQGcFmaJgB
     ```
@@ -79,7 +81,7 @@ Ensure your file structure is exact for Next.js routing:
 ## 🖥️ OBS Setup
 
 1.  Add a new **Browser Source** in OBS.
-2.  Set URL to `http://localhost:3000`.
+2.  Set URL to `http://localhost:3000?controlKey=make_this_long_and_random`.
 3.  Set Width/Height to your canvas size (e.g., 1920x1080).
 4.  Check **Control Audio via OBS** if you want to mix the bot's voice separately.
 
