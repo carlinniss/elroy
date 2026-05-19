@@ -12,14 +12,36 @@ function BongContent() {
   const searchParams = useSearchParams();
   const [diagnostics, setDiagnostics] = useState({ chat: "...", speech: "...", sound: "...", quota: "..." });
 
+  const DEFAULT_VOLUME = 0.85;
   const clientRef = useRef<tmi.Client | null>(null);
   const gongEnabledRef = useRef(true);
   const voiceEnabledRef = useRef(true);
+  const volumeRef = useRef(DEFAULT_VOLUME);
   const recentChatRef = useRef<Array<{ user: string; text: string }>>([]);
   const chatMessageCountRef = useRef(0);
   const isSpeakingRef = useRef(false);
+  const silencedUntilRef = useRef(0);
+  const lastElroyResponseRef = useRef(0);
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  const SHUT_UP_DURATION_MS = 8 * 60 * 1000;
+  const MENTION_COOLDOWN_MS = 45_000;
+  const COMEBACK_COOLDOWN_MS = 3 * 60 * 1000;
+  const COMEBACK_CHANCE = 0.22;
+
+  const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
+
+  const isShutUpCommand = (text: string) => {
+    const lower = text.toLowerCase();
+    if (!mentionsElroy(lower)) return false;
+    return /\b(shut\s*up|be\s*quiet|stfu|stop\s*talking|zip\s*it|can\s*you\s*not|go\s*away|leave\s*us\s*alone|silence|shush)\b/.test(lower);
+  };
+
+  const isSilenced = () => Date.now() < silencedUntilRef.current;
+
+  const canRespondToElroy = (cooldownMs: number) =>
+    Date.now() - lastElroyResponseRef.current >= cooldownMs;
 
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
@@ -62,6 +84,7 @@ function BongContent() {
       const res = await fetch('/api/speech', { method: 'POST', body: JSON.stringify({ text }) });
       const audioUrl = URL.createObjectURL(await res.blob());
       const audio = new Audio(audioUrl);
+      audio.volume = volumeRef.current;
       isSpeakingRef.current = true;
       await new Promise<void>((resolve) => {
         const finish = () => {
@@ -91,9 +114,29 @@ function BongContent() {
     return speechQueueRef.current;
   }, []);
 
-  const processBongLogic = useCallback(async (input: string, user?: string, isQuota = false) => {
+  const buildMentionPrompt = useCallback((user: string, message: string) => {
+    const recent = recentChatRef.current.slice(0, 6);
+    const context = recent.length
+      ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
+      : '(no other recent lines)';
+    return `Someone brought you up in Twitch chat. ${user} said: "${message}"\n\nRecent chat:\n${context}\n\nRespond in character to what they're saying about you — answer the vibe, joke, or question naturally for stream chat.`;
+  }, []);
+
+  const buildComebackPrompt = useCallback((user: string, message: string) => {
+    const recent = recentChatRef.current.slice(0, 6);
+    const context = recent.length
+      ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
+      : '(no other recent lines)';
+    return `You were trying to stay quiet, but chat kept talking about you. ${user} said: "${message}"\n\nRecent chat:\n${context}\n\nSnap back with one funny, crusty call-out — you're annoyed they couldn't let you chill. Roast ${user} by name; keep it playful, not cruel.`;
+  }, []);
+
+  const processBongLogic = useCallback(async (
+    input: string,
+    user?: string,
+    opts: { isQuota?: boolean; forceVoice?: boolean } = {},
+  ) => {
     try {
-      if (isQuota) {
+      if (opts.isQuota) {
         const res = await fetch('/api/quota');
         const d = await res.json();
         clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate}.`);
@@ -107,28 +150,50 @@ function BongContent() {
       const data = await res.json();
       setLog(p => [{ text: data.text }, ...p].slice(0, 5));
       clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, user ? `@${user} ${data.text}` : data.text);
-      
+      lastElroyResponseRef.current = Date.now();
+
       if (gongEnabledRef.current) {
         const rip = new Audio('/sounds/bong.mp3');
+        rip.volume = volumeRef.current;
         await rip.play().catch(() => {});
       }
       const speechDelayMs = gongEnabledRef.current ? 1600 : 0;
       if (speechDelayMs > 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, speechDelayMs));
       }
-      if (voiceEnabledRef.current) {
+      if (opts.forceVoice || voiceEnabledRef.current) {
         await speak(data.text);
       }
       runDiagnostics();
     } catch (e) { console.error(e); }
   }, [runDiagnostics]);
 
-  const queueBongLogic = useCallback((input: string, user?: string, isQuota = false) => {
+  const queueBongLogic = useCallback((
+    input: string,
+    user?: string,
+    opts: { isQuota?: boolean; forceVoice?: boolean } = {},
+  ) => {
     responseQueueRef.current = responseQueueRef.current
-      .then(() => processBongLogic(input, user, isQuota))
+      .then(() => processBongLogic(input, user, opts))
       .catch((e) => { console.error(e); });
     return responseQueueRef.current;
   }, [processBongLogic]);
+
+  const enterSilence = useCallback(() => {
+    silencedUntilRef.current = Date.now() + SHUT_UP_DURATION_MS;
+    voiceEnabledRef.current = false;
+    setIsVoiceOn(false);
+  }, []);
+
+  const handleElroyMention = useCallback((username: string, message: string) => {
+    if (isSilenced()) {
+      if (!canRespondToElroy(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
+      void queueBongLogic(buildComebackPrompt(username, message), username, { forceVoice: true });
+      return;
+    }
+    if (!canRespondToElroy(MENTION_COOLDOWN_MS)) return;
+    void queueBongLogic(buildMentionPrompt(username, message), username);
+  }, [buildComebackPrompt, buildMentionPrompt, queueBongLogic]);
 
   const toggleGong = useCallback((user?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
@@ -138,11 +203,20 @@ function BongContent() {
     clientRef.current?.say(channel, user ? `@${user} gong ${nextState ? 'on' : 'off'}.` : `gong ${nextState ? 'on' : 'off'}.`);
   }, []);
 
-  const setVoice = useCallback((enabled: boolean, user?: string) => {
+  const toggleVoice = useCallback((user?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-    voiceEnabledRef.current = enabled;
-    setIsVoiceOn(enabled);
-    clientRef.current?.say(channel, user ? `@${user} voice ${enabled ? 'on' : 'off'}.` : `voice ${enabled ? 'on' : 'off'}.`);
+    const nextState = !voiceEnabledRef.current;
+    voiceEnabledRef.current = nextState;
+    setIsVoiceOn(nextState);
+    clientRef.current?.say(channel, user ? `@${user} voice ${nextState ? 'on' : 'off'}.` : `voice ${nextState ? 'on' : 'off'}.`);
+  }, []);
+
+  const setVolume = useCallback((level: number, user?: string) => {
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    const clamped = Math.min(1, Math.max(0, level));
+    volumeRef.current = clamped;
+    const pct = Math.round(clamped * 100);
+    clientRef.current?.say(channel, user ? `@${user} volume ${pct}%.` : `volume ${pct}%.`);
   }, []);
 
   const stopBot = useCallback(async (announceUser?: string) => {
@@ -174,18 +248,30 @@ function BongContent() {
       const normalizedUser = username.toLowerCase();
       const isBroadcaster = normalizedUser === normalizedChannel;
 
+      const isWizebot = normalizedUser === 'wizebot';
+      const isBotAccount = normalizedUser === normalizedChannel;
+
       if (!m.startsWith('!')) {
         rememberChatLine(username, m);
-        const isWizebot = normalizedUser === 'wizebot';
-        if (!isWizebot && !isBroadcaster) {
-          chatMessageCountRef.current += 1;
-          if (chatMessageCountRef.current >= 60) {
-            chatMessageCountRef.current = 0;
-            void queueBongLogic(buildChatAwarePrompt());
+
+        if (!isBotAccount && !isWizebot) {
+          if (isShutUpCommand(m)) {
+            enterSilence();
+            return;
+          }
+
+          if (mentionsElroy(m)) {
+            handleElroyMention(username, m);
+          } else if (!isSilenced() && !isBroadcaster) {
+            chatMessageCountRef.current += 1;
+            if (chatMessageCountRef.current >= 60) {
+              chatMessageCountRef.current = 0;
+              void queueBongLogic(buildChatAwarePrompt());
+            }
           }
         }
       }
-      if (m.toLowerCase() === '!quota') return queueBongLogic('', t.username, true);
+      if (m.toLowerCase() === '!quota') return queueBongLogic('', t.username, { isQuota: true });
       if (m.toLowerCase() === '!gong') {
         const isModerator = t.mod === true;
         if (isBroadcaster || isModerator) {
@@ -200,34 +286,34 @@ function BongContent() {
         }
         return;
       }
-      if (m.toLowerCase() === '!voiceoff') {
+      if (m.toLowerCase() === '!voice') {
         const isModerator = t.mod === true;
         if (isBroadcaster || isModerator) {
-          return setVoice(false, t.username);
+          return toggleVoice(t.username);
         }
         return;
       }
-      if (m.toLowerCase() === '!voiceon') {
+      if (m.toLowerCase().startsWith('!volume')) {
         const isModerator = t.mod === true;
-        if (isBroadcaster || isModerator) {
-          return setVoice(true, t.username);
+        if (!isBroadcaster && !isModerator) return;
+        const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+        const arg = m.slice('!volume'.length).trim();
+        if (!arg) {
+          const pct = Math.round(volumeRef.current * 100);
+          clientRef.current?.say(channel, `@${t.username} volume ${pct}%.`);
+          return;
         }
-        return;
-      }
-      if (m.toLowerCase() === '!voicestatus') {
-        const isModerator = t.mod === true;
-        if (isBroadcaster || isModerator) {
-          const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-          const state = voiceEnabledRef.current ? 'on' : 'off';
-          clientRef.current?.say(channel, `@${t.username} voice is ${state}.`);
+        const deltaMatch = arg.match(/^([+-])(\d+)$/);
+        if (deltaMatch) {
+          const delta = (deltaMatch[1] === '+' ? 1 : -1) * Number(deltaMatch[2]) / 100;
+          return setVolume(volumeRef.current + delta, t.username);
         }
-        return;
-      }
-      if (m.toLowerCase().startsWith('!ask')) {
-        const delayMs = isSpeakingRef.current ? 60_000 : 120_000;
-        return void setTimeout(() => {
-          void queueBongLogic(m.slice(4), t.username);
-        }, delayMs);
+        const parsed = Number(arg.replace(/%$/, ''));
+        if (!Number.isFinite(parsed)) {
+          clientRef.current?.say(channel, `@${t.username} use !volume, !volume 50, or !volume +10 / -10.`);
+          return;
+        }
+        return setVolume(parsed / 100, t.username);
       }
     });
     await client.connect();
