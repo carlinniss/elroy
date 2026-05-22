@@ -115,23 +115,10 @@ function parseDecapiViewerCount(raw: string) {
   return { live: false, count: null };
 }
 
-function parseDecapiStatus(raw: string) {
-  const trimmed = raw.trim();
-  const lower = trimmed.toLowerCase();
-  if (
-    !trimmed ||
-    lower.includes('offline') ||
-    lower.includes('not found') ||
-    lower.includes('invalid') ||
-    lower.includes('error')
-  ) {
-    return { live: false, title: undefined };
-  }
-  return { live: true, title: trimmed };
-}
-
 async function fetchDecapiText(path: string, timeoutMs = 8_000) {
-  const res = await fetch(`https://decapi.me/twitch/${path}`, {
+  const cacheBust = `_=${Date.now()}`;
+  const url = `https://decapi.me/twitch/${path}${path.includes('?') ? '&' : '?'}${cacheBust}`;
+  const res = await fetch(url, {
     cache: 'no-store',
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -145,29 +132,24 @@ export async function fetchStreamViaDecapi(login: string): Promise<StreamStatusR
   const viewersRaw = await fetchDecapiText(`viewercount/${encoded}`, 8_000);
   const viewers = parseDecapiViewerCount(viewersRaw);
 
-  let statusLive = false;
+  if (!viewers.live) {
+    return { status: 'offline', viewer_count: 0, source: 'decapi' };
+  }
+
   let title: string | undefined;
   try {
     const statusRaw = await fetchDecapiText(`status/${encoded}`, 8_000);
-    const status = parseDecapiStatus(statusRaw);
-    statusLive = status.live;
-    title = status.title;
+    const lower = statusRaw.toLowerCase();
+    if (statusRaw && !lower.includes('offline') && !lower.includes('not found')) {
+      title = statusRaw;
+    }
   } catch {
-    // status is optional; viewercount is the primary signal
+    // title is optional decoration only
   }
 
-  let uptimeLive = false;
-  try {
-    const uptime = (await fetchDecapiText(`uptime/${encoded}`, 5_000)).toLowerCase();
-    uptimeLive = uptime.includes('is live') && !uptime.includes('is offline');
-  } catch {
-    // uptime often times out — do not treat timeout as offline
-  }
-
-  const isLive = viewers.live || statusLive || uptimeLive;
   return {
-    status: isLive ? 'live' : 'offline',
-    viewer_count: isLive ? (viewers.count ?? 0) : 0,
+    status: 'live',
+    viewer_count: viewers.count ?? 0,
     source: 'decapi',
     title,
   };
