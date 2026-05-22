@@ -96,27 +96,79 @@ export async function fetchStreamViaHelix(
   };
 }
 
+function parseDecapiViewerCount(raw: string) {
+  const trimmed = raw.trim();
+  const lower = trimmed.toLowerCase();
+  if (
+    !trimmed ||
+    lower.includes('offline') ||
+    lower.includes('not found') ||
+    lower.includes('invalid') ||
+    lower.includes('error')
+  ) {
+    return { live: false, count: 0 };
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (Number.isFinite(parsed) && parsed >= 0) {
+    return { live: true, count: parsed };
+  }
+  return { live: false, count: null };
+}
+
+function parseDecapiStatus(raw: string) {
+  const trimmed = raw.trim();
+  const lower = trimmed.toLowerCase();
+  if (
+    !trimmed ||
+    lower.includes('offline') ||
+    lower.includes('not found') ||
+    lower.includes('invalid') ||
+    lower.includes('error')
+  ) {
+    return { live: false, title: undefined };
+  }
+  return { live: true, title: trimmed };
+}
+
+async function fetchDecapiText(path: string, timeoutMs = 8_000) {
+  const res = await fetch(`https://decapi.me/twitch/${path}`, {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  return (await res.text()).trim();
+}
+
 /** Public fallback — no Client ID or OAuth (third-party DecAPI). */
 export async function fetchStreamViaDecapi(login: string): Promise<StreamStatusResult> {
-  const [uptimeRes, viewersRes] = await Promise.all([
-    fetch(`https://decapi.me/twitch/uptime/${encodeURIComponent(login)}`, { cache: 'no-store' }),
-    fetch(`https://decapi.me/twitch/viewercount/${encodeURIComponent(login)}`, { cache: 'no-store' }),
-  ]);
-  const uptime = (await uptimeRes.text()).trim().toLowerCase();
-  const viewersRaw = (await viewersRes.text()).trim();
+  const encoded = encodeURIComponent(login);
 
-  const isLive =
-    uptime.includes('is live') &&
-    !uptime.includes('is offline') &&
-    !uptime.includes('not found');
+  const viewersRaw = await fetchDecapiText(`viewercount/${encoded}`, 8_000);
+  const viewers = parseDecapiViewerCount(viewersRaw);
 
-  let viewer_count: number | null = null;
-  const parsed = Number.parseInt(viewersRaw, 10);
-  if (Number.isFinite(parsed) && parsed >= 0) viewer_count = parsed;
+  let statusLive = false;
+  let title: string | undefined;
+  try {
+    const statusRaw = await fetchDecapiText(`status/${encoded}`, 8_000);
+    const status = parseDecapiStatus(statusRaw);
+    statusLive = status.live;
+    title = status.title;
+  } catch {
+    // status is optional; viewercount is the primary signal
+  }
 
+  let uptimeLive = false;
+  try {
+    const uptime = (await fetchDecapiText(`uptime/${encoded}`, 5_000)).toLowerCase();
+    uptimeLive = uptime.includes('is live') && !uptime.includes('is offline');
+  } catch {
+    // uptime often times out — do not treat timeout as offline
+  }
+
+  const isLive = viewers.live || statusLive || uptimeLive;
   return {
     status: isLive ? 'live' : 'offline',
-    viewer_count: isLive ? viewer_count : 0,
+    viewer_count: isLive ? (viewers.count ?? 0) : 0,
     source: 'decapi',
+    title,
   };
 }
