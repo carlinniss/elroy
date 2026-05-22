@@ -3,6 +3,16 @@
 import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import tmi from 'tmi.js';
+import {
+  COMEBACK_CHANCE,
+  COMEBACK_COOLDOWN_MS,
+  MENTION_COOLDOWN_MS,
+  canRespondToElroyAt,
+  getNextSilencedUntil,
+  isShutUpCommand,
+  isSilencedAt,
+  mentionsElroy,
+} from './elroyChatControls';
 
 function BongContent() {
   const [isActive, setIsActive] = useState(false);
@@ -25,23 +35,10 @@ function BongContent() {
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
 
-  const SHUT_UP_DURATION_MS = 8 * 60 * 1000;
-  const MENTION_COOLDOWN_MS = 45_000;
-  const COMEBACK_COOLDOWN_MS = 3 * 60 * 1000;
-  const COMEBACK_CHANCE = 0.22;
-
-  const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
-
-  const isShutUpCommand = (text: string) => {
-    const lower = text.toLowerCase();
-    if (!mentionsElroy(lower)) return false;
-    return /\b(shut\s*up|be\s*quiet|stfu|stop\s*talking|zip\s*it|can\s*you\s*not|go\s*away|leave\s*us\s*alone|silence|shush)\b/.test(lower);
-  };
-
-  const isSilenced = () => Date.now() < silencedUntilRef.current;
+  const isSilenced = () => isSilencedAt(Date.now(), silencedUntilRef.current);
 
   const canRespondToElroy = (cooldownMs: number) =>
-    Date.now() - lastElroyResponseRef.current >= cooldownMs;
+    canRespondToElroyAt(Date.now(), lastElroyResponseRef.current, cooldownMs);
 
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
@@ -180,9 +177,7 @@ function BongContent() {
   }, [processBongLogic]);
 
   const enterSilence = useCallback(() => {
-    silencedUntilRef.current = Date.now() + SHUT_UP_DURATION_MS;
-    voiceEnabledRef.current = false;
-    setIsVoiceOn(false);
+    silencedUntilRef.current = getNextSilencedUntil(Date.now(), silencedUntilRef.current);
   }, []);
 
   const handleElroyMention = useCallback((username: string, message: string) => {
