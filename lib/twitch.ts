@@ -64,3 +64,59 @@ export async function getBroadcasterId(channel: string, token: string, clientId:
   const users = await twitchGet(`/users?login=${encodeURIComponent(channel)}`, token, clientId);
   return users.data?.[0]?.id as string | undefined;
 }
+
+export type StreamStatusResult = {
+  status: 'live' | 'offline';
+  viewer_count: number | null;
+  source: 'twitch' | 'decapi';
+  title?: string;
+};
+
+/** Helix live check — only needs Client ID + Secret (no user OAuth). */
+export async function fetchStreamViaHelix(
+  login: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<StreamStatusResult> {
+  const token = await getAppAccessToken(clientId, clientSecret);
+  const broadcasterId = await getBroadcasterId(login, token, clientId);
+  if (!broadcasterId) {
+    throw new Error(`Broadcaster not found: ${login}`);
+  }
+  const streams = await twitchGet(`/streams?user_id=${broadcasterId}`, token, clientId);
+  const stream = streams.data?.[0];
+  if (!stream) {
+    return { status: 'offline', viewer_count: 0, source: 'twitch' };
+  }
+  return {
+    status: 'live',
+    viewer_count: stream.viewer_count ?? 0,
+    source: 'twitch',
+    title: stream.title ?? '',
+  };
+}
+
+/** Public fallback — no Client ID or OAuth (third-party DecAPI). */
+export async function fetchStreamViaDecapi(login: string): Promise<StreamStatusResult> {
+  const [uptimeRes, viewersRes] = await Promise.all([
+    fetch(`https://decapi.me/twitch/uptime/${encodeURIComponent(login)}`, { cache: 'no-store' }),
+    fetch(`https://decapi.me/twitch/viewercount/${encodeURIComponent(login)}`, { cache: 'no-store' }),
+  ]);
+  const uptime = (await uptimeRes.text()).trim().toLowerCase();
+  const viewersRaw = (await viewersRes.text()).trim();
+
+  const isLive =
+    uptime.includes('is live') &&
+    !uptime.includes('is offline') &&
+    !uptime.includes('not found');
+
+  let viewer_count: number | null = null;
+  const parsed = Number.parseInt(viewersRaw, 10);
+  if (Number.isFinite(parsed) && parsed >= 0) viewer_count = parsed;
+
+  return {
+    status: isLive ? 'live' : 'offline',
+    viewer_count: isLive ? viewer_count : 0,
+    source: 'decapi',
+  };
+}
