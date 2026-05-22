@@ -144,19 +144,31 @@ function BongContent() {
   const buildBitsPrompt = useCallback((user: string, details: string) =>
     `${user} just cheered ${details} in chat! Celebrate the support with enthusiastic OG energy and thank them by name.`, []);
 
-  const buildStreamCheckinPrompt = useCallback((viewerCount: number | null, isLive: boolean) => {
+  const buildStreamCheckinPrompt = useCallback((
+    viewerCount: number | null,
+    streamStatus: 'live' | 'offline' | 'unknown',
+  ) => {
     const cutoff = Date.now() - STREAM_CHECKIN_MS;
     const recent = recentChatRef.current.filter((entry) => entry.at >= cutoff);
+    const chatActive = recent.length >= 3;
     const lines = recent.length
       ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
-      : '(chat has been quiet)';
-    const viewerLine =
-      isLive && viewerCount != null
-        ? `The stream is LIVE with ${viewerCount} viewers right now.`
-        : !isLive
-          ? 'The stream appears offline.'
-          : 'Viewer count is unavailable — still do a check-in.';
-    return `10-minute stream check-in.\n${viewerLine}\n\nRecent chat (last ~10 minutes):\n${lines}\n\nGive one OG check-in that:\n- Naturally mentions how many people are watching (use the viewer count above when available).\n- Picks the single most interesting, funny, or engaging chatter from the list and shouts them out BY USERNAME — reference what they said that stood out.\n- If chat was quiet, hype the lurkers anyway without inventing usernames.\n- Only name chatters who appear in the list above.`;
+      : '(few messages in the last 10 minutes)';
+
+    let viewerLine: string;
+    if (streamStatus === 'live' && viewerCount != null) {
+      viewerLine = `The stream is LIVE with ${viewerCount} viewers right now.`;
+    } else if (chatActive) {
+      viewerLine = streamStatus === 'live' && viewerCount != null
+        ? `The stream is live with about ${viewerCount} viewers. Chat is active.`
+        : 'Chat is active — the stream is clearly live. Viewer count could not be fetched; hype the room without inventing a number.';
+    } else if (streamStatus === 'offline') {
+      viewerLine = 'Twitch reports the channel is not live and chat has been quiet.';
+    } else {
+      viewerLine = 'Viewer count could not be verified. Do not say the stream or chat is offline — keep the energy up anyway.';
+    }
+
+    return `10-minute stream check-in.\n${viewerLine}\n\nRecent chat (last ~10 minutes):\n${lines}\n\nGive one OG check-in that:\n- Mentions how many people are watching when a viewer count is provided above; otherwise hype the live chat without guessing a number.\n- NEVER say chat is "offline", "dead", or "empty" when there are messages in the list above.\n- Picks the single most interesting, funny, or engaging chatter from the list and shouts them out BY USERNAME — reference what they said that stood out.\n- If chat was quiet, hype the lurkers anyway without inventing usernames.\n- Only name chatters who appear in the list above.`;
   }, []);
 
   const buildComebackPrompt = useCallback((user: string, message: string) => {
@@ -278,18 +290,24 @@ function BongContent() {
   const runStreamCheckin = useCallback(async () => {
     if (isSilenced()) return;
     let viewerCount: number | null = null;
-    let isLive = false;
+    let streamStatus: 'live' | 'offline' | 'unknown' = 'unknown';
     try {
       const res = await fetch('/api/twitch/stream');
       const data = await res.json();
-      if (res.ok) {
-        isLive = Boolean(data.is_live);
+      if (res.ok && (data.status === 'live' || data.status === 'offline' || data.status === 'unknown')) {
+        streamStatus = data.status;
         if (typeof data.viewer_count === 'number') viewerCount = data.viewer_count;
+      } else if (res.ok && data.is_live) {
+        streamStatus = 'live';
+        if (typeof data.viewer_count === 'number') viewerCount = data.viewer_count;
+      } else if (res.ok) {
+        streamStatus = 'offline';
       }
+      if (data.error) console.warn('Stream check-in:', data.error);
     } catch (e) {
       console.warn('Stream check-in failed', e);
     }
-    void queueBongLogic(buildStreamCheckinPrompt(viewerCount, isLive));
+    void queueBongLogic(buildStreamCheckinPrompt(viewerCount, streamStatus));
   }, [buildStreamCheckinPrompt, queueBongLogic]);
 
   const startStreamCheckins = useCallback(() => {

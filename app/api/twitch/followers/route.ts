@@ -1,17 +1,18 @@
-import { getBroadcasterId, getTwitchCredentials, normalizeToken, twitchGet } from '@/lib/twitch';
+import { getBroadcasterId, getBroadcasterLogin, getTwitchCredentials, normalizeToken, twitchGet } from '@/lib/twitch';
 
 export async function GET() {
   try {
     const creds = getTwitchCredentials();
-    if (!creds) {
+    const broadcasterLogin = getBroadcasterLogin();
+    if (!creds || !broadcasterLogin) {
       return Response.json(
         { followers: [], error: 'Missing TWITCH_CLIENT_ID, channel, or OAuth token.' },
         { status: 503 },
       );
     }
 
-    const { channel, token, clientId } = creds;
-    const broadcasterId = await getBroadcasterId(channel, token, clientId);
+    const { token, clientId } = creds;
+    const broadcasterId = await getBroadcasterId(broadcasterLogin, token, clientId);
     if (!broadcasterId) {
       return Response.json({ followers: [], error: 'Channel not found.' }, { status: 404 });
     }
