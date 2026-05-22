@@ -29,6 +29,13 @@ function BongContent() {
   const MENTION_COOLDOWN_MS = 45_000;
   const COMEBACK_COOLDOWN_MS = 3 * 60 * 1000;
   const COMEBACK_CHANCE = 0.22;
+  const CELEBRATION_COOLDOWN_MS = 25_000;
+  const FOLLOWER_POLL_MS = 45_000;
+
+  const lastCelebrationRef = useRef(0);
+  const knownFollowerIdsRef = useRef<Set<string>>(new Set());
+  const followersInitializedRef = useRef(false);
+  const followerPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
@@ -122,6 +129,15 @@ function BongContent() {
     return `Someone brought you up in Twitch chat. ${user} said: "${message}"\n\nRecent chat:\n${context}\n\nRespond in character to what they're saying about you — answer the vibe, joke, or question naturally for stream chat.`;
   }, []);
 
+  const buildFollowPrompt = useCallback((user: string) =>
+    `${user} just followed the Twitch channel. Welcome them with a warm, hype OG hello — make them feel seen and glad they joined the community.`, []);
+
+  const buildSubPrompt = useCallback((user: string, details: string) =>
+    `${user} just subscribed to the channel! ${details} Celebrate them in your OG style — genuine gratitude, stream hype, make them feel legendary.`, []);
+
+  const buildBitsPrompt = useCallback((user: string, details: string) =>
+    `${user} just cheered ${details} in chat! Celebrate the support with enthusiastic OG energy and thank them by name.`, []);
+
   const buildComebackPrompt = useCallback((user: string, message: string) => {
     const recent = recentChatRef.current.slice(0, 6);
     const context = recent.length
@@ -185,6 +201,59 @@ function BongContent() {
     setIsVoiceOn(false);
   }, []);
 
+  const canCelebrate = () => Date.now() - lastCelebrationRef.current >= CELEBRATION_COOLDOWN_MS;
+
+  const celebrate = useCallback((kind: 'follow' | 'sub' | 'bits', username: string, extra = '') => {
+    if (!canCelebrate()) return;
+    lastCelebrationRef.current = Date.now();
+    const prompt =
+      kind === 'follow' ? buildFollowPrompt(username)
+      : kind === 'sub' ? buildSubPrompt(username, extra)
+      : buildBitsPrompt(username, extra);
+    void queueBongLogic(prompt, username, { forceVoice: true });
+  }, [buildBitsPrompt, buildFollowPrompt, buildSubPrompt, queueBongLogic]);
+
+  const pollNewFollowers = useCallback(async () => {
+    try {
+      const res = await fetch('/api/twitch/followers');
+      const data = await res.json();
+      if (!res.ok || !Array.isArray(data.followers)) return;
+
+      if (!followersInitializedRef.current) {
+        for (const follower of data.followers) {
+          knownFollowerIdsRef.current.add(follower.user_id);
+        }
+        followersInitializedRef.current = true;
+        return;
+      }
+
+      for (const follower of data.followers) {
+        if (knownFollowerIdsRef.current.has(follower.user_id)) continue;
+        knownFollowerIdsRef.current.add(follower.user_id);
+        celebrate('follow', follower.user_login);
+      }
+    } catch (e) {
+      console.warn('Follower poll failed', e);
+    }
+  }, [celebrate]);
+
+  const startFollowerPolling = useCallback(() => {
+    if (followerPollRef.current) return;
+    void pollNewFollowers();
+    followerPollRef.current = setInterval(() => {
+      void pollNewFollowers();
+    }, FOLLOWER_POLL_MS);
+  }, [pollNewFollowers]);
+
+  const stopFollowerPolling = useCallback(() => {
+    if (followerPollRef.current) {
+      clearInterval(followerPollRef.current);
+      followerPollRef.current = null;
+    }
+    followersInitializedRef.current = false;
+    knownFollowerIdsRef.current.clear();
+  }, []);
+
   const handleElroyMention = useCallback((username: string, message: string) => {
     if (isSilenced()) {
       if (!canRespondToElroy(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
@@ -233,8 +302,9 @@ function BongContent() {
       }
       clientRef.current = null;
     }
+    stopFollowerPolling();
     setIsActive(false);
-  }, []);
+  }, [stopFollowerPolling]);
 
   const startBot = async () => {
     if (isActive) return;
@@ -316,9 +386,39 @@ function BongContent() {
         return setVolume(parsed / 100, t.username);
       }
     });
+
+    client.on('subscription', (_channel: string, username: string, _method: unknown, message: string) => {
+      const detail = message?.trim() ? `They said: "${message.trim()}"` : 'Brand new sub!';
+      celebrate('sub', username, detail);
+    });
+
+    client.on('resub', (_channel: string, username: string, months: number, message: string) => {
+      const detail = `${months} month streak.${message?.trim() ? ` They said: "${message.trim()}"` : ''}`;
+      celebrate('sub', username, detail);
+    });
+
+    client.on('subgift', (_channel: string, username: string, _streakMonths: number, recipient: string) => {
+      celebrate('sub', username, `They gifted a sub to ${recipient}!`);
+    });
+
+    client.on('submysterygift', (_channel: string, username: string, numbOfSubs: number) => {
+      celebrate('sub', username, `They dropped ${numbOfSubs} gift subs on the community!`);
+    });
+
+    client.on('cheer', (_channel: string, userstate: tmi.ChatUserstate, message: string) => {
+      const username = userstate['display-name'] || userstate.username || 'viewer';
+      const bits = Number.parseInt(userstate.bits || '0', 10);
+      if (bits <= 0) return;
+      const detail = message?.trim()
+        ? `${bits} bits with message: "${message.trim()}"`
+        : `${bits} bits`;
+      celebrate('bits', username, detail);
+    });
+
     await client.connect();
     clientRef.current = client;
     setIsActive(true);
+    startFollowerPolling();
     clientRef.current?.say(chan, 'I AM ALIVE!');
     const startupDelayMs = gongEnabledRef.current ? 1600 : 0;
     if (voiceEnabledRef.current) {
