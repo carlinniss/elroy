@@ -32,12 +32,40 @@ function BongContent() {
   const CELEBRATION_COOLDOWN_MS = 25_000;
   const FOLLOWER_POLL_MS = 45_000;
   const STREAM_CHECKIN_MS = 10 * 60 * 1000;
+  const STREAM_POLL_MS = 60_000;
+  const SESSION_CHAT_MAX = 600;
+  const SESSION_STORAGE_KEY = 'elroy-stream-session';
+
+  const CANNABIS_FACTS = [
+    'The word "canvas" comes from cannabis — sailcloth was historically made from hemp.',
+    'Cannabis has been cultivated for thousands of years; ancient China used hemp for rope and medicine.',
+    'Hemp seeds are a complete plant protein and were eaten on long sea voyages.',
+    'The human body has an endocannabinoid system that interacts with compounds found in cannabis.',
+    'George Washington grew hemp at Mount Vernon for industrial fiber, not smoking.',
+    'Cannabis contains over 100 different cannabinoids besides THC and CBD.',
+    'Industrial hemp was legal tender to pay taxes in early America.',
+    'Terpenes in cannabis are the same aromatic compounds found in citrus, pine, and lavender.',
+    'Hemp can grow up to 15 feet tall in a single season with relatively little water.',
+    'Ancient Indian texts describe cannabis as one of five sacred plants.',
+    'Hemp plastic is biodegradable and was used in early Ford car prototypes.',
+    'CBD was first isolated from cannabis by chemist Roger Adams in 1940.',
+    'Cannabis pollen grains have been found in tombs dating back over 2,500 years.',
+    'Hemp fiber is stronger than cotton and was used for ship rigging and uniforms.',
+    'The 710 community celebrates oil culture — 710 upside-down spells OIL.',
+  ];
+
+  const randomCannabisFact = () =>
+    CANNABIS_FACTS[Math.floor(Math.random() * CANNABIS_FACTS.length)];
 
   const lastCelebrationRef = useRef(0);
   const knownFollowerIdsRef = useRef<Set<string>>(new Set());
   const followersInitializedRef = useRef(false);
   const followerPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamCheckinRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const streamPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const streamLiveRef = useRef(false);
+  const sessionChatRef = useRef<Array<{ user: string; text: string; at: number }>>([]);
+  const streamStartedAtRef = useRef<number | null>(null);
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
@@ -52,6 +80,41 @@ function BongContent() {
   const canRespondToElroy = (cooldownMs: number) =>
     Date.now() - lastElroyResponseRef.current >= cooldownMs;
 
+  const persistStreamSession = useCallback(() => {
+    if (typeof window === 'undefined' || !streamStartedAtRef.current) return;
+    try {
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
+        startedAt: streamStartedAtRef.current,
+        messages: sessionChatRef.current,
+      }));
+    } catch (e) {
+      console.warn('Session save failed', e);
+    }
+  }, []);
+
+  const clearStreamSession = useCallback(() => {
+    sessionChatRef.current = [];
+    streamStartedAtRef.current = null;
+    if (typeof window !== 'undefined') {
+      try { localStorage.removeItem(SESSION_STORAGE_KEY); } catch { /* ignore */ }
+    }
+  }, []);
+
+  const restoreStreamSession = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { startedAt?: number; messages?: Array<{ user: string; text: string; at: number }> };
+      if (parsed.startedAt && Array.isArray(parsed.messages)) {
+        streamStartedAtRef.current = parsed.startedAt;
+        sessionChatRef.current = parsed.messages.slice(0, SESSION_CHAT_MAX);
+      }
+    } catch (e) {
+      console.warn('Session restore failed', e);
+    }
+  }, []);
+
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
     if (!normalized) return;
@@ -60,6 +123,42 @@ function BongContent() {
       { user, text: normalized, at: now },
       ...recentChatRef.current.filter((entry) => now - entry.at < STREAM_CHECKIN_MS),
     ].slice(0, 80);
+    if (streamLiveRef.current) {
+      sessionChatRef.current = [
+        { user, text: normalized, at: now },
+        ...sessionChatRef.current,
+      ].slice(0, SESSION_CHAT_MAX);
+      persistStreamSession();
+    }
+  }, [persistStreamSession]);
+
+  const fetchStreamStatus = useCallback(async () => {
+    let streamStatus: 'live' | 'offline' | 'unknown' = 'unknown';
+    let viewerCount: number | null = null;
+    try {
+      const res = await fetch('/api/twitch/stream');
+      const data = await res.json();
+      if (res.ok && (data.status === 'live' || data.status === 'offline' || data.status === 'unknown')) {
+        streamStatus = data.status;
+        if (typeof data.viewer_count === 'number') viewerCount = data.viewer_count;
+      } else if (res.ok && data.is_live) {
+        streamStatus = 'live';
+        if (typeof data.viewer_count === 'number') viewerCount = data.viewer_count;
+      } else if (res.ok) {
+        streamStatus = 'offline';
+      }
+    } catch (e) {
+      console.warn('Stream status fetch failed', e);
+    }
+    const isLive = streamStatus === 'live';
+    return { isLive, streamStatus, viewerCount };
+  }, []);
+
+  const sampleSessionChat = useCallback((maxLines = 120) => {
+    const messages = sessionChatRef.current;
+    if (messages.length <= maxLines) return messages;
+    const step = Math.ceil(messages.length / maxLines);
+    return messages.filter((_, index) => index % step === 0).slice(0, maxLines);
   }, []);
 
   const buildChatAwarePrompt = useCallback(() => {
@@ -171,6 +270,27 @@ function BongContent() {
     return `10-minute stream check-in.\n${viewerLine}\n\nRecent chat (last ~10 minutes):\n${lines}\n\nGive one OG check-in that:\n- Mentions how many people are watching when a viewer count is provided above; otherwise hype the live chat without guessing a number.\n- NEVER say chat is "offline", "dead", or "empty" when there are messages in the list above.\n- Picks the single most interesting, funny, or engaging chatter from the list and shouts them out BY USERNAME — reference what they said that stood out.\n- If chat was quiet, hype the lurkers anyway without inventing usernames.\n- Only name chatters who appear in the list above.`;
   }, []);
 
+  const buildStreamGreetingPrompt = useCallback((viewerCount: number | null, cannabisFact: string) => {
+    const viewers = viewerCount != null ? `About ${viewerCount} viewers are here.` : 'Stream just went live.';
+    return `The Twitch stream just went LIVE. ${viewers}\n\nGive a hype stream-start greeting with VOICE energy. You MUST open with exactly "I AM ALIVE!" as the first words, then welcome chat and weave in this cannabis fact naturally: "${cannabisFact}"\nKeep it fun, OG, and welcoming.`;
+  }, []);
+
+  const buildStreamGoodbyePrompt = useCallback(() =>
+    'The Twitch stream just ended. Give a short, sincere goodbye to chat — thank everyone for hanging out. Chat-only, no voice. One message.', []);
+
+  const buildStreamSummaryPrompt = useCallback(() => {
+    const messages = sampleSessionChat(120);
+    const durationMin = streamStartedAtRef.current
+      ? Math.max(1, Math.round((Date.now() - streamStartedAtRef.current) / 60_000))
+      : null;
+    const uniqueChatters = new Set(messages.map((m) => m.user.toLowerCase())).size;
+    const lines = messages.length
+      ? messages.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
+      : '(very little chat captured this stream)';
+    const durationLine = durationMin ? `Stream ran about ${durationMin} minutes.` : '';
+    return `The stream just ended. Write a recap for Twitch chat (chat-only, no voice).\n${durationLine} ${messages.length} messages logged from ~${uniqueChatters} chatters.\n\nFull session chat sample:\n${lines}\n\nSummarize the whole stream: highlights, running jokes, notable moments, and thank the community. Aim for 350-450 characters. Only reference usernames and topics that appear above.`;
+  }, [sampleSessionChat]);
+
   const buildComebackPrompt = useCallback((user: string, message: string) => {
     const recent = recentChatRef.current.slice(0, 6);
     const context = recent.length
@@ -182,7 +302,7 @@ function BongContent() {
   const processBongLogic = useCallback(async (
     input: string,
     user?: string,
-    opts: { isQuota?: boolean; forceVoice?: boolean } = {},
+    opts: { isQuota?: boolean; forceVoice?: boolean; chatOnly?: boolean; skipGong?: boolean } = {},
   ) => {
     try {
       if (opts.isQuota) {
@@ -194,23 +314,30 @@ function BongContent() {
       const personalizationRule = user
         ? `- Personalize the response directly for ${user} by name (say their username naturally in the message).`
         : `- Keep it general for the whole chat, not aimed at one person.`;
-      const fullPrompt = `${input}\n\nResponse requirements:\n- Make your response about 2x your normal length.\n- Aim for roughly 220-320 characters.\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
+      const lengthRule = opts.chatOnly
+        ? '- Aim for roughly 220-450 characters depending on whether this is a recap or a short greeting/goodbye.'
+        : '- Make your response about 2x your normal length.\n- Aim for roughly 220-320 characters.';
+      const fullPrompt = `${input}\n\nResponse requirements:\n${lengthRule}\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
       const res = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: fullPrompt }) });
       const data = await res.json();
       setLog(p => [{ text: data.text }, ...p].slice(0, 5));
       clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, user ? `@${user} ${data.text}` : data.text);
       lastElroyResponseRef.current = Date.now();
 
-      if (gongEnabledRef.current) {
+      const useVoice = streamLiveRef.current && !opts.chatOnly
+        && (opts.forceVoice || voiceEnabledRef.current);
+      const playGong = useVoice && gongEnabledRef.current && !opts.skipGong;
+
+      if (playGong) {
         const rip = new Audio('/sounds/bong.mp3');
         rip.volume = volumeRef.current;
         await rip.play().catch(() => {});
       }
-      const speechDelayMs = gongEnabledRef.current ? 1600 : 0;
+      const speechDelayMs = playGong ? 1600 : 0;
       if (speechDelayMs > 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, speechDelayMs));
       }
-      if (opts.forceVoice || voiceEnabledRef.current) {
+      if (useVoice) {
         await speak(data.text);
       }
       runDiagnostics();
@@ -220,7 +347,7 @@ function BongContent() {
   const queueBongLogic = useCallback((
     input: string,
     user?: string,
-    opts: { isQuota?: boolean; forceVoice?: boolean } = {},
+    opts: { isQuota?: boolean; forceVoice?: boolean; chatOnly?: boolean; skipGong?: boolean } = {},
   ) => {
     responseQueueRef.current = responseQueueRef.current
       .then(() => processBongLogic(input, user, opts))
@@ -237,7 +364,7 @@ function BongContent() {
   const canCelebrate = () => Date.now() - lastCelebrationRef.current >= CELEBRATION_COOLDOWN_MS;
 
   const celebrate = useCallback((kind: 'follow' | 'sub' | 'bits', username: string, extra = '') => {
-    if (!canCelebrate()) return;
+    if (!streamLiveRef.current || !canCelebrate()) return;
     lastCelebrationRef.current = Date.now();
     const prompt =
       kind === 'follow' ? buildFollowPrompt(username)
@@ -287,46 +414,74 @@ function BongContent() {
     knownFollowerIdsRef.current.clear();
   }, []);
 
-  const runStreamCheckin = useCallback(async () => {
-    if (isSilenced()) return;
-    let viewerCount: number | null = null;
-    let streamStatus: 'live' | 'offline' | 'unknown' = 'unknown';
-    try {
-      const res = await fetch('/api/twitch/stream');
-      const data = await res.json();
-      if (res.ok && (data.status === 'live' || data.status === 'offline' || data.status === 'unknown')) {
-        streamStatus = data.status;
-        if (typeof data.viewer_count === 'number') viewerCount = data.viewer_count;
-      } else if (res.ok && data.is_live) {
-        streamStatus = 'live';
-        if (typeof data.viewer_count === 'number') viewerCount = data.viewer_count;
-      } else if (res.ok) {
-        streamStatus = 'offline';
-      }
-      if (data.error) console.warn('Stream check-in:', data.error);
-    } catch (e) {
-      console.warn('Stream check-in failed', e);
+  const onStreamStarted = useCallback((viewerCount: number | null) => {
+    const resumed = Boolean(streamStartedAtRef.current);
+    if (!resumed) {
+      streamStartedAtRef.current = Date.now();
+      sessionChatRef.current = [];
+      void queueBongLogic(buildStreamGreetingPrompt(viewerCount, randomCannabisFact()), undefined, {
+        forceVoice: true,
+      });
     }
+    persistStreamSession();
+  }, [buildStreamGreetingPrompt, persistStreamSession, queueBongLogic]);
+
+  const onStreamEnded = useCallback(() => {
+    const summaryPrompt = buildStreamSummaryPrompt();
+    responseQueueRef.current = responseQueueRef.current
+      .then(() => processBongLogic(buildStreamGoodbyePrompt(), undefined, { chatOnly: true, skipGong: true }))
+      .then(() => processBongLogic(summaryPrompt, undefined, { chatOnly: true, skipGong: true }))
+      .then(() => { clearStreamSession(); })
+      .catch((e) => { console.error(e); });
+  }, [buildStreamGoodbyePrompt, buildStreamSummaryPrompt, clearStreamSession, processBongLogic]);
+
+  const pollStreamLive = useCallback(async () => {
+    const wasLive = streamLiveRef.current;
+    const { isLive, viewerCount } = await fetchStreamStatus();
+    streamLiveRef.current = isLive;
+
+    if (!wasLive && isLive) {
+      onStreamStarted(viewerCount);
+    } else if (wasLive && !isLive) {
+      onStreamEnded();
+    }
+  }, [fetchStreamStatus, onStreamEnded, onStreamStarted]);
+
+  const runStreamCheckin = useCallback(async () => {
+    if (isSilenced() || !streamLiveRef.current) return;
+    const { streamStatus, viewerCount } = await fetchStreamStatus();
     void queueBongLogic(buildStreamCheckinPrompt(viewerCount, streamStatus));
-  }, [buildStreamCheckinPrompt, queueBongLogic]);
+  }, [buildStreamCheckinPrompt, fetchStreamStatus, queueBongLogic]);
 
-  const startStreamCheckins = useCallback(() => {
-    if (streamCheckinRef.current) return;
-    streamCheckinRef.current = setInterval(() => {
-      void runStreamCheckin();
-    }, STREAM_CHECKIN_MS);
-  }, [runStreamCheckin]);
+  const startStreamMonitoring = useCallback(() => {
+    if (!streamPollRef.current) {
+      void pollStreamLive();
+      streamPollRef.current = setInterval(() => {
+        void pollStreamLive();
+      }, STREAM_POLL_MS);
+    }
+    if (!streamCheckinRef.current) {
+      streamCheckinRef.current = setInterval(() => {
+        void runStreamCheckin();
+      }, STREAM_CHECKIN_MS);
+    }
+  }, [pollStreamLive, runStreamCheckin]);
 
-  const stopStreamCheckins = useCallback(() => {
+  const stopStreamMonitoring = useCallback(() => {
+    if (streamPollRef.current) {
+      clearInterval(streamPollRef.current);
+      streamPollRef.current = null;
+    }
     if (streamCheckinRef.current) {
       clearInterval(streamCheckinRef.current);
       streamCheckinRef.current = null;
     }
+    streamLiveRef.current = false;
   }, []);
 
   const handleElroyMention = useCallback((username: string, message: string) => {
     if (isSilenced()) {
-      if (!canRespondToElroy(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
+      if (!streamLiveRef.current || !canRespondToElroy(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
       void queueBongLogic(buildComebackPrompt(username, message), username, { forceVoice: true });
       return;
     }
@@ -373,9 +528,9 @@ function BongContent() {
       clientRef.current = null;
     }
     stopFollowerPolling();
-    stopStreamCheckins();
+    stopStreamMonitoring();
     setIsActive(false);
-  }, [stopFollowerPolling, stopStreamCheckins]);
+  }, [stopFollowerPolling, stopStreamMonitoring]);
 
   const startBot = async () => {
     if (isActive) return;
@@ -403,7 +558,7 @@ function BongContent() {
 
           if (mentionsElroy(m)) {
             handleElroyMention(username, m);
-          } else if (!isSilenced() && !isBroadcaster) {
+          } else if (streamLiveRef.current && !isSilenced() && !isBroadcaster) {
             chatMessageCountRef.current += 1;
             if (chatMessageCountRef.current >= 60) {
               chatMessageCountRef.current = 0;
@@ -489,15 +644,9 @@ function BongContent() {
     await client.connect();
     clientRef.current = client;
     setIsActive(true);
+    restoreStreamSession();
     startFollowerPolling();
-    startStreamCheckins();
-    clientRef.current?.say(chan, 'I AM ALIVE!');
-    const startupDelayMs = gongEnabledRef.current ? 1600 : 0;
-    if (voiceEnabledRef.current) {
-      void setTimeout(() => {
-        void speak('I AM ALIVE!');
-      }, startupDelayMs);
-    }
+    startStreamMonitoring();
   };
 
   useEffect(() => { if (searchParams.get('autostart') === 'true') startBot(); }, [searchParams]);
