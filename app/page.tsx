@@ -17,7 +17,7 @@ function BongContent() {
   const gongEnabledRef = useRef(true);
   const voiceEnabledRef = useRef(true);
   const volumeRef = useRef(DEFAULT_VOLUME);
-  const recentChatRef = useRef<Array<{ user: string; text: string }>>([]);
+  const recentChatRef = useRef<Array<{ user: string; text: string; at: number }>>([]);
   const chatMessageCountRef = useRef(0);
   const isSpeakingRef = useRef(false);
   const silencedUntilRef = useRef(0);
@@ -31,11 +31,13 @@ function BongContent() {
   const COMEBACK_CHANCE = 0.22;
   const CELEBRATION_COOLDOWN_MS = 25_000;
   const FOLLOWER_POLL_MS = 45_000;
+  const STREAM_CHECKIN_MS = 10 * 60 * 1000;
 
   const lastCelebrationRef = useRef(0);
   const knownFollowerIdsRef = useRef<Set<string>>(new Set());
   const followersInitializedRef = useRef(false);
   const followerPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const streamCheckinRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
@@ -53,7 +55,11 @@ function BongContent() {
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
     if (!normalized) return;
-    recentChatRef.current = [{ user, text: normalized }, ...recentChatRef.current].slice(0, 12);
+    const now = Date.now();
+    recentChatRef.current = [
+      { user, text: normalized, at: now },
+      ...recentChatRef.current.filter((entry) => now - entry.at < STREAM_CHECKIN_MS),
+    ].slice(0, 80);
   }, []);
 
   const buildChatAwarePrompt = useCallback(() => {
@@ -137,6 +143,21 @@ function BongContent() {
 
   const buildBitsPrompt = useCallback((user: string, details: string) =>
     `${user} just cheered ${details} in chat! Celebrate the support with enthusiastic OG energy and thank them by name.`, []);
+
+  const buildStreamCheckinPrompt = useCallback((viewerCount: number | null, isLive: boolean) => {
+    const cutoff = Date.now() - STREAM_CHECKIN_MS;
+    const recent = recentChatRef.current.filter((entry) => entry.at >= cutoff);
+    const lines = recent.length
+      ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
+      : '(chat has been quiet)';
+    const viewerLine =
+      isLive && viewerCount != null
+        ? `The stream is LIVE with ${viewerCount} viewers right now.`
+        : !isLive
+          ? 'The stream appears offline.'
+          : 'Viewer count is unavailable — still do a check-in.';
+    return `10-minute stream check-in.\n${viewerLine}\n\nRecent chat (last ~10 minutes):\n${lines}\n\nGive one OG check-in that:\n- Naturally mentions how many people are watching (use the viewer count above when available).\n- Picks the single most interesting, funny, or engaging chatter from the list and shouts them out BY USERNAME — reference what they said that stood out.\n- If chat was quiet, hype the lurkers anyway without inventing usernames.\n- Only name chatters who appear in the list above.`;
+  }, []);
 
   const buildComebackPrompt = useCallback((user: string, message: string) => {
     const recent = recentChatRef.current.slice(0, 6);
@@ -254,6 +275,37 @@ function BongContent() {
     knownFollowerIdsRef.current.clear();
   }, []);
 
+  const runStreamCheckin = useCallback(async () => {
+    if (isSilenced()) return;
+    let viewerCount: number | null = null;
+    let isLive = false;
+    try {
+      const res = await fetch('/api/twitch/stream');
+      const data = await res.json();
+      if (res.ok) {
+        isLive = Boolean(data.is_live);
+        if (typeof data.viewer_count === 'number') viewerCount = data.viewer_count;
+      }
+    } catch (e) {
+      console.warn('Stream check-in failed', e);
+    }
+    void queueBongLogic(buildStreamCheckinPrompt(viewerCount, isLive));
+  }, [buildStreamCheckinPrompt, queueBongLogic]);
+
+  const startStreamCheckins = useCallback(() => {
+    if (streamCheckinRef.current) return;
+    streamCheckinRef.current = setInterval(() => {
+      void runStreamCheckin();
+    }, STREAM_CHECKIN_MS);
+  }, [runStreamCheckin]);
+
+  const stopStreamCheckins = useCallback(() => {
+    if (streamCheckinRef.current) {
+      clearInterval(streamCheckinRef.current);
+      streamCheckinRef.current = null;
+    }
+  }, []);
+
   const handleElroyMention = useCallback((username: string, message: string) => {
     if (isSilenced()) {
       if (!canRespondToElroy(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
@@ -303,8 +355,9 @@ function BongContent() {
       clientRef.current = null;
     }
     stopFollowerPolling();
+    stopStreamCheckins();
     setIsActive(false);
-  }, [stopFollowerPolling]);
+  }, [stopFollowerPolling, stopStreamCheckins]);
 
   const startBot = async () => {
     if (isActive) return;
@@ -419,6 +472,7 @@ function BongContent() {
     clientRef.current = client;
     setIsActive(true);
     startFollowerPolling();
+    startStreamCheckins();
     clientRef.current?.say(chan, 'I AM ALIVE!');
     const startupDelayMs = gongEnabledRef.current ? 1600 : 0;
     if (voiceEnabledRef.current) {
