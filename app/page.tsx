@@ -71,6 +71,10 @@ function BongContent() {
   const sessionChatRef = useRef<Array<{ user: string; text: string; at: number }>>([]);
   const streamStartedAtRef = useRef<number | null>(null);
   const shutElroyPowerUpIdRef = useRef<string | null>(null);
+  const powerupPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastRedemptionPollRef = useRef(Date.now());
+  const processedRedemptionIdsRef = useRef<Set<string>>(new Set());
+  const POWERUP_POLL_MS = 5_000;
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
@@ -92,11 +96,27 @@ function BongContent() {
       if (id) {
         shutElroyPowerUpIdRef.current = id;
         console.info('Shut Elroy power-up auto-detected:', id, data.shut_elroy_title);
-        return;
+      } else if (data.error) {
+        console.warn('Shut Elroy power-up lookup:', data.error);
       }
-      if (data.error) console.warn('Shut Elroy power-up lookup:', data.error);
+      return Boolean(id);
     } catch (e) {
       console.warn('Shut Elroy power-up lookup failed', e);
+      return false;
+    }
+  }, []);
+
+  const ensureEventSubSubscription = useCallback(async () => {
+    try {
+      const res = await fetch('/api/twitch/eventsub/subscribe', { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) {
+        console.info('EventSub power-up redemption listener:', data.status, data.callback);
+      } else {
+        console.warn('EventSub power-up listener:', data.message || data.status);
+      }
+    } catch (e) {
+      console.warn('EventSub subscription failed', e);
     }
   }, []);
 
@@ -164,6 +184,50 @@ function BongContent() {
       postMuteCountdown();
     }, 60_000);
   }, [postMuteCountdown, stopMuteCountdown]);
+
+  const pollPowerupRedemptions = useCallback(async () => {
+    const cachedId = shutElroyPowerUpIdRef.current;
+    if (!cachedId) return;
+
+    try {
+      const res = await fetch(`/api/twitch/powerup-redemptions?since=${lastRedemptionPollRef.current}`);
+      const data = await res.json();
+      const redemptions = (data.redemptions ?? []) as Array<{
+        id: string;
+        userLogin: string;
+        rewardId: string;
+      }>;
+
+      for (const redemption of redemptions) {
+        if (processedRedemptionIdsRef.current.has(redemption.id)) continue;
+        if (redemption.rewardId && redemption.rewardId !== cachedId) continue;
+        processedRedemptionIdsRef.current.add(redemption.id);
+        enterFullMute(redemption.userLogin);
+      }
+
+      if (typeof data.serverTime === 'number') {
+        lastRedemptionPollRef.current = data.serverTime;
+      }
+    } catch (e) {
+      console.warn('Power-up redemption poll failed', e);
+    }
+  }, [enterFullMute]);
+
+  const startPowerupRedemptionPolling = useCallback(() => {
+    if (powerupPollRef.current) return;
+    lastRedemptionPollRef.current = Date.now();
+    void pollPowerupRedemptions();
+    powerupPollRef.current = setInterval(() => {
+      void pollPowerupRedemptions();
+    }, POWERUP_POLL_MS);
+  }, [pollPowerupRedemptions]);
+
+  const stopPowerupRedemptionPolling = useCallback(() => {
+    if (powerupPollRef.current) {
+      clearInterval(powerupPollRef.current);
+      powerupPollRef.current = null;
+    }
+  }, []);
 
   const persistStreamSession = useCallback(() => {
     if (typeof window === 'undefined' || !streamStartedAtRef.current) return;
@@ -616,10 +680,11 @@ function BongContent() {
       clientRef.current = null;
     }
     stopFollowerPolling();
+    stopPowerupRedemptionPolling();
     stopStreamMonitoring();
     stopMuteCountdown();
     setIsActive(false);
-  }, [stopFollowerPolling, stopStreamMonitoring, stopMuteCountdown]);
+  }, [stopFollowerPolling, stopPowerupRedemptionPolling, stopStreamMonitoring, stopMuteCountdown]);
 
   const startBot = async () => {
     if (isActive) return;
@@ -752,7 +817,11 @@ function BongContent() {
     clientRef.current = client;
     setIsActive(true);
     restoreStreamSession();
-    void resolveShutElroyPowerUpId();
+    const foundPowerUp = await resolveShutElroyPowerUpId();
+    if (foundPowerUp) {
+      void ensureEventSubSubscription();
+      startPowerupRedemptionPolling();
+    }
     startFollowerPolling();
     startStreamMonitoring();
   };
