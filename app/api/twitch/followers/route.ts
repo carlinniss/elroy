@@ -8,7 +8,7 @@ export async function GET() {
       return Response.json(
         {
           followers: [],
-          error: 'Set TWITCH_OAUTH_TOKEN (broadcaster/mod) or NEXT_PUBLIC_TWITCH_OAUTH_TOKEN with channel login.',
+          error: 'Set TWITCH_OAUTH_TOKEN (broadcaster/mod) with channel login.',
         },
         { status: 503 },
       );
@@ -21,9 +21,7 @@ export async function GET() {
         token_login: creds.login,
         token_source: creds.tokenSource,
         scopes: creds.scopes,
-        hint: creds.tokenSource === 'TWITCH_OAUTH_TOKEN'
-          ? 'Regenerate TWITCH_OAUTH_TOKEN with moderator:read:followers.'
-          : 'Use TWITCH_OAUTH_TOKEN (broadcaster or mod bot) with moderator:read:followers.',
+        hint: 'Regenerate TWITCH_OAUTH_TOKEN with moderator:read:followers.',
       }, { status: 403 });
     }
 
