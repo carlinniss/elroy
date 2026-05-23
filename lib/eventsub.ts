@@ -72,13 +72,62 @@ function formatTwitchError(text: string, status: number) {
 
 export type EnsureSubscriptionResult = {
   ok: boolean;
-  status: 'created' | 'exists' | 'error';
+  status: 'created' | 'exists' | 'partial' | 'error';
   message?: string;
   subscription_id?: string;
   callback?: string;
   reward_id?: string;
   hint?: string;
+  subscriptions?: Array<{ type: string; status: 'created' | 'exists' | 'error'; message?: string }>;
 };
+
+type ExistingSub = {
+  id?: string;
+  type?: string;
+  transport?: { callback?: string };
+  condition?: { reward_id?: string; broadcaster_user_id?: string };
+  status?: string;
+};
+
+async function ensureEventSubSubscription(
+  appToken: string,
+  clientId: string,
+  callback: string,
+  secret: string,
+  type: string,
+  version: string,
+  condition: Record<string, string>,
+  existingSubs: ExistingSub[],
+): Promise<{ type: string; status: 'created' | 'exists' | 'error'; message?: string; id?: string }> {
+  const match = existingSubs.find((s) =>
+    s.type === type
+    && s.transport?.callback === callback
+    && s.status === 'enabled'
+    && Object.entries(condition).every(([key, value]) => s.condition?.[key as keyof typeof s.condition] === value),
+  );
+
+  if (match?.id) {
+    return { type, status: 'exists', id: match.id };
+  }
+
+  const result = await twitchPost('/eventsub/subscriptions', appToken, clientId, {
+    type,
+    version,
+    condition,
+    transport: {
+      method: 'webhook',
+      callback,
+      secret,
+    },
+  });
+
+  if (result.ok || result.status === 409) {
+    const subId = (result.data as { data?: Array<{ id: string }> })?.data?.[0]?.id;
+    return { type, status: result.status === 409 ? 'exists' : 'created', id: subId };
+  }
+
+  return { type, status: 'error', message: formatTwitchError(result.text, result.status) };
+}
 
 export async function ensureShutElroyRedemptionSubscription(): Promise<EnsureSubscriptionResult> {
   const secret = getEventSubSecret();
@@ -139,68 +188,64 @@ export async function ensureShutElroyRedemptionSubscription(): Promise<EnsureSub
   const callback = getEventSubCallbackUrl();
   const rewardId = lookup.shut_elroy_powerup_id;
 
+  let existingSubs: ExistingSub[] = [];
   try {
     const existing = await twitchGet(
-      `/eventsub/subscriptions?type=channel.custom_power_up_redemption.add&user_id=${broadcasterId}`,
+      `/eventsub/subscriptions?user_id=${broadcasterId}`,
       appToken,
       appCreds.clientId,
     );
-    const subs = existing.data ?? [];
-    const match = subs.find((s: {
-      id?: string;
-      transport?: { callback?: string };
-      condition?: { reward_id?: string };
-      status?: string;
-    }) =>
-      s.transport?.callback === callback
-      && s.condition?.reward_id === rewardId
-      && s.status === 'enabled',
-    );
-    if (match?.id) {
-      return {
-        ok: true,
-        status: 'exists',
-        subscription_id: match.id,
-        callback,
-        reward_id: rewardId,
-      };
-    }
+    existingSubs = existing.data ?? [];
   } catch {
-    // Fall through and try to create.
+    // Continue and attempt to create subscriptions.
   }
 
-  const result = await twitchPost('/eventsub/subscriptions', appToken, appCreds.clientId, {
-    type: 'channel.custom_power_up_redemption.add',
-    version: 'beta',
-    condition: {
-      broadcaster_user_id: broadcasterId,
-      reward_id: rewardId,
-    },
-    transport: {
-      method: 'webhook',
+  const subscriptions = await Promise.all([
+    ensureEventSubSubscription(
+      appToken,
+      appCreds.clientId,
       callback,
       secret,
-    },
-  });
+      'channel.custom_power_up_redemption.add',
+      'beta',
+      { broadcaster_user_id: broadcasterId, reward_id: rewardId },
+      existingSubs,
+    ),
+    ensureEventSubSubscription(
+      appToken,
+      appCreds.clientId,
+      callback,
+      secret,
+      'channel.bits.use',
+      '1',
+      { broadcaster_user_id: broadcasterId },
+      existingSubs,
+    ),
+  ]);
 
-  if (result.ok) {
-    const subId = (result.data as { data?: Array<{ id: string }> })?.data?.[0]?.id;
+  const errors = subscriptions.filter((s) => s.status === 'error');
+  if (errors.length === subscriptions.length) {
     return {
-      ok: true,
-      status: 'created',
-      subscription_id: subId,
+      ok: false,
+      status: 'error',
+      message: errors[0]?.message || 'EventSub subscription failed.',
       callback,
       reward_id: rewardId,
+      subscriptions,
     };
   }
 
-  if (result.status === 409) {
-    return { ok: true, status: 'exists', callback, reward_id: rewardId };
-  }
+  const created = subscriptions.some((s) => s.status === 'created');
+  const allExist = subscriptions.every((s) => s.status === 'exists');
 
   return {
-    ok: false,
-    status: 'error',
-    message: formatTwitchError(result.text, result.status),
+    ok: true,
+    status: created ? 'created' : allExist ? 'exists' : 'partial',
+    callback,
+    reward_id: rewardId,
+    subscriptions,
+    message: errors.length
+      ? `Some subscriptions failed: ${errors.map((e) => `${e.type}: ${e.message}`).join('; ')}`
+      : undefined,
   };
 }

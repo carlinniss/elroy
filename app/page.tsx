@@ -74,7 +74,8 @@ function BongContent() {
   const powerupPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastRedemptionPollRef = useRef(Date.now());
   const processedRedemptionIdsRef = useRef<Set<string>>(new Set());
-  const POWERUP_POLL_MS = 5_000;
+  const powerupStorageWarnedRef = useRef(false);
+  const POWERUP_POLL_MS = 2_000;
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
@@ -190,8 +191,12 @@ function BongContent() {
     if (!cachedId) return;
 
     try {
-      const res = await fetch(`/api/twitch/powerup-redemptions?since=${lastRedemptionPollRef.current}`);
+      const res = await fetch(`/api/twitch/powerup-redemptions?since=${lastRedemptionPollRef.current}&_=${Date.now()}`);
       const data = await res.json();
+      if (data.storage === 'memory' && !powerupStorageWarnedRef.current) {
+        powerupStorageWarnedRef.current = true;
+        console.warn('Power-up redemptions using in-memory storage — add Vercel KV / Upstash Redis or redemptions may be missed.', data.warning);
+      }
       const redemptions = (data.redemptions ?? []) as Array<{
         id: string;
         userLogin: string;
@@ -215,7 +220,7 @@ function BongContent() {
 
   const startPowerupRedemptionPolling = useCallback(() => {
     if (powerupPollRef.current) return;
-    lastRedemptionPollRef.current = Date.now();
+    lastRedemptionPollRef.current = Date.now() - 120_000;
     void pollPowerupRedemptions();
     powerupPollRef.current = setInterval(() => {
       void pollPowerupRedemptions();
