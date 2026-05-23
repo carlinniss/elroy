@@ -919,6 +919,7 @@ function BongContent() {
     await client.connect();
     clientRef.current = client;
     setIsActive(true);
+    client.say(chan, `Elroy initiated. ${randomCannabisFact()}`);
     restoreStreamSession();
     const foundPowerUp = await resolveShutElroyPowerUpId();
     if (foundPowerUp) {
