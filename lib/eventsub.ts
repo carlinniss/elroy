@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import {
   fetchShutElroyPowerUpId,
+  getAppAccessToken,
+  getAppCredentials,
   getBroadcasterId,
   getBroadcasterTwitchCredentials,
   normalizeToken,
@@ -58,6 +60,16 @@ async function twitchPost(path: string, token: string, clientId: string, body: u
   return { ok: res.ok, status: res.status, data, text };
 }
 
+function formatTwitchError(text: string, status: number) {
+  try {
+    const parsed = JSON.parse(text) as { message?: string; error?: string };
+    if (parsed.message) return parsed.message;
+    if (parsed.error) return parsed.error;
+  } catch {
+  }
+  return text || `EventSub subscription failed (${status}).`;
+}
+
 export type EnsureSubscriptionResult = {
   ok: boolean;
   status: 'created' | 'exists' | 'error';
@@ -65,6 +77,7 @@ export type EnsureSubscriptionResult = {
   subscription_id?: string;
   callback?: string;
   reward_id?: string;
+  hint?: string;
 };
 
 export async function ensureShutElroyRedemptionSubscription(): Promise<EnsureSubscriptionResult> {
@@ -85,6 +98,32 @@ export async function ensureShutElroyRedemptionSubscription(): Promise<EnsureSub
     return { ok: false, status: 'error', message: 'Broadcaster token needs bits:read for power-up redemptions.' };
   }
 
+  const appCreds = getAppCredentials();
+  if (!appCreds) {
+    return {
+      ok: false,
+      status: 'error',
+      message: 'TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are required for EventSub webhooks.',
+    };
+  }
+
+  if (creds.clientId !== appCreds.clientId) {
+    return {
+      ok: false,
+      status: 'error',
+      message: `TWITCH_OAUTH_TOKEN is for a different Twitch app than TWITCH_CLIENT_ID. Regenerate dtldabs token for your app with bits:read.`,
+      hint: `Token client_id: ${creds.clientId}`,
+    };
+  }
+
+  let appToken: string;
+  try {
+    appToken = await getAppAccessToken(appCreds.clientId, appCreds.clientSecret);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'App access token failed';
+    return { ok: false, status: 'error', message };
+  }
+
   const lookup = await fetchShutElroyPowerUpId();
   if (!lookup.shut_elroy_powerup_id) {
     return { ok: false, status: 'error', message: lookup.error || 'Shut Elroy power-up not found.' };
@@ -101,8 +140,8 @@ export async function ensureShutElroyRedemptionSubscription(): Promise<EnsureSub
   try {
     const existing = await twitchGet(
       `/eventsub/subscriptions?type=channel.custom_power_up_redemption.add&user_id=${broadcasterId}`,
-      creds.token,
-      creds.clientId,
+      appToken,
+      appCreds.clientId,
     );
     const subs = existing.data ?? [];
     const match = subs.find((s: {
@@ -128,7 +167,7 @@ export async function ensureShutElroyRedemptionSubscription(): Promise<EnsureSub
     // Fall through and try to create.
   }
 
-  const result = await twitchPost('/eventsub/subscriptions', creds.token, creds.clientId, {
+  const result = await twitchPost('/eventsub/subscriptions', appToken, appCreds.clientId, {
     type: 'channel.custom_power_up_redemption.add',
     version: 'beta',
     condition: {
@@ -160,6 +199,6 @@ export async function ensureShutElroyRedemptionSubscription(): Promise<EnsureSub
   return {
     ok: false,
     status: 'error',
-    message: result.text || `EventSub subscription failed (${result.status}).`,
+    message: formatTwitchError(result.text, result.status),
   };
 }

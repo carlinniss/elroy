@@ -83,6 +83,13 @@ export async function getUserTwitchCredentials(): Promise<ValidatedUserCredentia
   );
 }
 
+export function getAppCredentials() {
+  const clientId = process.env.TWITCH_CLIENT_ID?.trim();
+  const clientSecret = process.env.TWITCH_CLIENT_SECRET?.trim();
+  if (!clientId || !clientSecret) return null;
+  return { clientId, clientSecret };
+}
+
 export async function getAppAccessToken(clientId: string, clientSecret: string) {
   if (appTokenCache && Date.now() < appTokenCache.expiresAt - 60_000) {
     return appTokenCache.token;
