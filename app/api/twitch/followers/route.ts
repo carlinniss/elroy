@@ -1,29 +1,30 @@
-import { getBroadcasterId, getBroadcasterLogin, getTwitchCredentials, normalizeToken, twitchGet } from '@/lib/twitch';
+import { getBroadcasterId, getBroadcasterLogin, getUserTwitchCredentials, twitchGet } from '@/lib/twitch';
 
 export async function GET() {
   try {
-    const creds = getTwitchCredentials();
+    const creds = await getUserTwitchCredentials();
     const broadcasterLogin = getBroadcasterLogin();
     if (!creds || !broadcasterLogin) {
       return Response.json(
-        { followers: [], error: 'Missing TWITCH_CLIENT_ID, channel, or OAuth token.' },
+        { followers: [], error: 'Missing channel login or OAuth token (TWITCH_OAUTH_TOKEN).' },
         { status: 503 },
       );
     }
 
-    const { token, clientId } = creds;
+    if (!creds.scopes.includes('moderator:read:followers')) {
+      return Response.json({
+        followers: [],
+        error: 'OAuth token is missing moderator:read:followers scope.',
+        token_login: creds.login,
+        hint: 'Use broadcaster token or mod bot token with moderator:read:followers.',
+      }, { status: 403 });
+    }
+
+    const { token, clientId, userId: moderatorId } = creds;
     const broadcasterId = await getBroadcasterId(broadcasterLogin, token, clientId);
     if (!broadcasterId) {
       return Response.json({ followers: [], error: 'Channel not found.' }, { status: 404 });
     }
-
-    const validate = await fetch('https://id.twitch.tv/oauth2/validate', {
-      headers: { Authorization: `OAuth ${normalizeToken(token)}` },
-    });
-    if (!validate.ok) {
-      return Response.json({ followers: [], error: 'Invalid OAuth token.' }, { status: 401 });
-    }
-    const { user_id: moderatorId } = await validate.json();
 
     const followersData = await twitchGet(
       `/channels/followers?broadcaster_id=${broadcasterId}&moderator_id=${moderatorId}&first=10`,
@@ -37,7 +38,7 @@ export async function GET() {
       followed_at: entry.followed_at,
     }));
 
-    return Response.json({ followers });
+    return Response.json({ followers, token_client_id: clientId });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Follower fetch failed';
     console.error('FOLLOWERS ERROR:', message);

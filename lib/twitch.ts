@@ -18,8 +18,51 @@ export function getTwitchCredentials() {
   const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL?.replace(/^#/, '').toLowerCase();
   const token = process.env.TWITCH_OAUTH_TOKEN || process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN;
   const clientId = process.env.TWITCH_CLIENT_ID;
-  if (!channel || !token || !clientId) return null;
-  return { channel, token, clientId };
+  if (!channel || !token) return null;
+  return { channel, token, clientId: clientId ?? '' };
+}
+
+export type ValidatedUserCredentials = {
+  channel: string;
+  token: string;
+  clientId: string;
+  userId: string;
+  login: string;
+  scopes: string[];
+};
+
+export async function validateOAuthToken(token: string) {
+  const res = await fetch('https://id.twitch.tv/oauth2/validate', {
+    headers: { Authorization: `OAuth ${normalizeToken(token)}` },
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const scopes = typeof data.scopes === 'string'
+    ? data.scopes.split(/[,\s]+/).filter(Boolean)
+    : Array.isArray(data.scopes) ? data.scopes : [];
+  return {
+    clientId: data.client_id as string,
+    userId: data.user_id as string,
+    login: data.login as string,
+    scopes,
+  };
+}
+
+/** User OAuth creds with Client ID taken from the token (fixes Client ID mismatch). */
+export async function getUserTwitchCredentials(): Promise<ValidatedUserCredentials | null> {
+  const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL?.replace(/^#/, '').toLowerCase();
+  const token = process.env.TWITCH_OAUTH_TOKEN || process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN;
+  if (!channel || !token) return null;
+  const validated = await validateOAuthToken(token);
+  if (!validated?.clientId) return null;
+  return {
+    channel,
+    token,
+    clientId: validated.clientId,
+    userId: validated.userId,
+    login: validated.login,
+    scopes: validated.scopes,
+  };
 }
 
 export async function getAppAccessToken(clientId: string, clientSecret: string) {
@@ -76,33 +119,20 @@ export type ShutElroyPowerUpLookup = {
 
 /** Resolve "shut elroy up" custom power-up ID from Twitch Helix (no env var). */
 export async function fetchShutElroyPowerUpId(): Promise<ShutElroyPowerUpLookup> {
-  const creds = getTwitchCredentials();
+  const creds = await getUserTwitchCredentials();
   const broadcasterLogin = getBroadcasterLogin();
   if (!creds || !broadcasterLogin) {
     return {
       shut_elroy_powerup_id: null,
       shut_elroy_title: null,
       powerups: [],
-      error: 'Missing TWITCH_CLIENT_ID, channel login, or OAuth token.',
+      error: 'Missing channel login or OAuth token.',
     };
   }
 
-  const { token, clientId } = creds;
+  const { token, clientId, userId: tokenUserId, scopes } = creds;
   try {
-    const validate = await fetch('https://id.twitch.tv/oauth2/validate', {
-      headers: { Authorization: `OAuth ${normalizeToken(token)}` },
-    });
-    if (!validate.ok) {
-      return {
-        shut_elroy_powerup_id: null,
-        shut_elroy_title: null,
-        powerups: [],
-        error: 'Invalid OAuth token.',
-      };
-    }
-    const { user_id: tokenUserId, scopes } = await validate.json();
-    const scopeList = typeof scopes === 'string' ? scopes.split(/[,\s]+/) : [];
-    if (!scopeList.includes('bits:read')) {
+    if (!scopes.includes('bits:read')) {
       return {
         shut_elroy_powerup_id: null,
         shut_elroy_title: null,
