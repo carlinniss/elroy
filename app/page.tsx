@@ -23,24 +23,27 @@ function BongContent() {
   const silencedUntilRef = useRef(0);
   const silenceModeRef = useRef<'none' | 'voice' | 'full'>('none');
   const muteCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastElroyResponseRef = useRef(0);
+  const lastElroyChatRef = useRef(0);
+  const lastElroyVoiceRef = useRef(0);
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const SHUT_UP_DURATION_MS = 8 * 60 * 1000;
   const POWERUP_MUTE_MS = 10 * 60 * 1000;
   const SHUT_ELROY_POWERUP_PATTERN = /shut\s+elroy\s+up(\s+for\s+10\s+minutes?)?/i;
-  const MENTION_COOLDOWN_MS = 90_000;
-  const GLOBAL_RESPONSE_COOLDOWN_MS = 90_000;
+  const MENTION_COOLDOWN_MS = 35_000;
+  const CHAT_COOLDOWN_MS = 35_000;
+  const VOICE_COOLDOWN_MS = 90_000;
+  const CELEBRATION_VOICE_COOLDOWN_MS = 25_000;
   const COMEBACK_COOLDOWN_MS = 5 * 60 * 1000;
-  const COMEBACK_CHANCE = 0.08;
+  const COMEBACK_CHANCE = 0.12;
   const CELEBRATION_COOLDOWN_MS = 25_000;
-  const FOLLOW_CELEBRATION_COOLDOWN_MS = 90_000;
+  const FOLLOW_CELEBRATION_COOLDOWN_MS = 60_000;
   const FOLLOWER_POLL_MS = 45_000;
-  const STREAM_CHECKIN_MS = 20 * 60 * 1000;
+  const STREAM_CHECKIN_MS = 15 * 60 * 1000;
   const STREAM_POLL_MS = 60_000;
-  const CHAT_ACTIVITY_MESSAGE_THRESHOLD = 180;
-  const CHAT_ACTIVITY_CHANCE = 0.3;
+  const CHAT_ACTIVITY_MESSAGE_THRESHOLD = 90;
+  const CHAT_ACTIVITY_CHANCE = 0.55;
   const SESSION_CHAT_MAX = 600;
   const SESSION_STORAGE_KEY = 'elroy-stream-session';
 
@@ -152,8 +155,13 @@ function BongContent() {
     );
   };
 
-  const canRespondToElroy = (cooldownMs: number) =>
-    Date.now() - lastElroyResponseRef.current >= cooldownMs;
+  const canRespondInChat = (cooldownMs = CHAT_COOLDOWN_MS) =>
+    Date.now() - lastElroyChatRef.current >= cooldownMs;
+
+  const canUseVoice = (priority: 'celebration' | 'normal' = 'normal') => {
+    const cooldown = priority === 'celebration' ? CELEBRATION_VOICE_COOLDOWN_MS : VOICE_COOLDOWN_MS;
+    return Date.now() - lastElroyVoiceRef.current >= cooldown;
+  };
 
   const stopMuteCountdown = useCallback(() => {
     if (muteCountdownRef.current) {
@@ -480,15 +488,19 @@ function BongContent() {
       forceVoice?: boolean;
       chatOnly?: boolean;
       skipGong?: boolean;
-      bypassGlobalCooldown?: boolean;
+      bypassChatCooldown?: boolean;
+      bypassVoiceCooldown?: boolean;
+      voicePriority?: 'celebration' | 'normal';
+      chatCooldownMs?: number;
     } = {},
   ) => {
     try {
       if (isFullyMuted() && !opts.isQuota) return;
+      const chatCooldown = opts.chatCooldownMs ?? CHAT_COOLDOWN_MS;
       if (
         !opts.isQuota
-        && !opts.bypassGlobalCooldown
-        && Date.now() - lastElroyResponseRef.current < GLOBAL_RESPONSE_COOLDOWN_MS
+        && !opts.bypassChatCooldown
+        && Date.now() - lastElroyChatRef.current < chatCooldown
       ) {
         return;
       }
@@ -498,38 +510,49 @@ function BongContent() {
         clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate}.`);
         return;
       }
+
+      const voiceSilenced = isSilenced() && silenceModeRef.current === 'voice';
+      const voicePriority = opts.voicePriority ?? (opts.forceVoice ? 'celebration' : 'normal');
+      const voiceAllowed = !voiceSilenced && (
+        opts.bypassVoiceCooldown || canUseVoice(voicePriority)
+      );
+      const willUseVoice = Boolean(
+        streamLiveRef.current
+        && !opts.chatOnly
+        && voiceAllowed
+        && (opts.forceVoice || voiceEnabledRef.current),
+      );
+
       const personalizationRule = user
         ? `- Personalize the response directly for ${user} by name (say their username naturally in the message).`
         : `- Keep it general for the whole chat, not aimed at one person.`;
-      const lengthRule = opts.chatOnly
-        ? '- Aim for roughly 120-280 characters for recaps; 80-160 for short goodbyes.'
-        : '- Keep it SHORT: one or two sentences, roughly 80-160 characters. Do not ramble.';
+      const lengthRule = willUseVoice
+        ? '- Keep it SHORT for voice: one or two sentences, roughly 80-160 characters.'
+        : '- Chat only (no voice): 1-3 sentences, up to ~220 characters. Be expressive — chat is free.';
       const fullPrompt = `${input}\n\nResponse requirements:\n${lengthRule}\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
       const res = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: fullPrompt }) });
       const data = await res.json();
       setLog(p => [{ text: data.text }, ...p].slice(0, 5));
       clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, user ? `@${user} ${data.text}` : data.text);
-      lastElroyResponseRef.current = Date.now();
+      lastElroyChatRef.current = Date.now();
 
-      const useVoice = streamLiveRef.current && !opts.chatOnly
-        && (opts.forceVoice || voiceEnabledRef.current);
-      const playGong = useVoice && gongEnabledRef.current && !opts.skipGong;
-
-      if (playGong) {
-        const rip = new Audio('/sounds/bong.mp3');
-        rip.volume = volumeRef.current;
-        await rip.play().catch(() => {});
-      }
-      const speechDelayMs = playGong ? 1600 : 0;
-      if (speechDelayMs > 0) {
-        await new Promise<void>((resolve) => setTimeout(resolve, speechDelayMs));
-      }
-      if (useVoice) {
+      if (willUseVoice) {
+        lastElroyVoiceRef.current = Date.now();
+        const playGong = gongEnabledRef.current && !opts.skipGong;
+        if (playGong) {
+          const rip = new Audio('/sounds/bong.mp3');
+          rip.volume = volumeRef.current;
+          await rip.play().catch(() => {});
+        }
+        const speechDelayMs = playGong ? 1600 : 0;
+        if (speechDelayMs > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, speechDelayMs));
+        }
         await speak(data.text);
       }
       runDiagnostics();
     } catch (e) { console.error(e); }
-  }, [runDiagnostics]);
+  }, [runDiagnostics, speak]);
 
   const queueBongLogic = useCallback((
     input: string,
@@ -539,7 +562,10 @@ function BongContent() {
       forceVoice?: boolean;
       chatOnly?: boolean;
       skipGong?: boolean;
-      bypassGlobalCooldown?: boolean;
+      bypassChatCooldown?: boolean;
+      bypassVoiceCooldown?: boolean;
+      voicePriority?: 'celebration' | 'normal';
+      chatCooldownMs?: number;
     } = {},
   ) => {
     responseQueueRef.current = responseQueueRef.current
@@ -562,12 +588,7 @@ function BongContent() {
 
   const celebrate = useCallback((kind: 'follow' | 'sub' | 'bits', username: string, extra = '') => {
     if (!streamLiveRef.current || isFullyMuted() || !canCelebrate(kind)) return;
-    if (
-      kind === 'follow'
-      && Date.now() - lastElroyResponseRef.current < GLOBAL_RESPONSE_COOLDOWN_MS
-    ) {
-      return;
-    }
+    if (kind === 'follow' && !canRespondInChat(FOLLOW_CELEBRATION_COOLDOWN_MS)) return;
     lastCelebrationRef.current = Date.now();
     const prompt =
       kind === 'follow' ? buildFollowPrompt(username)
@@ -575,7 +596,8 @@ function BongContent() {
       : buildBitsPrompt(username, extra);
     void queueBongLogic(prompt, username, {
       forceVoice: true,
-      bypassGlobalCooldown: kind !== 'follow',
+      bypassChatCooldown: kind !== 'follow',
+      voicePriority: kind === 'follow' ? 'normal' : 'celebration',
     });
   }, [buildBitsPrompt, buildFollowPrompt, buildSubPrompt, queueBongLogic]);
 
@@ -627,7 +649,8 @@ function BongContent() {
       sessionChatRef.current = [];
       void queueBongLogic(buildStreamGreetingPrompt(viewerCount, randomCannabisFact()), undefined, {
         forceVoice: true,
-        bypassGlobalCooldown: true,
+        bypassChatCooldown: true,
+        bypassVoiceCooldown: true,
       });
     }
     persistStreamSession();
@@ -639,12 +662,12 @@ function BongContent() {
       .then(() => processBongLogic(buildStreamGoodbyePrompt(), undefined, {
         chatOnly: true,
         skipGong: true,
-        bypassGlobalCooldown: true,
+        bypassChatCooldown: true,
       }))
       .then(() => processBongLogic(summaryPrompt, undefined, {
         chatOnly: true,
         skipGong: true,
-        bypassGlobalCooldown: true,
+        bypassChatCooldown: true,
       }))
       .then(() => { clearStreamSession(); })
       .catch((e) => { console.error(e); });
@@ -665,7 +688,7 @@ function BongContent() {
   const runStreamCheckin = useCallback(async () => {
     if (isSilenced() || !streamLiveRef.current) return;
     const { streamStatus, viewerCount } = await fetchStreamStatus();
-    void queueBongLogic(buildStreamCheckinPrompt(viewerCount, streamStatus));
+    void queueBongLogic(buildStreamCheckinPrompt(viewerCount, streamStatus), undefined, { chatOnly: true });
   }, [buildStreamCheckinPrompt, fetchStreamStatus, queueBongLogic]);
 
   const startStreamMonitoring = useCallback(() => {
@@ -697,22 +720,22 @@ function BongContent() {
   const handleElroyMention = useCallback((username: string, message: string) => {
     if (isFullyMuted()) return;
     if (isSilenced()) {
-      if (!streamLiveRef.current || !canRespondToElroy(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
-      void queueBongLogic(buildComebackPrompt(username, message), username, { forceVoice: true });
+      if (!streamLiveRef.current || !canRespondInChat(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
+      void queueBongLogic(buildComebackPrompt(username, message), username, { chatOnly: true });
       return;
     }
-    if (!canRespondToElroy(MENTION_COOLDOWN_MS)) return;
+    if (!canRespondInChat(MENTION_COOLDOWN_MS)) return;
     void queueBongLogic(buildMentionPrompt(username, message), username);
   }, [buildComebackPrompt, buildMentionPrompt, queueBongLogic]);
 
   const handleLRoyMisname = useCallback((username: string, message: string) => {
     if (isFullyMuted()) return;
     if (isSilenced()) {
-      if (!streamLiveRef.current || !canRespondToElroy(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
-      void queueBongLogic(buildLRoyRoastPrompt(username, message), username, { forceVoice: true });
+      if (!streamLiveRef.current || !canRespondInChat(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
+      void queueBongLogic(buildLRoyRoastPrompt(username, message), username, { chatOnly: true });
       return;
     }
-    if (!canRespondToElroy(MENTION_COOLDOWN_MS)) return;
+    if (!canRespondInChat(MENTION_COOLDOWN_MS)) return;
     void queueBongLogic(buildLRoyRoastPrompt(username, message), username);
   }, [buildLRoyRoastPrompt, queueBongLogic]);
 
@@ -801,7 +824,7 @@ function BongContent() {
               && Math.random() < CHAT_ACTIVITY_CHANCE
             ) {
               chatMessageCountRef.current = 0;
-              void queueBongLogic(buildChatAwarePrompt());
+              void queueBongLogic(buildChatAwarePrompt(), undefined, { chatOnly: true });
             }
           }
         }
