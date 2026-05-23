@@ -2,10 +2,10 @@ import crypto from 'crypto';
 import {
   fetchShutElroyPowerUpId,
   getAppAccessToken,
-  getAppCredentials,
   getBroadcasterId,
   getBroadcasterTwitchCredentials,
   normalizeToken,
+  resolveEventSubAppCredentials,
   twitchGet,
 } from '@/lib/twitch';
 
@@ -98,21 +98,23 @@ export async function ensureShutElroyRedemptionSubscription(): Promise<EnsureSub
     return { ok: false, status: 'error', message: 'Broadcaster token needs bits:read for power-up redemptions.' };
   }
 
-  const appCreds = getAppCredentials();
-  if (!appCreds) {
+  const appCredsResult = await resolveEventSubAppCredentials();
+  if ('error' in appCredsResult) {
     return {
       ok: false,
       status: 'error',
-      message: 'TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET are required for EventSub webhooks.',
+      message: appCredsResult.error,
+      hint: appCredsResult.hint,
     };
   }
+  const appCreds = appCredsResult;
 
   if (creds.clientId !== appCreds.clientId) {
     return {
       ok: false,
       status: 'error',
-      message: `TWITCH_OAUTH_TOKEN is for a different Twitch app than TWITCH_CLIENT_ID. Regenerate dtldabs token for your app with bits:read.`,
-      hint: `Token client_id: ${creds.clientId}`,
+      message: 'TWITCH_OAUTH_TOKEN is for a different Twitch app than TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET.',
+      hint: `Token app: ${creds.clientId}. Regenerate dtldabs token for your dev app with bits:read.`,
     };
   }
 

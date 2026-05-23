@@ -90,6 +90,35 @@ export function getAppCredentials() {
   return { clientId, clientSecret };
 }
 
+/** App creds for EventSub — client ID from env or broadcaster token; secret required. */
+export async function resolveEventSubAppCredentials(): Promise<
+  | { clientId: string; clientSecret: string }
+  | { error: string; hint?: string }
+> {
+  const clientSecret = process.env.TWITCH_CLIENT_SECRET?.trim();
+  if (!clientSecret) {
+    return {
+      error: 'TWITCH_CLIENT_SECRET is required for EventSub webhooks.',
+      hint: 'Twitch Developer Console → your app → Client Secret. TWITCH_CLIENT_ID is optional if TWITCH_OAUTH_TOKEN is from the same app.',
+    };
+  }
+
+  const envClientId = process.env.TWITCH_CLIENT_ID?.trim();
+  if (envClientId) {
+    return { clientId: envClientId, clientSecret };
+  }
+
+  const creds = await getBroadcasterTwitchCredentials();
+  if (creds?.clientId) {
+    return { clientId: creds.clientId, clientSecret };
+  }
+
+  return {
+    error: 'Set TWITCH_CLIENT_ID or TWITCH_OAUTH_TOKEN so we can identify your Twitch app.',
+    hint: 'Twitch Developer Console → your app → Client ID.',
+  };
+}
+
 export async function getAppAccessToken(clientId: string, clientSecret: string) {
   if (appTokenCache && Date.now() < appTokenCache.expiresAt - 60_000) {
     return appTokenCache.token;

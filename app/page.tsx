@@ -113,7 +113,7 @@ function BongContent() {
       if (data.ok) {
         console.info('EventSub power-up redemption listener:', data.status, data.callback);
       } else {
-        console.warn('EventSub power-up listener:', data.message || data.status);
+        console.warn('EventSub power-up listener:', data.message || data.status, data.hint || '');
       }
     } catch (e) {
       console.warn('EventSub subscription failed', e);
