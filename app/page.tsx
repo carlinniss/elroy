@@ -21,11 +21,15 @@ function BongContent() {
   const chatMessageCountRef = useRef(0);
   const isSpeakingRef = useRef(false);
   const silencedUntilRef = useRef(0);
+  const silenceModeRef = useRef<'none' | 'voice' | 'full'>('none');
+  const muteCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastElroyResponseRef = useRef(0);
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const SHUT_UP_DURATION_MS = 8 * 60 * 1000;
+  const POWERUP_MUTE_MS = 10 * 60 * 1000;
+  const SHUT_ELROY_POWERUP_PATTERN = /shut\s+elroy\s+up(\s+for\s+10\s+minutes?)?/i;
   const MENTION_COOLDOWN_MS = 45_000;
   const COMEBACK_COOLDOWN_MS = 3 * 60 * 1000;
   const COMEBACK_CHANCE = 0.22;
@@ -66,6 +70,7 @@ function BongContent() {
   const streamLiveRef = useRef(false);
   const sessionChatRef = useRef<Array<{ user: string; text: string; at: number }>>([]);
   const streamStartedAtRef = useRef<number | null>(null);
+  const shutElroyPowerUpIdRef = useRef<string | null>(null);
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
@@ -77,8 +82,88 @@ function BongContent() {
 
   const isSilenced = () => Date.now() < silencedUntilRef.current;
 
+  const isFullyMuted = () => isSilenced() && silenceModeRef.current === 'full';
+
+  const resolveShutElroyPowerUpId = useCallback(async () => {
+    try {
+      const res = await fetch('/api/twitch/powerups');
+      const data = await res.json();
+      const id = data.shut_elroy_powerup_id as string | null | undefined;
+      if (id) {
+        shutElroyPowerUpIdRef.current = id;
+        console.info('Shut Elroy power-up auto-detected:', id, data.shut_elroy_title);
+        return;
+      }
+      if (data.error) console.warn('Shut Elroy power-up lookup:', data.error);
+    } catch (e) {
+      console.warn('Shut Elroy power-up lookup failed', e);
+    }
+  }, []);
+
+  const isShutElroyPowerUpRedemption = (message: string, tags: tmi.ChatUserstate) => {
+    const tagRecord = tags as Record<string, string | undefined>;
+    const tagId =
+      tagRecord['custom-reward-id']
+      || tagRecord['power-up-id']
+      || tagRecord['msg-param-powerup-id'];
+    const cachedId = shutElroyPowerUpIdRef.current;
+    if (cachedId && tagId === cachedId) return true;
+
+    if (!SHUT_ELROY_POWERUP_PATTERN.test(message)) return false;
+
+    const lower = message.toLowerCase();
+    return Boolean(
+      tagId ||
+      tagRecord['msg-id'] === 'highlighted-message' ||
+      /\b(redeemed|used|activated)\b/.test(lower) ||
+      /\bpower[\s-]?up\b/.test(lower),
+    );
+  };
+
   const canRespondToElroy = (cooldownMs: number) =>
     Date.now() - lastElroyResponseRef.current >= cooldownMs;
+
+  const stopMuteCountdown = useCallback(() => {
+    if (muteCountdownRef.current) {
+      clearInterval(muteCountdownRef.current);
+      muteCountdownRef.current = null;
+    }
+  }, []);
+
+  const postMuteCountdown = useCallback(() => {
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    const msLeft = silencedUntilRef.current - Date.now();
+    if (msLeft <= 0) {
+      silencedUntilRef.current = 0;
+      silenceModeRef.current = 'none';
+      stopMuteCountdown();
+      clientRef.current?.say(channel, 'Elroy is back — you can talk to me again.');
+      return;
+    }
+    const minutesLeft = Math.ceil(msLeft / 60_000);
+    clientRef.current?.say(
+      channel,
+      `${minutesLeft} minute${minutesLeft === 1 ? '' : 's'} until Elroy can talk again.`,
+    );
+  }, [stopMuteCountdown]);
+
+  const enterFullMute = useCallback((redeemer?: string) => {
+    stopMuteCountdown();
+    silencedUntilRef.current = Date.now() + POWERUP_MUTE_MS;
+    silenceModeRef.current = 'full';
+    voiceEnabledRef.current = false;
+    setIsVoiceOn(false);
+
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    const opener = redeemer
+      ? `@${redeemer} shut Elroy up — no chat or voice for 10 minutes.`
+      : 'Shut Elroy Up power-up activated — no chat or voice for 10 minutes.';
+    clientRef.current?.say(channel, opener);
+    postMuteCountdown();
+    muteCountdownRef.current = setInterval(() => {
+      postMuteCountdown();
+    }, 60_000);
+  }, [postMuteCountdown, stopMuteCountdown]);
 
   const persistStreamSession = useCallback(() => {
     if (typeof window === 'undefined' || !streamStartedAtRef.current) return;
@@ -305,6 +390,7 @@ function BongContent() {
     opts: { isQuota?: boolean; forceVoice?: boolean; chatOnly?: boolean; skipGong?: boolean } = {},
   ) => {
     try {
+      if (isFullyMuted() && !opts.isQuota) return;
       if (opts.isQuota) {
         const res = await fetch('/api/quota');
         const d = await res.json();
@@ -357,6 +443,7 @@ function BongContent() {
 
   const enterSilence = useCallback(() => {
     silencedUntilRef.current = Date.now() + SHUT_UP_DURATION_MS;
+    silenceModeRef.current = 'voice';
     voiceEnabledRef.current = false;
     setIsVoiceOn(false);
   }, []);
@@ -364,7 +451,7 @@ function BongContent() {
   const canCelebrate = () => Date.now() - lastCelebrationRef.current >= CELEBRATION_COOLDOWN_MS;
 
   const celebrate = useCallback((kind: 'follow' | 'sub' | 'bits', username: string, extra = '') => {
-    if (!streamLiveRef.current || !canCelebrate()) return;
+    if (!streamLiveRef.current || isFullyMuted() || !canCelebrate()) return;
     lastCelebrationRef.current = Date.now();
     const prompt =
       kind === 'follow' ? buildFollowPrompt(username)
@@ -480,6 +567,7 @@ function BongContent() {
   }, []);
 
   const handleElroyMention = useCallback((username: string, message: string) => {
+    if (isFullyMuted()) return;
     if (isSilenced()) {
       if (!streamLiveRef.current || !canRespondToElroy(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
       void queueBongLogic(buildComebackPrompt(username, message), username, { forceVoice: true });
@@ -529,8 +617,9 @@ function BongContent() {
     }
     stopFollowerPolling();
     stopStreamMonitoring();
+    stopMuteCountdown();
     setIsActive(false);
-  }, [stopFollowerPolling, stopStreamMonitoring]);
+  }, [stopFollowerPolling, stopStreamMonitoring, stopMuteCountdown]);
 
   const startBot = async () => {
     if (isActive) return;
@@ -543,6 +632,11 @@ function BongContent() {
       const username = t.username || 'viewer';
       const normalizedUser = username.toLowerCase();
       const isBroadcaster = normalizedUser === normalizedChannel;
+
+      if (isShutElroyPowerUpRedemption(m, t)) {
+        enterFullMute(username);
+        return;
+      }
 
       const isWizebot = normalizedUser === 'wizebot';
       const isBotAccount = normalizedUser === normalizedChannel;
@@ -558,7 +652,7 @@ function BongContent() {
 
           if (mentionsElroy(m)) {
             handleElroyMention(username, m);
-          } else if (streamLiveRef.current && !isSilenced() && !isBroadcaster) {
+          } else if (streamLiveRef.current && !isFullyMuted() && !isSilenced() && !isBroadcaster) {
             chatMessageCountRef.current += 1;
             if (chatMessageCountRef.current >= 60) {
               chatMessageCountRef.current = 0;
@@ -567,7 +661,10 @@ function BongContent() {
           }
         }
       }
-      if (m.toLowerCase() === '!quota') return queueBongLogic('', t.username, { isQuota: true });
+      if (m.toLowerCase() === '!quota') {
+        if (isFullyMuted()) return;
+        return queueBongLogic('', t.username, { isQuota: true });
+      }
       if (m.toLowerCase() === '!gong') {
         const isModerator = t.mod === true;
         if (isBroadcaster || isModerator) {
@@ -613,6 +710,16 @@ function BongContent() {
       }
     });
 
+    (client as tmi.Client & { on(event: 'redeem', listener: (...args: unknown[]) => void): void }).on(
+      'redeem',
+      (_channel, username, rewardType) => {
+        const cachedId = shutElroyPowerUpIdRef.current;
+        if (cachedId && rewardType === cachedId && typeof username === 'string') {
+          enterFullMute(username);
+        }
+      },
+    );
+
     client.on('subscription', (_channel: string, username: string, _method: unknown, message: string) => {
       const detail = message?.trim() ? `They said: "${message.trim()}"` : 'Brand new sub!';
       celebrate('sub', username, detail);
@@ -645,6 +752,7 @@ function BongContent() {
     clientRef.current = client;
     setIsActive(true);
     restoreStreamSession();
+    void resolveShutElroyPowerUpId();
     startFollowerPolling();
     startStreamMonitoring();
   };

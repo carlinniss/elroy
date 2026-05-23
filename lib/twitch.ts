@@ -6,6 +6,8 @@ export function normalizeToken(token: string) {
   return token.replace(/^oauth:/i, '');
 }
 
+export const SHUT_ELROY_POWERUP_TITLE = /shut\s+elroy\s+up/i;
+
 /** Stream/broadcaster lookups — use streamer's login, not the bot account. */
 export function getBroadcasterLogin() {
   const login = process.env.TWITCH_BROADCASTER_LOGIN || process.env.NEXT_PUBLIC_TWITCH_CHANNEL;
@@ -63,6 +65,95 @@ export async function twitchGet(path: string, token: string, clientId: string) {
 export async function getBroadcasterId(channel: string, token: string, clientId: string) {
   const users = await twitchGet(`/users?login=${encodeURIComponent(channel)}`, token, clientId);
   return users.data?.[0]?.id as string | undefined;
+}
+
+export type ShutElroyPowerUpLookup = {
+  shut_elroy_powerup_id: string | null;
+  shut_elroy_title: string | null;
+  powerups: Array<{ id: string; title: string; bits: number }>;
+  error?: string;
+};
+
+/** Resolve "shut elroy up" custom power-up ID from Twitch Helix (no env var). */
+export async function fetchShutElroyPowerUpId(): Promise<ShutElroyPowerUpLookup> {
+  const creds = getTwitchCredentials();
+  const broadcasterLogin = getBroadcasterLogin();
+  if (!creds || !broadcasterLogin) {
+    return {
+      shut_elroy_powerup_id: null,
+      shut_elroy_title: null,
+      powerups: [],
+      error: 'Missing TWITCH_CLIENT_ID, channel login, or OAuth token.',
+    };
+  }
+
+  const { token, clientId } = creds;
+  try {
+    const validate = await fetch('https://id.twitch.tv/oauth2/validate', {
+      headers: { Authorization: `OAuth ${normalizeToken(token)}` },
+    });
+    if (!validate.ok) {
+      return {
+        shut_elroy_powerup_id: null,
+        shut_elroy_title: null,
+        powerups: [],
+        error: 'Invalid OAuth token.',
+      };
+    }
+    const { user_id: tokenUserId, scopes } = await validate.json();
+    const scopeList = typeof scopes === 'string' ? scopes.split(/[,\s]+/) : [];
+    if (!scopeList.includes('bits:read')) {
+      return {
+        shut_elroy_powerup_id: null,
+        shut_elroy_title: null,
+        powerups: [],
+        error: 'OAuth token needs bits:read scope (broadcaster account).',
+      };
+    }
+
+    const broadcasterId = await getBroadcasterId(broadcasterLogin, token, clientId);
+    if (!broadcasterId) {
+      return {
+        shut_elroy_powerup_id: null,
+        shut_elroy_title: null,
+        powerups: [],
+        error: `Channel not found: ${broadcasterLogin}`,
+      };
+    }
+
+    if (tokenUserId !== broadcasterId) {
+      return {
+        shut_elroy_powerup_id: null,
+        shut_elroy_title: null,
+        powerups: [],
+        error: 'OAuth token must be the broadcaster account for power-up lookup.',
+      };
+    }
+
+    const helix = await twitchGet(`/bits/custom_power_ups?broadcaster_id=${broadcasterId}`, token, clientId);
+    const powerups = (helix.data ?? []).map((entry: { id: string; title: string; bits: number }) => ({
+      id: entry.id,
+      title: entry.title,
+      bits: entry.bits,
+    }));
+    const match = powerups.find((p: { id: string; title: string }) =>
+      SHUT_ELROY_POWERUP_TITLE.test(p.title),
+    );
+
+    return {
+      shut_elroy_powerup_id: match?.id ?? null,
+      shut_elroy_title: match?.title ?? null,
+      powerups,
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Power-up fetch failed';
+    return {
+      shut_elroy_powerup_id: null,
+      shut_elroy_title: null,
+      powerups: [],
+      error: message,
+    };
+  }
 }
 
 export type StreamStatusResult = {
