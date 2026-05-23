@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import tmi from 'tmi.js';
+import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
 
 function BongContent() {
   const [isActive, setIsActive] = useState(false);
@@ -83,6 +84,14 @@ function BongContent() {
   const processedRedemptionIdsRef = useRef<Set<string>>(new Set());
   const powerupStorageWarnedRef = useRef(false);
   const POWERUP_POLL_MS = 2_000;
+  const QUOTA_POLL_MS = 2 * 60_000;
+  const voiceCooldownMsRef = useRef(VOICE_COOLDOWN_MS);
+  const celebrationVoiceCooldownMsRef = useRef(CELEBRATION_VOICE_COOLDOWN_MS);
+  const quotaVoiceAllowedRef = useRef(true);
+  const celebrationsVoiceOnlyRef = useRef(false);
+  const elevenLabsRemainingRef = useRef<number | null>(null);
+  const lastQuotaTierRef = useRef<string | null>(null);
+  const quotaPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
@@ -159,9 +168,63 @@ function BongContent() {
     Date.now() - lastElroyChatRef.current >= cooldownMs;
 
   const canUseVoice = (priority: 'celebration' | 'normal' = 'normal') => {
-    const cooldown = priority === 'celebration' ? CELEBRATION_VOICE_COOLDOWN_MS : VOICE_COOLDOWN_MS;
+    if (!quotaVoiceAllowedRef.current) return false;
+    const cooldown = priority === 'celebration'
+      ? celebrationVoiceCooldownMsRef.current
+      : voiceCooldownMsRef.current;
+    if (!Number.isFinite(cooldown)) return false;
     return Date.now() - lastElroyVoiceRef.current >= cooldown;
   };
+
+  const applyVoiceQuotaTier = useCallback((remaining: number) => {
+    const tier = voiceQuotaTierFromRemaining(remaining);
+    voiceCooldownMsRef.current = tier.voiceCooldownMs;
+    celebrationVoiceCooldownMsRef.current = tier.celebrationVoiceCooldownMs;
+    quotaVoiceAllowedRef.current = tier.voiceAllowed;
+    celebrationsVoiceOnlyRef.current = tier.celebrationsVoiceOnly;
+    elevenLabsRemainingRef.current = remaining;
+
+    setDiagnostics((prev) => ({
+      ...prev,
+      quota: describeVoiceQuotaTier(tier, remaining),
+    }));
+
+    if (lastQuotaTierRef.current !== tier.tier) {
+      console.info(
+        'ElevenLabs voice tier:',
+        tier.tier,
+        '—',
+        describeVoiceQuotaTier(tier, remaining),
+      );
+      lastQuotaTierRef.current = tier.tier;
+    }
+  }, []);
+
+  const pollElevenLabsQuota = useCallback(async () => {
+    try {
+      const res = await fetch('/api/quota');
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error('Quota lookup failed');
+      applyVoiceQuotaTier(Number(data.remaining) || 0);
+    } catch (e) {
+      console.warn('ElevenLabs quota poll failed', e);
+    }
+  }, [applyVoiceQuotaTier]);
+
+  const startQuotaPolling = useCallback(() => {
+    if (quotaPollRef.current) return;
+    void pollElevenLabsQuota();
+    quotaPollRef.current = setInterval(() => {
+      void pollElevenLabsQuota();
+    }, QUOTA_POLL_MS);
+  }, [pollElevenLabsQuota]);
+
+  const stopQuotaPolling = useCallback(() => {
+    if (quotaPollRef.current) {
+      clearInterval(quotaPollRef.current);
+      quotaPollRef.current = null;
+    }
+  }, []);
 
   const stopMuteCountdown = useCallback(() => {
     if (muteCountdownRef.current) {
@@ -351,14 +414,18 @@ function BongContent() {
       const quotaRes = await fetch('/api/quota');
       const qData = await quotaRes.json();
 
-      setDiagnostics({
-        chat: chat.status === 200 ? "✅" : "❌",
-        speech: speech.status === 200 ? "✅" : "❌",
-        sound: sound.ok ? "✅" : "❌",
-        quota: `${qData.remaining.toLocaleString()} left`
-      });
+      if (quotaRes.ok && !qData.error) {
+        applyVoiceQuotaTier(Number(qData.remaining) || 0);
+      }
+
+      setDiagnostics((prev) => ({
+        chat: chat.status === 200 ? '✅' : '❌',
+        speech: speech.status === 200 ? '✅' : '❌',
+        sound: sound.ok ? '✅' : '❌',
+        quota: prev.quota !== '...' ? prev.quota : `${Number(qData.remaining || 0).toLocaleString()} left`,
+      }));
     } catch (e) { console.error(e); }
-  }, []);
+  }, [applyVoiceQuotaTier]);
 
   useEffect(() => { runDiagnostics(); }, [runDiagnostics]);
   useEffect(() => { gongEnabledRef.current = isGongOn; }, [isGongOn]);
@@ -513,7 +580,9 @@ function BongContent() {
 
       const voiceSilenced = isSilenced() && silenceModeRef.current === 'voice';
       const voicePriority = opts.voicePriority ?? (opts.forceVoice ? 'celebration' : 'normal');
-      const voiceAllowed = !voiceSilenced && (
+      const quotaAllowsVoice = quotaVoiceAllowedRef.current
+        && (!celebrationsVoiceOnlyRef.current || opts.forceVoice);
+      const voiceAllowed = quotaAllowsVoice && !voiceSilenced && (
         opts.bypassVoiceCooldown || canUseVoice(voicePriority)
       );
       const willUseVoice = Boolean(
@@ -550,9 +619,8 @@ function BongContent() {
         }
         await speak(data.text);
       }
-      runDiagnostics();
     } catch (e) { console.error(e); }
-  }, [runDiagnostics, speak]);
+  }, [speak]);
 
   const queueBongLogic = useCallback((
     input: string,
@@ -779,10 +847,11 @@ function BongContent() {
     }
     stopFollowerPolling();
     stopPowerupRedemptionPolling();
+    stopQuotaPolling();
     stopStreamMonitoring();
     stopMuteCountdown();
     setIsActive(false);
-  }, [stopFollowerPolling, stopPowerupRedemptionPolling, stopStreamMonitoring, stopMuteCountdown]);
+  }, [stopFollowerPolling, stopPowerupRedemptionPolling, stopQuotaPolling, stopStreamMonitoring, stopMuteCountdown]);
 
   const startBot = async () => {
     if (isActive) return;
@@ -927,6 +996,7 @@ function BongContent() {
       startPowerupRedemptionPolling();
     }
     startFollowerPolling();
+    startQuotaPolling();
     startStreamMonitoring();
   };
 
