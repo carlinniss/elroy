@@ -1,12 +1,15 @@
-import { getBroadcasterId, getBroadcasterLogin, getUserTwitchCredentials, twitchGet } from '@/lib/twitch';
+import { getBroadcasterId, getBroadcasterLogin, getBroadcasterTwitchCredentials, getUserTwitchCredentials, twitchGet } from '@/lib/twitch';
 
 export async function GET() {
   try {
-    const creds = await getUserTwitchCredentials();
+    const creds = await getBroadcasterTwitchCredentials() ?? await getUserTwitchCredentials();
     const broadcasterLogin = getBroadcasterLogin();
     if (!creds || !broadcasterLogin) {
       return Response.json(
-        { followers: [], error: 'Missing channel login or OAuth token (TWITCH_OAUTH_TOKEN).' },
+        {
+          followers: [],
+          error: 'Set TWITCH_OAUTH_TOKEN (broadcaster/mod) or NEXT_PUBLIC_TWITCH_OAUTH_TOKEN with channel login.',
+        },
         { status: 503 },
       );
     }
@@ -14,9 +17,13 @@ export async function GET() {
     if (!creds.scopes.includes('moderator:read:followers')) {
       return Response.json({
         followers: [],
-        error: 'OAuth token is missing moderator:read:followers scope.',
+        error: 'Token is missing moderator:read:followers scope.',
         token_login: creds.login,
-        hint: 'Use broadcaster token or mod bot token with moderator:read:followers.',
+        token_source: creds.tokenSource,
+        scopes: creds.scopes,
+        hint: creds.tokenSource === 'TWITCH_OAUTH_TOKEN'
+          ? 'Regenerate TWITCH_OAUTH_TOKEN with moderator:read:followers.'
+          : 'Use TWITCH_OAUTH_TOKEN (broadcaster or mod bot) with moderator:read:followers.',
       }, { status: 403 });
     }
 

@@ -29,6 +29,7 @@ export type ValidatedUserCredentials = {
   userId: string;
   login: string;
   scopes: string[];
+  tokenSource: 'TWITCH_OAUTH_TOKEN' | 'NEXT_PUBLIC_TWITCH_OAUTH_TOKEN';
 };
 
 export async function validateOAuthToken(token: string) {
@@ -48,11 +49,12 @@ export async function validateOAuthToken(token: string) {
   };
 }
 
-/** User OAuth creds with Client ID taken from the token (fixes Client ID mismatch). */
-export async function getUserTwitchCredentials(): Promise<ValidatedUserCredentials | null> {
+async function validateChannelToken(
+  token: string | undefined,
+  tokenSource: ValidatedUserCredentials['tokenSource'],
+): Promise<ValidatedUserCredentials | null> {
   const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL?.replace(/^#/, '').toLowerCase();
-  const token = process.env.TWITCH_OAUTH_TOKEN || process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN;
-  if (!channel || !token) return null;
+  if (!channel || !token?.trim()) return null;
   const validated = await validateOAuthToken(token);
   if (!validated?.clientId) return null;
   return {
@@ -62,7 +64,23 @@ export async function getUserTwitchCredentials(): Promise<ValidatedUserCredentia
     userId: validated.userId,
     login: validated.login,
     scopes: validated.scopes,
+    tokenSource,
   };
+}
+
+/** Broadcaster/server token only — never the public bot token. */
+export async function getBroadcasterTwitchCredentials() {
+  return validateChannelToken(process.env.TWITCH_OAUTH_TOKEN, 'TWITCH_OAUTH_TOKEN');
+}
+
+/** User OAuth creds with Client ID taken from the token (fixes Client ID mismatch). */
+export async function getUserTwitchCredentials(): Promise<ValidatedUserCredentials | null> {
+  const broadcaster = await getBroadcasterTwitchCredentials();
+  if (broadcaster) return broadcaster;
+  return validateChannelToken(
+    process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN,
+    'NEXT_PUBLIC_TWITCH_OAUTH_TOKEN',
+  );
 }
 
 export async function getAppAccessToken(clientId: string, clientSecret: string) {
@@ -115,49 +133,58 @@ export type ShutElroyPowerUpLookup = {
   shut_elroy_title: string | null;
   powerups: Array<{ id: string; title: string; bits: number }>;
   error?: string;
+  hint?: string;
+  token_login?: string;
+  token_source?: string;
+  scopes?: string[];
 };
 
 /** Resolve "shut elroy up" custom power-up ID from Twitch Helix (no env var). */
 export async function fetchShutElroyPowerUpId(): Promise<ShutElroyPowerUpLookup> {
-  const creds = await getUserTwitchCredentials();
+  const creds = await getBroadcasterTwitchCredentials();
   const broadcasterLogin = getBroadcasterLogin();
-  if (!creds || !broadcasterLogin) {
-    return {
-      shut_elroy_powerup_id: null,
-      shut_elroy_title: null,
-      powerups: [],
-      error: 'Missing channel login or OAuth token.',
-    };
+  const debug = (extra: Partial<ShutElroyPowerUpLookup> = {}) => ({
+    shut_elroy_powerup_id: null as string | null,
+    shut_elroy_title: null as string | null,
+    powerups: [] as ShutElroyPowerUpLookup['powerups'],
+    ...extra,
+  });
+
+  if (!broadcasterLogin) {
+    return debug({ error: 'Missing NEXT_PUBLIC_TWITCH_CHANNEL or TWITCH_BROADCASTER_LOGIN.' });
   }
 
-  const { token, clientId, userId: tokenUserId, scopes } = creds;
+  if (!creds) {
+    return debug({
+      error: 'TWITCH_OAUTH_TOKEN is not set on the server. Add your broadcaster token to Vercel (not the bot token).',
+      hint: 'Vercel → Settings → Environment Variables → TWITCH_OAUTH_TOKEN = oauth:... from dtldabs with bits:read',
+    });
+  }
+
+  const { token, clientId, userId: tokenUserId, scopes, login, tokenSource } = creds;
   try {
     if (!scopes.includes('bits:read')) {
-      return {
-        shut_elroy_powerup_id: null,
-        shut_elroy_title: null,
-        powerups: [],
-        error: 'OAuth token needs bits:read scope (broadcaster account).',
-      };
+      return debug({
+        error: 'Broadcaster token (TWITCH_OAUTH_TOKEN) needs bits:read scope.',
+        token_login: login,
+        token_source: tokenSource,
+        scopes,
+        hint: 'Regenerate token logged in as dtldabs with bits:read at https://twitchtokengenerator.com/',
+      });
     }
 
     const broadcasterId = await getBroadcasterId(broadcasterLogin, token, clientId);
     if (!broadcasterId) {
-      return {
-        shut_elroy_powerup_id: null,
-        shut_elroy_title: null,
-        powerups: [],
-        error: `Channel not found: ${broadcasterLogin}`,
-      };
+      return debug({ error: `Channel not found: ${broadcasterLogin}`, token_login: login, token_source: tokenSource });
     }
 
     if (tokenUserId !== broadcasterId) {
-      return {
-        shut_elroy_powerup_id: null,
-        shut_elroy_title: null,
-        powerups: [],
-        error: 'OAuth token must be the broadcaster account for power-up lookup.',
-      };
+      return debug({
+        error: `TWITCH_OAUTH_TOKEN must be dtldabs (got ${login}).`,
+        token_login: login,
+        token_source: tokenSource,
+        scopes,
+      });
     }
 
     const helix = await twitchGet(`/bits/custom_power_ups?broadcaster_id=${broadcasterId}`, token, clientId);
