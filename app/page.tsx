@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import tmi from 'tmi.js';
 import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
 import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
+import { matchesTriviaAnswer, pickRandomCannabisTrivia } from '@/lib/cannabis-trivia';
 
 function BongContent() {
   const [isActive, setIsActive] = useState(false);
@@ -44,6 +45,9 @@ function BongContent() {
   const FOLLOWER_POLL_MS = 45_000;
   const STREAM_CHECKIN_MS = 15 * 60 * 1000;
   const STREAM_POLL_MS = 60_000;
+  const TRIVIA_INTERVAL_MS = 20 * 60 * 1000;
+  const TRIVIA_ANSWER_WINDOW_MS = 5 * 60 * 1000;
+  const TRIVIA_CHECK_MS = 60_000;
   const CHAT_ACTIVITY_MESSAGE_THRESHOLD = 90;
   const CHAT_ACTIVITY_CHANCE = 0.55;
   const SESSION_CHAT_MAX = 600;
@@ -76,7 +80,17 @@ function BongContent() {
   const followerPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamCheckinRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const triviaPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamLiveRef = useRef(false);
+  const lastTriviaAtRef = useRef(0);
+  const recentTriviaIdsRef = useRef<string[]>([]);
+  const activeTriviaRef = useRef<{
+    question: string;
+    answers: string[];
+    displayAnswer: string;
+    askedAt: number;
+    answered: boolean;
+  } | null>(null);
   const sessionChatRef = useRef<Array<{ user: string; text: string; at: number }>>([]);
   const streamStartedAtRef = useRef<number | null>(null);
   const shutElroyPowerUpIdRef = useRef<string | null>(null);
@@ -773,6 +787,8 @@ function BongContent() {
     if (!resumed) {
       streamStartedAtRef.current = Date.now();
       sessionChatRef.current = [];
+      lastTriviaAtRef.current = Date.now();
+      activeTriviaRef.current = null;
       void playElroySfx('go_live');
       void queueBongLogic(buildStreamGreetingPrompt(viewerCount, randomCannabisFact()), undefined, {
         forceVoice: true,
@@ -812,6 +828,86 @@ function BongContent() {
     }
   }, [fetchStreamStatus, onStreamEnded, onStreamStarted]);
 
+  const expireTriviaIfNeeded = useCallback(() => {
+    const active = activeTriviaRef.current;
+    if (!active || active.answered) return;
+    if (Date.now() - active.askedAt < TRIVIA_ANSWER_WINDOW_MS) return;
+
+    activeTriviaRef.current = null;
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    clientRef.current?.say(
+      channel,
+      `⏰ Trivia time's up! Nobody got it — the answer was ${active.displayAnswer}.`,
+    );
+  }, []);
+
+  const askCannabisTrivia = useCallback(() => {
+    if (isFullyMuted() || !streamLiveRef.current) return;
+    if (activeTriviaRef.current && !activeTriviaRef.current.answered) return;
+
+    const picked = pickRandomCannabisTrivia(recentTriviaIdsRef.current);
+    if (!picked) return;
+
+    recentTriviaIdsRef.current = [...recentTriviaIdsRef.current, picked.id].slice(-8);
+    activeTriviaRef.current = {
+      question: picked.question,
+      answers: picked.answers,
+      displayAnswer: picked.displayAnswer,
+      askedAt: Date.now(),
+      answered: false,
+    };
+    lastTriviaAtRef.current = Date.now();
+
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    clientRef.current?.say(
+      channel,
+      `🌿 Cannabis trivia! ${picked.question} — first correct answer wins!`,
+    );
+  }, []);
+
+  const runTriviaCycle = useCallback(() => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+    expireTriviaIfNeeded();
+    if (Date.now() - lastTriviaAtRef.current >= TRIVIA_INTERVAL_MS) {
+      askCannabisTrivia();
+    }
+  }, [askCannabisTrivia, expireTriviaIfNeeded]);
+
+  const awardTriviaWinner = useCallback((username: string) => {
+    const active = activeTriviaRef.current;
+    if (!active || active.answered) return;
+
+    active.answered = true;
+    lastTriviaAtRef.current = Date.now();
+
+    void playElroySfx('sub_fanfare');
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    clientRef.current?.say(
+      channel,
+      `🎉 @${username} got it FIRST! Correct — ${active.displayAnswer}.`,
+    );
+    void queueBongLogic(
+      `${username} just won cannabis trivia with the first correct answer. Hype them up in one short OG sentence — make them feel legendary.`,
+      username,
+      {
+        forceVoice: true,
+        bypassChatCooldown: true,
+        voicePriority: 'celebration',
+      },
+    );
+  }, [playElroySfx, queueBongLogic]);
+
+  const tryHandleTriviaAnswer = useCallback((username: string, message: string) => {
+    if (isFullyMuted()) return false;
+    const active = activeTriviaRef.current;
+    if (!active || active.answered) return false;
+    if (Date.now() - active.askedAt > TRIVIA_ANSWER_WINDOW_MS) return false;
+    if (!matchesTriviaAnswer(message, active.answers)) return false;
+
+    awardTriviaWinner(username);
+    return true;
+  }, [awardTriviaWinner]);
+
   const runStreamCheckin = useCallback(async () => {
     if (isSilenced() || !streamLiveRef.current) return;
     const { streamStatus, viewerCount } = await fetchStreamStatus();
@@ -830,7 +926,12 @@ function BongContent() {
         void runStreamCheckin();
       }, STREAM_CHECKIN_MS);
     }
-  }, [pollStreamLive, runStreamCheckin]);
+    if (!triviaPollRef.current) {
+      triviaPollRef.current = setInterval(() => {
+        runTriviaCycle();
+      }, TRIVIA_CHECK_MS);
+    }
+  }, [pollStreamLive, runStreamCheckin, runTriviaCycle]);
 
   const stopStreamMonitoring = useCallback(() => {
     if (streamPollRef.current) {
@@ -841,6 +942,11 @@ function BongContent() {
       clearInterval(streamCheckinRef.current);
       streamCheckinRef.current = null;
     }
+    if (triviaPollRef.current) {
+      clearInterval(triviaPollRef.current);
+      triviaPollRef.current = null;
+    }
+    activeTriviaRef.current = null;
     streamLiveRef.current = false;
   }, []);
 
@@ -934,6 +1040,11 @@ function BongContent() {
       const isBotAccount = normalizedUser === normalizedChannel;
 
       if (!m.startsWith('!')) {
+        if (!isBotAccount && !isWizebot && tryHandleTriviaAnswer(username, m)) {
+          rememberChatLine(username, m);
+          return;
+        }
+
         rememberChatLine(username, m);
 
         if (!isBotAccount && !isWizebot) {
