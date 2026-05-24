@@ -92,6 +92,7 @@ function BongContent() {
   const elevenLabsRemainingRef = useRef<number | null>(null);
   const lastQuotaTierRef = useRef<string | null>(null);
   const quotaPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sfxUrlCacheRef = useRef<Map<string, string>>(new Map());
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
@@ -226,6 +227,48 @@ function BongContent() {
     }
   }, []);
 
+  const playElroySfx = useCallback(async (id: string, volume = volumeRef.current) => {
+    try {
+      let url = sfxUrlCacheRef.current.get(id);
+      if (!url) {
+        const res = await fetch(`/api/sfx/${id}`);
+        if (!res.ok) return false;
+        url = URL.createObjectURL(await res.blob());
+        sfxUrlCacheRef.current.set(id, url);
+      }
+      const audio = new Audio(url);
+      audio.volume = volume;
+      await new Promise<void>((resolve) => {
+        audio.onended = () => resolve();
+        audio.onerror = () => resolve();
+        audio.play().catch(() => resolve());
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const playBongRip = useCallback(async (volume = volumeRef.current) => {
+    if (gongEnabledRef.current && await playElroySfx('bong_rip', volume)) return;
+    if (!gongEnabledRef.current) return;
+    const rip = new Audio('/sounds/bong.mp3');
+    rip.volume = volume;
+    await rip.play().catch(() => {});
+  }, [playElroySfx]);
+
+  const warmupElroySfx = useCallback(() => {
+    for (const id of ['bong_rip', 'sub_fanfare', 'bits_kaching', 'follow_ding', 'go_live', 'mute_zip', 'roast_sting']) {
+      void fetch(`/api/sfx/${id}`)
+        .then(async (res) => {
+          if (!res.ok) return;
+          const url = URL.createObjectURL(await res.blob());
+          sfxUrlCacheRef.current.set(id, url);
+        })
+        .catch(() => {});
+    }
+  }, []);
+
   const stopMuteCountdown = useCallback(() => {
     if (muteCountdownRef.current) {
       clearInterval(muteCountdownRef.current);
@@ -262,11 +305,12 @@ function BongContent() {
       ? `@${redeemer} shut Elroy up — no chat or voice for 10 minutes.`
       : 'Shut Elroy Up power-up activated — no chat or voice for 10 minutes.';
     clientRef.current?.say(channel, opener);
+    void playElroySfx('mute_zip');
     postMuteCountdown();
     muteCountdownRef.current = setInterval(() => {
       postMuteCountdown();
     }, 60_000);
-  }, [postMuteCountdown, stopMuteCountdown]);
+  }, [postMuteCountdown, stopMuteCountdown, playElroySfx]);
 
   const pollPowerupRedemptions = useCallback(async () => {
     const cachedId = shutElroyPowerUpIdRef.current;
@@ -609,9 +653,7 @@ function BongContent() {
         lastElroyVoiceRef.current = Date.now();
         const playGong = gongEnabledRef.current && !opts.skipGong;
         if (playGong) {
-          const rip = new Audio('/sounds/bong.mp3');
-          rip.volume = volumeRef.current;
-          await rip.play().catch(() => {});
+          await playBongRip(volumeRef.current);
         }
         const speechDelayMs = playGong ? 1600 : 0;
         if (speechDelayMs > 0) {
@@ -620,7 +662,7 @@ function BongContent() {
         await speak(data.text);
       }
     } catch (e) { console.error(e); }
-  }, [speak]);
+  }, [playBongRip, speak]);
 
   const queueBongLogic = useCallback((
     input: string,
@@ -658,6 +700,8 @@ function BongContent() {
     if (!streamLiveRef.current || isFullyMuted() || !canCelebrate(kind)) return;
     if (kind === 'follow' && !canRespondInChat(FOLLOW_CELEBRATION_COOLDOWN_MS)) return;
     lastCelebrationRef.current = Date.now();
+    const sfxId = kind === 'sub' ? 'sub_fanfare' : kind === 'bits' ? 'bits_kaching' : 'follow_ding';
+    void playElroySfx(sfxId);
     const prompt =
       kind === 'follow' ? buildFollowPrompt(username)
       : kind === 'sub' ? buildSubPrompt(username, extra)
@@ -667,7 +711,7 @@ function BongContent() {
       bypassChatCooldown: kind !== 'follow',
       voicePriority: kind === 'follow' ? 'normal' : 'celebration',
     });
-  }, [buildBitsPrompt, buildFollowPrompt, buildSubPrompt, queueBongLogic]);
+  }, [buildBitsPrompt, buildFollowPrompt, buildSubPrompt, playElroySfx, queueBongLogic]);
 
   const pollNewFollowers = useCallback(async () => {
     try {
@@ -715,6 +759,7 @@ function BongContent() {
     if (!resumed) {
       streamStartedAtRef.current = Date.now();
       sessionChatRef.current = [];
+      void playElroySfx('go_live');
       void queueBongLogic(buildStreamGreetingPrompt(viewerCount, randomCannabisFact()), undefined, {
         forceVoice: true,
         bypassChatCooldown: true,
@@ -722,7 +767,7 @@ function BongContent() {
       });
     }
     persistStreamSession();
-  }, [buildStreamGreetingPrompt, persistStreamSession, queueBongLogic]);
+  }, [buildStreamGreetingPrompt, persistStreamSession, playElroySfx, queueBongLogic]);
 
   const onStreamEnded = useCallback(() => {
     const summaryPrompt = buildStreamSummaryPrompt();
@@ -804,8 +849,9 @@ function BongContent() {
       return;
     }
     if (!canRespondInChat(MENTION_COOLDOWN_MS)) return;
+    void playElroySfx('roast_sting');
     void queueBongLogic(buildLRoyRoastPrompt(username, message), username);
-  }, [buildLRoyRoastPrompt, queueBongLogic]);
+  }, [buildLRoyRoastPrompt, playElroySfx, queueBongLogic]);
 
   const toggleGong = useCallback((user?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
@@ -997,6 +1043,7 @@ function BongContent() {
     }
     startFollowerPolling();
     startQuotaPolling();
+    warmupElroySfx();
     startStreamMonitoring();
   };
 
