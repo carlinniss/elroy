@@ -70,6 +70,7 @@ function BongContent() {
   const COMEBACK_CHANCE = 0.12;
   const CELEBRATION_COOLDOWN_MS = 25_000;
   const FOLLOW_CELEBRATION_COOLDOWN_MS = 60_000;
+  const JOIN_GREET_COOLDOWN_MS = 45_000;
   const FOLLOWER_POLL_MS = 45_000;
   const STREAM_CHECKIN_MS = 15 * 60 * 1000;
   const STREAM_POLL_MS = 60_000;
@@ -112,6 +113,7 @@ function BongContent() {
 
   const lastCelebrationRef = useRef(0);
   const knownFollowerIdsRef = useRef<Set<string>>(new Set());
+  const greetedThisSessionRef = useRef<Set<string>>(new Set());
   const followersInitializedRef = useRef(false);
   const followerPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamCheckinRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -704,6 +706,9 @@ function BongContent() {
   const buildFollowPrompt = useCallback((user: string) =>
     `${user} just followed the Twitch channel. Welcome them with a warm, hype OG hello — make them feel seen and glad they joined the community.`, []);
 
+  const buildJoinGreetingPrompt = useCallback((user: string) =>
+    `${user} just entered the Twitch chat while the stream is live. Give a quick, warm welcome by username — one or two sentences. Make them feel noticed without being cheesy or over the top.`, []);
+
   const buildSubPrompt = useCallback((user: string, details: string) =>
     `${user} just subscribed to the channel! ${details} Celebrate them in your OG style — genuine gratitude, stream hype, make them feel legendary.`, []);
 
@@ -947,6 +952,30 @@ function BongContent() {
     return Date.now() - lastCelebrationRef.current >= cooldown;
   };
 
+  const shouldSkipJoinGreet = useCallback((normalizedUser: string, normalizedChannel: string) => {
+    if (!normalizedUser) return true;
+    if (normalizedUser === normalizedChannel) return true;
+    const skipBots = new Set([
+      'wizebot', 'nightbot', 'streamelements', 'moobot', 'streamlabs',
+      'soundalerts', 'fossabot', 'botrix', 'coebot', 'stay_hydrated_bot',
+    ]);
+    if (skipBots.has(normalizedUser)) return true;
+    return false;
+  }, []);
+
+  const tryGreetChatter = useCallback((username: string, normalizedUser: string, normalizedChannel: string) => {
+    if (!streamLiveRef.current || isFullyMuted() || isSilenced()) return;
+    if (shouldSkipJoinGreet(normalizedUser, normalizedChannel)) return;
+    if (greetedThisSessionRef.current.has(normalizedUser)) return;
+    if (!canRespondInChat(JOIN_GREET_COOLDOWN_MS)) return;
+
+    greetedThisSessionRef.current.add(normalizedUser);
+    void queueBongLogic(buildJoinGreetingPrompt(username), username, {
+      chatOnly: true,
+      chatCooldownMs: JOIN_GREET_COOLDOWN_MS,
+    });
+  }, [buildJoinGreetingPrompt, queueBongLogic, shouldSkipJoinGreet]);
+
   const celebrate = useCallback((kind: 'follow' | 'sub' | 'bits', username: string, extra = '', bitsAmount?: number) => {
     if (!streamLiveRef.current || isFullyMuted() || !canCelebrate(kind)) return;
     if (kind === 'follow' && !canRespondInChat(FOLLOW_CELEBRATION_COOLDOWN_MS)) return;
@@ -1013,6 +1042,7 @@ function BongContent() {
     if (!resumed) {
       streamStartedAtRef.current = Date.now();
       sessionChatRef.current = [];
+      greetedThisSessionRef.current.clear();
       lastTriviaAtRef.current = Date.now() - (TRIVIA_INTERVAL_MS - TRIVIA_FIRST_DELAY_MS);
       activeTriviaRef.current = null;
       recentTriviaHistoryRef.current = [];
@@ -1602,6 +1632,10 @@ function BongContent() {
       const isBotAccount = normalizedUser === normalizedChannel;
 
       if (!m.startsWith('!')) {
+        if (!isBotAccount && !isWizebot && streamLiveRef.current) {
+          tryGreetChatter(username, normalizedUser, normalizedChannel);
+        }
+
         if (!isBotAccount && !isWizebot && tryHandleTriviaAnswer(username, m)) {
           rememberChatLine(username, m);
           return;
@@ -1751,6 +1785,11 @@ function BongContent() {
         ? `${bits} bits with message: "${message.trim()}"`
         : `${bits} bits`;
       celebrate('bits', username, detail, bits);
+    });
+
+    client.on('join', (_channel: string, username: string, self: boolean) => {
+      if (self) return;
+      tryGreetChatter(username, username.toLowerCase(), normalizedChannel);
     });
 
     try {
