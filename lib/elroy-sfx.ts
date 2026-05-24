@@ -52,8 +52,8 @@ export const ELROY_SFX_CATALOG: Record<string, ElroySfxDefinition> = {
   },
   cough: {
     id: 'cough',
-    prompt: 'Bundled short chest cough after speaking',
-    duration_seconds: 1.4,
+    prompt: 'Bundled slight man cough after speaking (SFX)',
+    duration_seconds: 0.55,
     bundled: true,
   },
 };
