@@ -90,6 +90,7 @@ function BongContent() {
     displayAnswer: string;
     askedAt: number;
     answered: boolean;
+    lastCountdownMinute: number;
   } | null>(null);
   const sessionChatRef = useRef<Array<{ user: string; text: string; at: number }>>([]);
   const streamStartedAtRef = useRef<number | null>(null);
@@ -841,6 +842,27 @@ function BongContent() {
     );
   }, []);
 
+  const announceTriviaCountdown = useCallback(() => {
+    const active = activeTriviaRef.current;
+    if (!active || active.answered) return;
+
+    const elapsedMs = Date.now() - active.askedAt;
+    if (elapsedMs >= TRIVIA_ANSWER_WINDOW_MS) return;
+
+    const minuteBucket = Math.floor(elapsedMs / 60_000);
+    if (minuteBucket <= 0 || minuteBucket >= TRIVIA_ANSWER_WINDOW_MS / 60_000) return;
+    if (active.lastCountdownMinute >= minuteBucket) return;
+
+    active.lastCountdownMinute = minuteBucket;
+    const remainingMs = TRIVIA_ANSWER_WINDOW_MS - elapsedMs;
+    const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    clientRef.current?.say(
+      channel,
+      `⏳ ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} left to answer trivia!`,
+    );
+  }, []);
+
   const askCannabisTrivia = useCallback(() => {
     if (isFullyMuted() || !streamLiveRef.current) return;
     if (activeTriviaRef.current && !activeTriviaRef.current.answered) return;
@@ -855,6 +877,7 @@ function BongContent() {
       displayAnswer: picked.displayAnswer,
       askedAt: Date.now(),
       answered: false,
+      lastCountdownMinute: 0,
     };
     lastTriviaAtRef.current = Date.now();
 
@@ -867,11 +890,12 @@ function BongContent() {
 
   const runTriviaCycle = useCallback(() => {
     if (!streamLiveRef.current || isFullyMuted()) return;
+    announceTriviaCountdown();
     expireTriviaIfNeeded();
     if (Date.now() - lastTriviaAtRef.current >= TRIVIA_INTERVAL_MS) {
       askCannabisTrivia();
     }
-  }, [askCannabisTrivia, expireTriviaIfNeeded]);
+  }, [announceTriviaCountdown, askCannabisTrivia, expireTriviaIfNeeded]);
 
   const awardTriviaWinner = useCallback((username: string) => {
     const active = activeTriviaRef.current;
