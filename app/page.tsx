@@ -5,8 +5,8 @@ import { useSearchParams } from 'next/navigation';
 import tmi from 'tmi.js';
 import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
 import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
-import { matchesTriviaAnswer, pickRandomElroyTrivia, triviaIntroFor } from '@/lib/cannabis-trivia';
-import { buildTriviaLeaderRoastPrompt, type TriviaCategory } from '@/lib/trivia-scores';
+import { matchesTriviaAnswer, triviaIntroFor, type ElroyTriviaQuestion, type TriviaCategory } from '@/lib/cannabis-trivia';
+import { buildTriviaLeaderRoastPrompt } from '@/lib/trivia-scores';
 
 function BongContent() {
   const [isActive, setIsActive] = useState(false);
@@ -85,6 +85,7 @@ function BongContent() {
   const streamLiveRef = useRef(false);
   const lastTriviaAtRef = useRef(0);
   const recentTriviaIdsRef = useRef<string[]>([]);
+  const recentTriviaQuestionsRef = useRef<string[]>([]);
   const activeTriviaRef = useRef<{
     category: TriviaCategory;
     question: string;
@@ -792,6 +793,7 @@ function BongContent() {
       sessionChatRef.current = [];
       lastTriviaAtRef.current = Date.now();
       activeTriviaRef.current = null;
+      recentTriviaQuestionsRef.current = [];
       void playElroySfx('go_live');
       void queueBongLogic(buildStreamGreetingPrompt(viewerCount, randomCannabisFact()), undefined, {
         forceVoice: true,
@@ -869,7 +871,28 @@ function BongContent() {
     if (isFullyMuted() || !streamLiveRef.current) return;
     if (activeTriviaRef.current && !activeTriviaRef.current.answered) return;
 
-    const picked = pickRandomElroyTrivia(recentTriviaIdsRef.current);
+    const category: TriviaCategory = Math.random() < 0.5 ? 'cannabis' : 'freaky';
+    let picked: ElroyTriviaQuestion | null = null;
+
+    try {
+      const generateRes = await fetch('/api/trivia/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category,
+          recentQuestions: recentTriviaQuestionsRef.current,
+        }),
+      });
+      if (generateRes.ok) {
+        const data = await generateRes.json();
+        if (data.question?.question && Array.isArray(data.question.answers)) {
+          picked = data.question as ElroyTriviaQuestion;
+        }
+      }
+    } catch (error) {
+      console.warn('Gemini trivia generation failed', error);
+    }
+
     if (!picked) return;
 
     try {
@@ -889,7 +912,8 @@ function BongContent() {
       console.warn('Trivia leader shoutout failed', error);
     }
 
-    recentTriviaIdsRef.current = [...recentTriviaIdsRef.current, picked.id].slice(-8);
+    recentTriviaIdsRef.current = [...recentTriviaIdsRef.current, picked.id].slice(-12);
+    recentTriviaQuestionsRef.current = [...recentTriviaQuestionsRef.current, picked.question].slice(-20);
     activeTriviaRef.current = {
       category: picked.category,
       question: picked.question,

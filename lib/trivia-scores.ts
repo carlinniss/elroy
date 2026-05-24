@@ -1,6 +1,6 @@
 import { hasRedisStorage, redisCommand, redisPipeline } from '@/lib/redis-rest';
 
-export type TriviaCategory = 'cannabis' | 'freaky';
+import type { TriviaCategory } from '@/lib/cannabis-trivia';
 
 export type TriviaLeader = {
   username: string;

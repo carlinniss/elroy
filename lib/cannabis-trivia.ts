@@ -1,6 +1,8 @@
+export type TriviaCategory = 'cannabis' | 'freaky';
+
 export type ElroyTriviaQuestion = {
   id: string;
-  category: 'cannabis' | 'freaky';
+  category: TriviaCategory;
   question: string;
   /** Acceptable normalized answers (see normalizeTriviaAnswer). */
   answers: string[];
@@ -308,10 +310,19 @@ export function matchesTriviaAnswer(message: string, acceptable: string[]): bool
   return false;
 }
 
-export function pickRandomElroyTrivia(recentIds: string[]): ElroyTriviaQuestion | null {
+export function pickRandomElroyTrivia(
+  recentIds: string[],
+  category?: TriviaCategory,
+): ElroyTriviaQuestion | null {
   const recent = new Set(recentIds);
-  const pool = ELROY_TRIVIA.filter((item) => !recent.has(item.id));
-  const choices = pool.length > 0 ? pool : ELROY_TRIVIA;
+  let pool = ELROY_TRIVIA.filter((item) => !recent.has(item.id));
+  if (category) {
+    const categoryPool = pool.filter((item) => item.category === category);
+    if (categoryPool.length > 0) pool = categoryPool;
+  }
+  const choices = pool.length > 0 ? pool : (category
+    ? ELROY_TRIVIA.filter((item) => item.category === category)
+    : ELROY_TRIVIA);
   if (!choices.length) return null;
   return choices[Math.floor(Math.random() * choices.length)];
 }

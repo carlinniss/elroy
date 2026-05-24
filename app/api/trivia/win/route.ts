@@ -1,4 +1,5 @@
-import { incrementTriviaWin, type TriviaCategory } from '@/lib/trivia-scores';
+import type { TriviaCategory } from '@/lib/cannabis-trivia';
+import { incrementTriviaWin } from '@/lib/trivia-scores';
 
 export const dynamic = 'force-dynamic';
 
