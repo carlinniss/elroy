@@ -3,7 +3,7 @@ import path from 'path';
 import { hasRedisStorage, redisCommand } from '@/lib/redis-rest';
 
 const SFX_DIR = path.join(process.cwd(), 'public', 'sounds', 'elroy');
-const redisKey = (id: string) => `elroy:sfx:${id}`;
+const redisKey = (id: string) => `elroy:sfx:v2:${id}`;
 
 export type SfxCacheSource = 'file' | 'redis' | 'generated';
 

@@ -14,9 +14,10 @@ export const ELROY_SFX_CATALOG: Record<string, ElroySfxDefinition> = {
   },
   sub_fanfare: {
     id: 'sub_fanfare',
-    prompt: 'Short triumphant subscriber celebration fanfare, hype stream alert, 2 seconds',
-    duration_seconds: 2,
-    prompt_influence: 0.7,
+    prompt:
+      'Old Mexican car horn honking the melody of La Cucaracha, vintage rusty automobile horn, festive celebratory sub alert, 3 seconds',
+    duration_seconds: 3,
+    prompt_influence: 0.8,
   },
   bits_kaching: {
     id: 'bits_kaching',
