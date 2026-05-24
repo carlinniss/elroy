@@ -69,7 +69,7 @@ Ensure your file structure is exact for Next.js routing:
 
 * Mention **Elroy** in chat: get a chat reply (voice too, when enabled and quota allows).
 * `!quota`: Show remaining ElevenLabs character quota.
-* `!ding`: Toggle bong rip sound before voice (broadcaster/mod only).
+* `!ding` (alias: `!gong`): Toggle bong rip sound before voice (broadcaster/mod only).
 * `!voiceoff`: Disable voice playback but keep chat replies on (broadcaster/mod only).
 * `!voiceon`: Re-enable voice playback (broadcaster/mod only).
 * `!voicestatus`: Report whether voice playback is currently on or off (broadcaster/mod only).
@@ -88,6 +88,19 @@ Elroy plays these sounds automatically during stream events. Most are generated 
 | `go_live` | Dramatic go-live whoosh | Stream goes live |
 | `mute_zip` | Comedy zipper | "Shut Elroy Up" power-up redeemed |
 | `roast_sting` | Rimshot sting | Someone calls him "L Roy" |
+| `cough` | Short chest cough (bundled MP3) | After every voice line |
+
+Elroy polls ElevenLabs character quota every **2 minutes** and adjusts voice frequency automatically. More credits = more voice:
+
+| Characters left | Voice behavior |
+| --- | --- |
+| 50,000+ | Full — voice about every 90s |
+| 15,000–49,999 | Comfortable — about every 2 min |
+| 5,000–14,999 | Moderate — about every 3 min |
+| 1,000–4,999 | Low — subs/bits celebrations only |
+| Under 1,000 | Voice off until credits added |
+
+Type `!quota` in chat to see the current count. After you add credits, give it up to 2 minutes (or refresh the overlay) for the tier to update.
 
 **Fallback:** If `bong_rip` is unavailable, Elroy falls back to `public/sounds/bong.mp3` when ding is enabled.
 

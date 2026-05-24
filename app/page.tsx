@@ -265,7 +265,7 @@ function BongContent() {
   }, [playElroySfx]);
 
   const warmupElroySfx = useCallback(() => {
-    for (const id of ['bong_rip', 'sub_fanfare', 'bits_kaching', 'follow_ding', 'go_live', 'mute_zip', 'roast_sting']) {
+    for (const id of ['bong_rip', 'sub_fanfare', 'bits_kaching', 'follow_ding', 'go_live', 'mute_zip', 'roast_sting', 'cough']) {
       const playbackUrl = getElroySfxPlaybackUrl(id);
       if (!playbackUrl) continue;
       if (playbackUrl.startsWith('/sounds/')) {
@@ -519,9 +519,10 @@ function BongContent() {
   const speak = useCallback((text: string) => {
     speechQueueRef.current = speechQueueRef.current
       .then(() => speakNow(text))
+      .then(() => { void playElroySfx('cough'); })
       .catch((e) => { console.error(e); });
     return speechQueueRef.current;
-  }, []);
+  }, [playElroySfx]);
 
   const buildMentionPrompt = useCallback((user: string, message: string) => {
     const recent = recentChatRef.current.slice(0, 6);
@@ -961,7 +962,7 @@ function BongContent() {
         if (isFullyMuted()) return;
         return queueBongLogic('', t.username, { isQuota: true });
       }
-      if (m.toLowerCase() === '!ding') {
+      if (m.toLowerCase() === '!ding' || m.toLowerCase() === '!gong') {
         const isModerator = t.mod === true;
         if (isBroadcaster || isModerator) {
           return toggleDing(t.username);

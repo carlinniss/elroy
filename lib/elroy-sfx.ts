@@ -50,6 +50,12 @@ export const ELROY_SFX_CATALOG: Record<string, ElroySfxDefinition> = {
     duration_seconds: 1.5,
     prompt_influence: 0.7,
   },
+  cough: {
+    id: 'cough',
+    prompt: 'Bundled short chest cough after speaking',
+    duration_seconds: 1.4,
+    bundled: true,
+  },
 };
 
 export function getElroySfx(id: string): ElroySfxDefinition | null {
