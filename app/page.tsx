@@ -53,7 +53,8 @@ function BongContent() {
   const FOLLOWER_POLL_MS = 45_000;
   const STREAM_CHECKIN_MS = 15 * 60 * 1000;
   const STREAM_POLL_MS = 60_000;
-  const TRIVIA_INTERVAL_MS = 20 * 60 * 1000;
+  const TRIVIA_INTERVAL_MS = 10 * 60 * 1000;
+  const TRIVIA_FIRST_DELAY_MS = 5 * 60 * 1000;
   const TRIVIA_ANSWER_WINDOW_MS = 5 * 60 * 1000;
   const TRIVIA_CHECK_MS = 60_000;
   const CHAT_ACTIVITY_MESSAGE_THRESHOLD = 90;
@@ -403,7 +404,6 @@ function BongContent() {
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
         startedAt: streamStartedAtRef.current,
         messages: sessionChatRef.current,
-        recentTriviaHistory: recentTriviaHistoryRef.current,
       }));
     } catch (e) {
       console.warn('Session save failed', e);
@@ -427,22 +427,10 @@ function BongContent() {
       const parsed = JSON.parse(raw) as {
         startedAt?: number;
         messages?: Array<{ user: string; text: string; at: number }>;
-        recentTriviaHistory?: Array<{ category: TriviaCategory; question: string; id: string }>;
-        recentTriviaQuestions?: string[];
-        recentTriviaIds?: string[];
       };
       if (parsed.startedAt && Array.isArray(parsed.messages)) {
         streamStartedAtRef.current = parsed.startedAt;
         sessionChatRef.current = parsed.messages.slice(0, SESSION_CHAT_MAX);
-      }
-      if (Array.isArray(parsed.recentTriviaHistory)) {
-        recentTriviaHistoryRef.current = parsed.recentTriviaHistory.slice(-24);
-      } else if (Array.isArray(parsed.recentTriviaQuestions) && Array.isArray(parsed.recentTriviaIds)) {
-        recentTriviaHistoryRef.current = parsed.recentTriviaQuestions.slice(-20).map((question, index) => ({
-          category: 'cannabis' as TriviaCategory,
-          question,
-          id: parsed.recentTriviaIds?.[index] ?? `legacy-${index}`,
-        }));
       }
     } catch (e) {
       console.warn('Session restore failed', e);
@@ -501,7 +489,7 @@ function BongContent() {
       return "No one is chatting yet. Drop a longer, welcoming OG check-in and invite chat to ask a question.";
     }
     const lines = recent.map((entry) => `- ${entry.user}: ${entry.text}`).join("\n");
-    return `Use the recent Twitch chat to make ONE short topical comment (1-2 sentences). Reference the vibe from these messages:\n${lines}\nDo not force a rhyme.`;
+    return `Use the recent Twitch chat to make a topical comment with some depth (3-4 sentences). Reference the vibe from these messages:\n${lines}\nDo not force a rhyme.`;
   }, []);
 
   const runDiagnostics = useCallback(async () => {
@@ -570,7 +558,7 @@ function BongContent() {
     const context = recent.length
       ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
       : '(no other recent lines)';
-    return `Someone brought you up in Twitch chat. ${user} said: "${message}"\n\nRecent chat:\n${context}\n\nRespond in character — one or two short sentences max for stream chat.`;
+    return `Someone brought you up in Twitch chat. ${user} said: "${message}"\n\nRecent chat:\n${context}\n\nRespond in character with your full OG energy.`;
   }, []);
 
   const buildLRoyRoastPrompt = useCallback((user: string, message: string) => {
@@ -578,7 +566,7 @@ function BongContent() {
     const context = recent.length
       ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
       : '(no other recent lines)';
-    return `${user} called you "L Roy" in Twitch chat (wrong name — you are ELROY, not L Roy): "${message}"\n\nRecent chat:\n${context}\n\nRoast ${user} by username for the misname. One or two short sentences — funny, crusty, playful not cruel.`;
+    return `${user} called you "L Roy" in Twitch chat (wrong name — you are ELROY, not L Roy): "${message}"\n\nRecent chat:\n${context}\n\nRoast ${user} by username for the misname — funny, crusty, playful not cruel.`;
   }, []);
 
   const buildFollowPrompt = useCallback((user: string) =>
@@ -614,7 +602,7 @@ function BongContent() {
       viewerLine = 'Viewer count could not be verified. Do not say the stream or chat is offline — keep the energy up anyway.';
     }
 
-    return `10-minute stream check-in.\n${viewerLine}\n\nRecent chat (last ~20 minutes):\n${lines}\n\nOne short check-in (2-3 sentences max):\n- Mention viewer count only if provided above.\n- Shout out ONE interesting chatter by username if the list has good material.\n- Only name chatters from the list above.`;
+    return `10-minute stream check-in.\n${viewerLine}\n\nRecent chat (last ~20 minutes):\n${lines}\n\nWrite a chat check-in with some meat on it (3-4 sentences):\n- Mention viewer count only if provided above.\n- Shout out ONE interesting chatter by username if the list has good material.\n- Only name chatters from the list above.`;
   }, []);
 
   const buildStreamGreetingPrompt = useCallback((viewerCount: number | null, cannabisFact: string) => {
@@ -623,7 +611,8 @@ function BongContent() {
   }, []);
 
   const buildStreamGoodbyePrompt = useCallback(() =>
-    'The Twitch stream just ended. Give a short, sincere goodbye to chat — thank everyone for hanging out. Chat-only, no voice. One message.', []);
+    'The Twitch stream just ended. Give a warm, sincere goodbye to chat — thank everyone for hanging out. Chat-only, no voice. Take your time with it.',
+  []);
 
   const buildStreamSummaryPrompt = useCallback(() => {
     const messages = sampleSessionChat(120);
@@ -643,7 +632,7 @@ function BongContent() {
     const context = recent.length
       ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
       : '(no other recent lines)';
-    return `You were trying to stay quiet, but chat kept talking about you. ${user} said: "${message}"\n\nRecent chat:\n${context}\n\nSnap back with one funny, crusty call-out — you're annoyed they couldn't let you chill. Roast ${user} by name; keep it playful, not cruel.`;
+    return `You were trying to stay quiet, but chat kept talking about you. ${user} said: "${message}"\n\nRecent chat:\n${context}\n\nSnap back with a funny, crusty call-out — you're annoyed they couldn't let you chill. Roast ${user} by name; keep it playful, not cruel.`;
   }, []);
 
   const processBongLogic = useCallback(async (
@@ -696,7 +685,11 @@ function BongContent() {
         : `- Keep it general for the whole chat, not aimed at one person.`;
       const lengthRule = willUseVoice
         ? '- Keep it SHORT for voice: one or two sentences, roughly 80-160 characters.'
-        : '- Chat only (no voice): 1-3 sentences, up to ~220 characters. Be expressive — chat is free.';
+        : `- Chat only (no voice): write 3-5 sentences, roughly 350-480 characters.
+- No voice means chat carries the whole performance — be noticeably more verbose, descriptive, and colorful than voice lines.
+- Add extra OG personality: a setup line, the main take, and a closing quip or call-out when it fits.
+- Stay under 480 characters (Twitch chat limit).
+- If the task above asks for something short, ignore that — expand for chat-only.`;
       const fullPrompt = `${input}\n\nResponse requirements:\n${lengthRule}\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
       const res = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: fullPrompt }) });
       const data = await res.json();
@@ -814,7 +807,7 @@ function BongContent() {
     if (!resumed) {
       streamStartedAtRef.current = Date.now();
       sessionChatRef.current = [];
-      lastTriviaAtRef.current = Date.now();
+      lastTriviaAtRef.current = Date.now() - (TRIVIA_INTERVAL_MS - TRIVIA_FIRST_DELAY_MS);
       activeTriviaRef.current = null;
       recentTriviaHistoryRef.current = [];
       void playElroySfx('go_live');
@@ -1390,6 +1383,11 @@ function BongContent() {
       startQuotaPolling();
       warmupElroySfx();
       startStreamMonitoring();
+      void pollStreamLive().then(() => {
+        if (streamLiveRef.current) {
+          lastTriviaAtRef.current = Date.now() - TRIVIA_INTERVAL_MS;
+        }
+      });
     } catch (error) {
       console.error('Elroy failed to connect', error);
       await releaseBotSessionLock();

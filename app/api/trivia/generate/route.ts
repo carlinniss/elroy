@@ -11,7 +11,7 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-const GENERATION_ATTEMPTS = 6;
+const GENERATION_ATTEMPTS = 8;
 
 function shuffle<T>(items: T[]): T[] {
   const copy = [...items];

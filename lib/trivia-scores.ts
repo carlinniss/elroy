@@ -178,7 +178,7 @@ export function buildTriviaLeaderRoastPrompt(leaders: TriviaLeaders): string | n
   }
   if (!lines.length) return null;
 
-  return `Before a new trivia round, shout out and clown the current trivia leaderboard in Twitch chat. ${lines.join('. ')}. Roast them in Elroy OG style — 2 short funny sentences max, playful crusty humor, @ them by username.`;
+  return `Before a new trivia round, shout out and clown the current trivia leaderboard in Twitch chat. ${lines.join('. ')}. Roast them in Elroy OG style — playful crusty humor, @ them by username. Take a few sentences and really sell the bit.`;
 }
 
 export function formatTriviaLeaderboardChatMessage(leaders: TriviaLeaders): string {

@@ -3,6 +3,8 @@ import { hasRedisStorage, redisCommand, redisPipeline } from '@/lib/redis-rest';
 
 const MAX_RECENT = 50;
 
+/** Question/answer fingerprints in Redis are permanent — trivia never repeats across streams or bot reloads. */
+
 const globalStore = globalThis as typeof globalThis & {
   __elroyRecentTrivia?: Partial<Record<TriviaCategory, string[]>>;
   __elroySeenAnswers?: Partial<Record<TriviaCategory, Set<string>>>;
@@ -196,6 +198,29 @@ export async function claimTriviaQuestion(
   for (const answer of answerFingerprints) {
     getMemoryAnswers(category).add(answer);
   }
+  return true;
+}
+
+export async function resetTriviaQuestionHistory(): Promise<boolean> {
+  if (hasRedisStorage()) {
+    try {
+      await redisPipeline([
+        ['DEL', recentKey('cannabis')],
+        ['DEL', recentKey('freaky')],
+        ['DEL', seenKey('cannabis')],
+        ['DEL', seenKey('freaky')],
+        ['DEL', answerKey('cannabis')],
+        ['DEL', answerKey('freaky')],
+      ]);
+      return true;
+    } catch (error) {
+      console.error('Redis trivia history reset failed', error);
+      return false;
+    }
+  }
+
+  globalStore.__elroyRecentTrivia = { cannabis: [], freaky: [] };
+  globalStore.__elroySeenAnswers = { cannabis: new Set(), freaky: new Set() };
   return true;
 }
 
