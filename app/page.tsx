@@ -68,6 +68,7 @@ function BongContent() {
   const TRIVIA_FIRST_DELAY_MS = 5 * 60 * 1000;
   const TRIVIA_ANSWER_WINDOW_MS = 5 * 60 * 1000;
   const TRIVIA_CHECK_MS = 60_000;
+  const BLACKJACK_TICK_MS = 4_000;
   const CHAT_ACTIVITY_MESSAGE_THRESHOLD = 90;
   const CHAT_ACTIVITY_CHANCE = 0.55;
   const SESSION_CHAT_MAX = 600;
@@ -101,6 +102,7 @@ function BongContent() {
   const streamCheckinRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const triviaPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const blackjackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamLiveRef = useRef(false);
   const lastTriviaAtRef = useRef(0);
   const recentTriviaHistoryRef = useRef<Array<{ category: TriviaCategory; question: string; id: string }>>([]);
@@ -1040,6 +1042,101 @@ function BongContent() {
     void queueBongLogic(buildStreamCheckinPrompt(viewerCount, streamStatus), undefined, { chatOnly: true });
   }, [buildStreamCheckinPrompt, fetchStreamStatus, queueBongLogic]);
 
+  const sayBlackjackLines = useCallback((lines: string[]) => {
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    for (const line of lines) {
+      if (line?.trim()) clientRef.current?.say(channel, line);
+    }
+  }, []);
+
+  const postBlackjackAction = useCallback(async (payload: {
+    action: string;
+    username: string;
+    displayName?: string;
+    amount?: number;
+    isMod?: boolean;
+  }) => {
+    try {
+      const res = await fetch('/api/blackjack/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (Array.isArray(data.messages) && data.messages.length) {
+        sayBlackjackLines(data.messages);
+      }
+      return data;
+    } catch (error) {
+      console.warn('Blackjack action failed', error);
+      return null;
+    }
+  }, [sayBlackjackLines]);
+
+  const tickBlackjackTable = useCallback(() => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+    void postBlackjackAction({ action: 'tick', username: 'elroy', displayName: 'Elroy' });
+  }, [postBlackjackAction]);
+
+  const handleBlackjackCommand = useCallback((
+    cmd: string,
+    username: string,
+    displayName: string,
+    normalizedChannel: string,
+    isMod: boolean,
+    rawMessage: string,
+  ) => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+    const login = username.toLowerCase();
+    if (login === normalizedChannel || login === 'wizebot') return;
+
+    const activeTrivia = activeTriviaRef.current;
+    if (activeTrivia && !activeTrivia.answered && (cmd === 'bj' || cmd === 'blackjack')) {
+      const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+      clientRef.current?.say(channel, `@${username} trivia's live — wait for the next round to open blackjack.`);
+      return;
+    }
+
+    if (cmd === 'bj' || cmd === 'blackjack') {
+      void postBlackjackAction({ action: 'join', username, displayName });
+      return;
+    }
+    if (cmd === 'bet') {
+      const match = rawMessage.trim().match(/^!bet\s+(\d+)$/i);
+      if (!match) return;
+      void postBlackjackAction({
+        action: 'bet',
+        username,
+        displayName,
+        amount: Number.parseInt(match[1], 10),
+      });
+      return;
+    }
+    if (cmd === 'hit' || cmd === 'h') {
+      void postBlackjackAction({ action: 'hit', username, displayName });
+      return;
+    }
+    if (cmd === 'stand' || cmd === 's') {
+      void postBlackjackAction({ action: 'stand', username, displayName });
+      return;
+    }
+    if (cmd === 'table' || cmd === 'bjtable') {
+      void postBlackjackAction({ action: 'table', username, displayName });
+      return;
+    }
+    if (cmd === 'chips') {
+      void postBlackjackAction({ action: 'chips', username, displayName });
+      return;
+    }
+    if (cmd === 'bjtop' || cmd === 'bjlb') {
+      void postBlackjackAction({ action: 'leaders', username, displayName });
+      return;
+    }
+    if (cmd === 'bjstop' && isMod) {
+      void postBlackjackAction({ action: 'stop', username, displayName, isMod: true });
+    }
+  }, [postBlackjackAction]);
+
   const startStreamMonitoring = useCallback(() => {
     if (!streamPollRef.current) {
       void pollStreamLive();
@@ -1057,7 +1154,12 @@ function BongContent() {
         runTriviaCycle();
       }, TRIVIA_CHECK_MS);
     }
-  }, [pollStreamLive, runStreamCheckin, runTriviaCycle]);
+    if (!blackjackPollRef.current) {
+      blackjackPollRef.current = setInterval(() => {
+        tickBlackjackTable();
+      }, BLACKJACK_TICK_MS);
+    }
+  }, [pollStreamLive, runStreamCheckin, runTriviaCycle, tickBlackjackTable]);
 
   const stopStreamMonitoring = useCallback(() => {
     if (streamPollRef.current) {
@@ -1071,6 +1173,10 @@ function BongContent() {
     if (triviaPollRef.current) {
       clearInterval(triviaPollRef.current);
       triviaPollRef.current = null;
+    }
+    if (blackjackPollRef.current) {
+      clearInterval(blackjackPollRef.current);
+      blackjackPollRef.current = null;
     }
     activeTriviaRef.current = null;
     streamLiveRef.current = false;
@@ -1324,6 +1430,31 @@ function BongContent() {
       if (m.toLowerCase() === '!aboutme') {
         if (isFullyMuted()) return;
         return void announceAboutMe(username);
+      }
+      const lowerCmd = m.toLowerCase().trim();
+      if (lowerCmd === '!bj' || lowerCmd === '!blackjack') {
+        return handleBlackjackCommand('bj', username, displayName, normalizedChannel, t.mod === true || isBroadcaster, m);
+      }
+      if (/^!bet\s+\d+$/i.test(lowerCmd)) {
+        return handleBlackjackCommand('bet', username, displayName, normalizedChannel, false, m);
+      }
+      if (lowerCmd === '!hit' || lowerCmd === '!h') {
+        return handleBlackjackCommand('hit', username, displayName, normalizedChannel, false, m);
+      }
+      if (lowerCmd === '!stand' || lowerCmd === '!s') {
+        return handleBlackjackCommand('stand', username, displayName, normalizedChannel, false, m);
+      }
+      if (lowerCmd === '!table' || lowerCmd === '!bjtable') {
+        return handleBlackjackCommand('table', username, displayName, normalizedChannel, false, m);
+      }
+      if (lowerCmd === '!chips') {
+        return handleBlackjackCommand('chips', username, displayName, normalizedChannel, false, m);
+      }
+      if (lowerCmd === '!bjtop' || lowerCmd === '!bjlb') {
+        return handleBlackjackCommand('bjtop', username, displayName, normalizedChannel, false, m);
+      }
+      if (lowerCmd === '!bjstop') {
+        return handleBlackjackCommand('bjstop', username, displayName, normalizedChannel, t.mod === true || isBroadcaster, m);
       }
       if (m.toLowerCase() === '!ding' || m.toLowerCase() === '!gong') {
         const isModerator = t.mod === true;
