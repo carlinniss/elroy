@@ -1,5 +1,5 @@
 import { listAvailableElroyTrivia, type TriviaCategory } from '@/lib/cannabis-trivia';
-import { generateTriviaQuestion, isGenericTriviaQuestion, isOverusedTriviaAnswer } from '@/lib/trivia-generator';
+import { generateTriviaQuestion, passesTriviaDifficultyGate } from '@/lib/trivia-generator';
 import {
   claimTriviaQuestion,
   getRecentTriviaQuestions,
@@ -11,7 +11,7 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-const GENERATION_ATTEMPTS = 12;
+const GENERATION_ATTEMPTS = 18;
 
 function shuffle<T>(items: T[]): T[] {
   const copy = [...items];
@@ -27,8 +27,7 @@ async function acceptQuestion(
   question: { question: string; answers: string[] },
   recentQuestions: string[],
 ) {
-  if (isGenericTriviaQuestion(question.question)) return false;
-  if (isOverusedTriviaAnswer(question.answers)) return false;
+  if (!passesTriviaDifficultyGate(question.question, question.answers)) return false;
   if (isNearDuplicateTriviaQuestion(question.question, recentQuestions)) return false;
   if (await hasSeenTriviaQuestion(question.question, category)) return false;
   if (await hasSeenTriviaAnswers(question.answers, category)) return false;
@@ -68,6 +67,7 @@ export async function POST(request: Request) {
 
     const staticPool = shuffle(listAvailableElroyTrivia(recentIds, category, recentQuestions));
     for (const fallback of staticPool) {
+      if (!passesTriviaDifficultyGate(fallback.question, fallback.answers)) continue;
       if (isNearDuplicateTriviaQuestion(fallback.question, recentQuestions)) continue;
       if (await hasSeenTriviaQuestion(fallback.question, category)) continue;
       if (await hasSeenTriviaAnswers(fallback.answers, category)) continue;

@@ -5,39 +5,43 @@ import type { ElroyTriviaQuestion, TriviaCategory } from '@/lib/cannabis-trivia'
 import { normalizeTriviaAnswer } from '@/lib/cannabis-trivia';
 
 const triviaSchema = z.object({
-  question: z.string().min(12).max(220),
+  question: z.string().min(20).max(220),
   answers: z.array(z.string().min(1).max(80)).min(1).max(10),
   displayAnswer: z.string().min(1).max(120),
 });
 
 const CANNABIS_ANGLES = [
-  'obscure cannabis history before 1970 (figures, events, publications — not George Washington hemp)',
-  'phytochemistry deep cut (minor cannabinoids, decarb chemistry, terpene interactions, CBG/CBN/CBC)',
-  'global cannabis culture (regional traditions, slang origins, historic consumption methods)',
-  'cultivation science (photoperiod, phenotypes, harvest timing, curing — not indica vs sativa 101)',
-  'industrial hemp and fiber history (textiles, rope, paper, biofuel — specific facts)',
-  'cannabis law and policy milestones (countries, court cases, scheduling — specific names/dates)',
-  'strain genetics and breeder lore (landrace origins, famous crosses, lineage — not "what is sativa")',
-  'consumption tech and extraction (rosin, solventless, vaporization science — specific terms)',
-  'cannabis in music/film/counterculture (specific albums, scenes, movements — not "420 time")',
-  'medical/research milestones (clinical trials, discovery dates, researchers — not "ECS" intro)',
+  'pre-1970 cannabis history (specific people, publications, court cases — not George Washington hemp)',
+  'minor cannabinoids and acid precursors (THCA, CBDA, CBG, CBC, CBN formation — not THC/CBD 101)',
+  'terpene biochemistry tied to a specific strain or effect (named terpene + mechanism)',
+  'global prohibition and legalization milestones (country, year, law name, ballot measure number)',
+  'landrace genetics and breeder lineage (parent strains, origin region, decade)',
+  'extraction and solventless tech (hash-making methods, rosin, ice water — technical terms)',
+  'cannabis pharmacology research (named researchers, universities, study years)',
+  'industrial hemp history beyond rope (specific companies, patents, colonial trade)',
+  'counterculture and media deep cuts (albums, films, events — not 420 memes)',
+  'cultivation science (photoperiod, VPD, dry/cure chemistry — not indica vs sativa)',
+  'international slang and consumption traditions (bhang, charas, kief — regional specifics)',
+  'US scheduling and policy (CSA, Cole Memo, Farm Bill thresholds — dates and numbers)',
 ];
 
 const FREAKY_ANGLES = [
-  'kink terminology etymology and history (where a term came from, not "what is BDSM")',
-  'sex-positive pioneers, authors, and movements (specific people, books, years)',
-  'consent and negotiation specifics (frameworks, acronyms beyond basic safeword)',
-  'relationship and intimacy psychology (attachment, communication models — named concepts)',
-  'LGBTQ+ and queer history tied to sexuality (events, figures, legal milestones)',
-  'fetish subculture lore (leather, latex, pup, etc. — niche not beginner)',
-  'anatomy and physiology with clinical terms (Twitch-safe, educational, not graphic)',
-  'internet-era spicy culture deep cuts (memes, platforms, era-specific slang)',
-  'BDSM safety and scene etiquette (specific protocols, roles beyond dom/sub 101)',
-  'pop culture references that require real knowledge (specific shows, songs, scenes)',
+  'kink history and etymology (who coined a term, which book, which century)',
+  'BDSM frameworks beyond SSC (RACK, PRICK, negotiation models — acronyms with depth)',
+  'sexology pioneers and landmark studies (Kinsey, Masters & Johnson, Hirschfeld — specifics)',
+  'queer history and legal milestones (Stonewall context, decriminalization dates, activists)',
+  'fetish subculture origins (leather, rubber, pup play — named clubs, cities, decades)',
+  'relationship psychology with named models (attachment styles, love languages — not basics)',
+  'anatomy trivia with clinical precision (named structures, discoverers — Twitch-safe)',
+  'internet-era platform and community lore (specific forums, eras, subreddit culture)',
+  'scene etiquette and safety protocols (dungeon rules, vetting, flagging systems)',
+  'literary and cinematic deep cuts (authors, banned books, directors — not Fifty Shades 101)',
+  'consent law and policy (age of consent variation by country, landmark cases — educational)',
+  'paraphilia terminology from DSM/clinical context (definitions requiring real knowledge)',
 ];
 
 const GENERIC_QUESTION_PATTERNS = [
-  /what does (thc|cbd|ecs)\b/i,
+  /what does (thc|cbd|ecs|bdsm|nsfw|dom|sub)\b/i,
   /what (is|does) (thc|cbd) stand for/i,
   /what (are|is) terpen/i,
   /indica or sativa/i,
@@ -53,43 +57,33 @@ const GENERIC_QUESTION_PATTERNS = [
   /what is consent/i,
   /what is aftercare/i,
   /what does (dom|sub|switch) mean/i,
+  /what is (a )?(dom|sub|switch)\b/i,
   /50 shades/i,
   /what is (a )?dildo/i,
   /what is (a )?vibrator/i,
+  /what (is|are) (a )?(joint|grinder|bong|blunt)/i,
+  /what do you put.*water pipe/i,
+  /how many letters/i,
+  /how many people.*threesome/i,
+  /what (is|are) (a )?(joint|grinder|bong|blunt)/i,
 ];
 
 const OVERUSED_ANSWER_TERMS = new Set([
-  'thc',
-  'cbd',
-  'tetrahydrocannabinol',
-  'cannabidiol',
-  'terpenes',
-  'terpene',
-  'cannabinoids',
-  'cannabinoid',
-  'endocannabinoid system',
-  'endocannabinoid',
-  'ecs',
-  'indica',
-  'sativa',
-  'cannabis',
-  'hemp',
-  'marijuana',
-  '420',
-  '710',
-  'george washington',
-  'washington',
-  'bdsm',
-  'safeword',
-  'safe word',
-  'consent',
-  'aftercare',
-  'bondage',
-  'dom',
-  'sub',
-  'switch',
-  'vibrator',
-  'dildo',
+  'thc', 'cbd', 'tetrahydrocannabinol', 'cannabidiol', 'terpenes', 'terpene',
+  'cannabinoids', 'cannabinoid', 'endocannabinoid system', 'endocannabinoid', 'ecs',
+  'indica', 'sativa', 'cannabis', 'hemp', 'marijuana', '420', '710',
+  'george washington', 'washington', 'bdsm', 'safeword', 'safe word', 'consent',
+  'aftercare', 'bondage', 'dom', 'sub', 'switch', 'vibrator', 'dildo', 'water',
+  'protein', 'joint', 'grinder', 'feet', 'foot', 'latex', 'condom', 'condoms',
+  'adult', 'sex', 'nudes', 'explicit', 'spicy', 'edging', 'pegging', 'three',
+  '3', 'nine', '9', 'stop', 'exhibitionist', 'voyeur', 'nsfw', 'not safe for work',
+]);
+
+const TRIVIAL_SINGLE_WORD_ANSWERS = new Set([
+  ...OVERUSED_ANSWER_TERMS,
+  'oil', 'haze', 'kush', 'dab', 'wax', 'fire', 'loud', 'gas', 'weed', 'pot',
+  'smoke', 'high', 'bong', 'blunt', 'doobie', 'canvas', 'rope', 'fabric',
+  'someone else', 'another person', 'another man', 'other people',
 ]);
 
 function pickRandom<T>(items: T[]): T {
@@ -99,6 +93,7 @@ function pickRandom<T>(items: T[]): T {
 export function isGenericTriviaQuestion(question: string): boolean {
   const trimmed = question.trim();
   if (!trimmed) return true;
+  if (trimmed.length < 48) return true;
   return GENERIC_QUESTION_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
@@ -111,13 +106,33 @@ export function isOverusedTriviaAnswer(answers: string[]): boolean {
   return false;
 }
 
+export function hasSpecificTriviaAnswer(answers: string[]): boolean {
+  const normalized = answers.map((a) => normalizeTriviaAnswer(a)).filter(Boolean);
+  if (!normalized.length) return false;
+
+  return normalized.some((answer) => {
+    if (/^(19|20)\d{2}$/.test(answer)) return true;
+    if (OVERUSED_ANSWER_TERMS.has(answer)) return false;
+    if (TRIVIAL_SINGLE_WORD_ANSWERS.has(answer)) return false;
+    if (answer.includes(' ') && answer.length >= 6) return true;
+    return answer.length >= 4;
+  });
+}
+
+export function passesTriviaDifficultyGate(question: string, answers: string[]): boolean {
+  if (isGenericTriviaQuestion(question)) return false;
+  if (isOverusedTriviaAnswer(answers)) return false;
+  if (!hasSpecificTriviaAnswer(answers)) return false;
+  return true;
+}
+
 function buildAvoidBlock(recentQuestions: string[]): string {
   if (!recentQuestions.length) return '';
 
   return `\nSTRICT DEDUP — do NOT repeat or closely rephrase these recent questions. Pick a different subtopic, era, and answer entirely:
 ${recentQuestions.slice(0, 40).map((q) => `- ${q}`).join('\n')}
 
-Also avoid overused beginner answers as the correct answer: THC, CBD, terpenes, endocannabinoid system, indica, sativa, 420, 710, George Washington, BDSM, safeword, consent, aftercare.`;
+BANNED correct answers (too easy): THC, CBD, terpenes, ECS, indica, sativa, 420, 710, George Washington, BDSM, safeword, consent, aftercare, joint, grinder, water, NSFW, threesome, foot fetish.`;
 }
 
 function buildPrompt(category: TriviaCategory, recentQuestions: string[], attempt: number): string {
@@ -125,27 +140,29 @@ function buildPrompt(category: TriviaCategory, recentQuestions: string[], attemp
   const primaryAngle = pickRandom(angles);
   const secondaryAngle = pickRandom(angles.filter((a) => a !== primaryAngle));
   const difficulty =
-    attempt < 3
-      ? 'HARD — requires enthusiast-level knowledge; a casual viewer should struggle'
-      : attempt < 6
-        ? 'EXPERT — obscure fact, specific name/number/year; not searchable in one Google snippet'
-        : 'OBSCURE — deep cut only a dedicated fan would know';
+    attempt < 4
+      ? 'HARD — enthusiast-only; casual viewers should miss this'
+      : attempt < 8
+        ? 'EXPERT — obscure proper noun, year, or technical term; not a Google featured snippet'
+        : 'OBSCURE — deep cut a dedicated hobbyist might know, not a meme answer';
 
-  return `Generate ONE ${category} trivia question for a savvy adult Twitch chat.
+  return `Generate ONE ${category} trivia question for a savvy adult Twitch chat that already knows the basics.
 
-This round's angle: ${primaryAngle}
-Also weave in something from: ${secondaryAngle}
+Angle: ${primaryAngle}
+Secondary angle: ${secondaryAngle}
 Difficulty: ${difficulty}
 Generation salt: ${Date.now()}-${attempt}-${Math.random().toString(36).slice(2, 8)}
 
-Requirements:
-- NOT generic weed/sex 101 — no acronyms-as-the-whole-joke, no "what does X stand for", no indica/sativa, no 420/710, no George Washington hemp
-- The correct answer must be a specific proper noun, number, year, chemical name (minor cannabinoid), place, person, or niche term
-- Question should make chat think for a moment — avoid one-word giveaway setups
-- Answerable in 1-4 words in Twitch chat
+HARD RULES:
+- Question must be at least 50 characters and require real knowledge — NOT "what is X" definition trivia
+- Correct answer must be a specific person (last name OK), year, place, chemical name (minor cannabinoid/acid form), law/ballot name, or niche term (7+ letters or multi-word)
+- Chat should pause and think — no giveaway phrasing like "short for", "stand for", "how many letters"
 - 2-6 acceptable answer variants (abbreviations, alternate spellings OK)
-- displayAnswer: friendly reveal with the full fact spelled out
-- Twitch-safe: no slurs, no minors, no illegal how-to, no graphic anatomy${buildAvoidBlock(recentQuestions)}`;
+- displayAnswer: friendly reveal spelling out the full fact
+- Twitch-safe: no slurs, no minors, no illegal how-to, no graphic anatomy
+
+BAD (never write): "What does THC stand for?", "How many cannabinoids?", "What is a safeword?"
+GOOD: "Which Israeli chemist first isolated THC in 1964?", "RACK adds what word after Risk Aware Consensual?", "Prop 215 passed in which US state in 1996?"${buildAvoidBlock(recentQuestions)}`;
 }
 
 export async function generateTriviaQuestion(
@@ -160,11 +177,11 @@ export async function generateTriviaQuestion(
     const { object } = await generateObject({
       model: google('gemini-2.5-flash'),
       schema: triviaSchema,
-      temperature: 1.15,
-      system: `You write HARD Twitch chat trivia for Elroy, a sassy OG stream bot.
-Your audience has heard "what is THC" and "what is BDSM" a thousand times — never write that again.
-Favor specific names, dates, chemistry, history, and niche culture over textbook definitions.
-Return exactly one question object. Every question must feel distinct from typical cannabis/sex trivia lists.`,
+      temperature: 1.25,
+      system: `You write EXPERT-LEVEL Twitch trivia for Elroy. The chat already knows THC, BDSM, 420, terpenes, safewords, and indica/sativa.
+Every question must test obscure history, chemistry, policy, or niche culture — never textbook definitions or meme answers.
+If your question could appear on a BuzzFeed list, rewrite it harder.
+Return exactly one question object.`,
       prompt: buildPrompt(category, recentQuestions, attempt),
     });
 
@@ -172,7 +189,7 @@ Return exactly one question object. Every question must feel distinct from typic
     if (!answers.length) return null;
 
     const question = object.question.trim();
-    if (isGenericTriviaQuestion(question) || isOverusedTriviaAnswer(answers)) {
+    if (!passesTriviaDifficultyGate(question, answers)) {
       return null;
     }
 
