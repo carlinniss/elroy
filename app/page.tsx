@@ -8,8 +8,19 @@ import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
 import { matchesTriviaAnswer, triviaIntroFor, type ElroyTriviaQuestion, type TriviaCategory } from '@/lib/cannabis-trivia';
 import { buildTriviaLeaderRoastPrompt, formatTriviaLeaderboardChatMessage } from '@/lib/trivia-scores';
 import { getBotInstanceId } from '@/lib/bot-instance';
+import type { UserMemoryEvent } from '@/lib/user-memory';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
+
+function rememberUser(username: string, displayName: string | undefined, event: UserMemoryEvent) {
+  void fetch('/api/users/remember', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, displayName, event }),
+  }).catch((error) => {
+    console.warn('User memory write failed', error);
+  });
+}
 
 function BongContent() {
   const [isActive, setIsActive] = useState(false);
@@ -744,10 +755,13 @@ function BongContent() {
     return Date.now() - lastCelebrationRef.current >= cooldown;
   };
 
-  const celebrate = useCallback((kind: 'follow' | 'sub' | 'bits', username: string, extra = '') => {
+  const celebrate = useCallback((kind: 'follow' | 'sub' | 'bits', username: string, extra = '', bitsAmount?: number) => {
     if (!streamLiveRef.current || isFullyMuted() || !canCelebrate(kind)) return;
     if (kind === 'follow' && !canRespondInChat(FOLLOW_CELEBRATION_COOLDOWN_MS)) return;
     lastCelebrationRef.current = Date.now();
+    if (kind === 'follow') rememberUser(username, username, { type: 'follow' });
+    if (kind === 'sub') rememberUser(username, username, { type: 'sub' });
+    if (kind === 'bits') rememberUser(username, username, { type: 'bits', amount: bitsAmount });
     const sfxId = kind === 'sub' ? 'sub_fanfare' : kind === 'bits' ? 'bits_kaching' : 'follow_ding';
     void playElroySfx(sfxId);
     const prompt =
@@ -1002,6 +1016,11 @@ function BongContent() {
         voicePriority: 'celebration',
       },
     );
+    rememberUser(username, username, {
+      type: 'trivia_win',
+      category: active.category,
+      totalWins,
+    });
   }, [playElroySfx, queueBongLogic]);
 
   const tryHandleTriviaAnswer = useCallback((username: string, message: string) => {
@@ -1057,8 +1076,9 @@ function BongContent() {
     streamLiveRef.current = false;
   }, []);
 
-  const handleElroyMention = useCallback((username: string, message: string) => {
+  const handleElroyMention = useCallback((username: string, displayName: string, message: string) => {
     if (isFullyMuted()) return;
+    rememberUser(username, displayName, { type: 'mention', message });
     if (isSilenced()) {
       if (!streamLiveRef.current || !canRespondInChat(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
       void queueBongLogic(buildComebackPrompt(username, message), username, { chatOnly: true });
@@ -1068,8 +1088,9 @@ function BongContent() {
     void queueBongLogic(buildMentionPrompt(username, message), username);
   }, [buildComebackPrompt, buildMentionPrompt, queueBongLogic]);
 
-  const handleLRoyMisname = useCallback((username: string, message: string) => {
+  const handleLRoyMisname = useCallback((username: string, displayName: string, message: string) => {
     if (isFullyMuted()) return;
+    rememberUser(username, displayName, { type: 'mention', message });
     if (isSilenced()) {
       if (!streamLiveRef.current || !canRespondInChat(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
       void queueBongLogic(buildLRoyRoastPrompt(username, message), username, { chatOnly: true });
@@ -1102,6 +1123,22 @@ function BongContent() {
     volumeRef.current = clamped;
     const pct = Math.round(clamped * 100);
     clientRef.current?.say(channel, user ? `@${user} volume ${pct}%.` : `volume ${pct}%.`);
+  }, []);
+
+  const announceAboutMe = useCallback(async (username: string) => {
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    try {
+      const res = await fetch(`/api/users/aboutme?username=${encodeURIComponent(username)}`);
+      if (!res.ok) throw new Error('aboutme lookup failed');
+      const data = await res.json();
+      const text = typeof data.text === 'string' && data.text.trim()
+        ? data.text.trim()
+        : `Still getting to know you — mention me or win trivia so I can build your file.`;
+      clientRef.current?.say(channel, `@${username} ${text}`);
+    } catch (error) {
+      console.warn('!aboutme failed', error);
+      clientRef.current?.say(channel, `@${username} I cannot pull your file right now — try again in a bit.`);
+    }
   }, []);
 
   const announceTriviaLeaderboard = useCallback(async (user?: string) => {
@@ -1234,6 +1271,7 @@ function BongContent() {
     client.on('message', (_c: string, t: tmi.ChatUserstate, m: string, s: boolean) => {
       if (s) return;
       const username = t.username || 'viewer';
+      const displayName = t['display-name'] || username;
       const normalizedUser = username.toLowerCase();
       const isBroadcaster = normalizedUser === normalizedChannel;
 
@@ -1260,9 +1298,9 @@ function BongContent() {
           }
 
           if (misnamesElroyAsLRoy(m)) {
-            handleLRoyMisname(username, m);
+            handleLRoyMisname(username, displayName, m);
           } else if (mentionsElroy(m)) {
-            handleElroyMention(username, m);
+            handleElroyMention(username, displayName, m);
           } else if (streamLiveRef.current && !isFullyMuted() && !isSilenced() && !isBroadcaster) {
             chatMessageCountRef.current += 1;
             if (
@@ -1282,6 +1320,10 @@ function BongContent() {
       if (m.toLowerCase() === '!leaderboard' || m.toLowerCase() === '!lb') {
         if (isFullyMuted()) return;
         return void announceTriviaLeaderboard(t.username);
+      }
+      if (m.toLowerCase() === '!aboutme') {
+        if (isFullyMuted()) return;
+        return void announceAboutMe(username);
       }
       if (m.toLowerCase() === '!ding' || m.toLowerCase() === '!gong') {
         const isModerator = t.mod === true;
@@ -1363,7 +1405,7 @@ function BongContent() {
       const detail = message?.trim()
         ? `${bits} bits with message: "${message.trim()}"`
         : `${bits} bits`;
-      celebrate('bits', username, detail);
+      celebrate('bits', username, detail, bits);
     });
 
     try {
