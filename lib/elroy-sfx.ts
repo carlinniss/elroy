@@ -59,7 +59,6 @@ export function getElroySfx(id: string): ElroySfxDefinition | null {
 export function getElroySfxPlaybackUrl(id: string): string | null {
   const definition = getElroySfx(id);
   if (!definition) return null;
-  if (definition.bundled) return `/sounds/elroy/${id}.wav`;
   return `/api/sfx/${id}`;
 }
 

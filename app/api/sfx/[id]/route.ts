@@ -5,7 +5,7 @@ import { readCachedSfx, writeCachedSfx } from '@/lib/sfx-storage';
 export const dynamic = 'force-dynamic';
 
 export async function GET(
-  request: Request,
+  _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params;
@@ -15,7 +15,18 @@ export async function GET(
   }
 
   if (definition.bundled) {
-    return Response.redirect(new URL(`/sounds/elroy/${id}.wav`, request.url), 307);
+    const cached = await readCachedSfx(id);
+    if (!cached) {
+      return new Response('Sound effect unavailable', { status: 404 });
+    }
+    return new Response(new Uint8Array(cached.audio), {
+      headers: {
+        'Content-Type': cached.contentType,
+        'Content-Disposition': 'inline',
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        'X-Elroy-Sfx-Source': cached.source,
+      },
+    });
   }
 
   let cached = await readCachedSfx(id);
@@ -41,6 +52,7 @@ export async function GET(
   return new Response(new Uint8Array(cached.audio), {
     headers: {
       'Content-Type': cached.contentType,
+      'Content-Disposition': 'inline',
       'Cache-Control': 'public, max-age=31536000, immutable',
       'X-Elroy-Sfx-Source': source,
     },
