@@ -1,14 +1,14 @@
 # Bong Bot: The Wise OG 710 Twitch Bot
 
-Bong Bot is a high-performance, AI-driven Twitch overlay and chat assistant. It listens for commands in your Twitch chat, generates rhyming "OG" street-smart advice using Google Gemini, speaks the response via ElevenLabs, and provides a sleek visual overlay for OBS—complete with a signature bong rip sound effect.
+Bong Bot is a high-performance, AI-driven Twitch overlay and chat assistant. Elroy listens to your Twitch chat, responds when mentioned, generates rhyming "OG" street-smart advice using Google Gemini, speaks via ElevenLabs, and provides a sleek visual overlay for OBS—complete with timed sound effects.
 
 ## 🚀 Features
 
-* **Twitch Integration:** Uses `tmi.js` to listen for `!ask` commands and reply directly in chat.
+* **Twitch Integration:** Uses `tmi.js` to listen for chat mentions, subs, bits, follows, and mod commands.
 * **AI Brain:** Powered by Google Gemini (Stable 2026 Production Tier) for sassy, rhyming responses.
 * **Vocal Chords:** Real-time text-to-speech using ElevenLabs (Flash v2.5 model).
 * **Visual Overlay:** A transparent Next.js frontend designed for OBS Browser Sources.
-* **SFX:** Automatic bong rip audio playback synchronized with AI speech.
+* **SFX:** ElevenLabs-generated effects (cached after first play) plus bundled sounds for key stream moments.
 * **Built-in Diagnostics:** Real-time system check panel to verify API connectivity and sound files.
 
 ## 🛠️ Tech Stack
@@ -48,8 +48,7 @@ Bong Bot is a high-performance, AI-driven Twitch overlay and chat assistant. It 
 To avoid `429 Quota Exceeded` errors, ensure your Google AI Studio account is moved from "Unknown Tier" to **Tier 1** by adding a $10 prepaid balance at [aistudio.google.com](https://aistudio.google.com/).
 
 ### Audio Files
-Place your `bong.mp3` file in:
-`public/sounds/bong.mp3`
+Bundled sound effects live in `public/sounds/elroy/` (e.g. `bong_rip.mp3`, `sub_fanfare.mp3`). Optional fallback: `public/sounds/bong.mp3`.
 
 ### API Routes
 Ensure your file structure is exact for Next.js routing:
@@ -64,17 +63,49 @@ Ensure your file structure is exact for Next.js routing:
     ```
 2.  Open `http://localhost:3000` in your browser.
 3.  Click **IGNITE BONG** to initialize the Twitch connection.
-4.  In your Twitch chat, type: `!ask Bong, why is 710 the best?`
+4.  Mention Elroy in chat (e.g. `@elroy what's good?`) or trigger a sub/bits/follow to hear the celebration sounds.
 
 ### Useful Chat Commands
 
-* `!ask <question>`: Ask Elroy something and get a chat reply.
-* `!quota`: Show remaining model quota.
-* `!gong`: Toggle bong sound effect (broadcaster/mod only).
+* Mention **Elroy** in chat: get a chat reply (voice too, when enabled and quota allows).
+* `!quota`: Show remaining ElevenLabs character quota.
+* `!ding`: Toggle bong rip sound before voice (broadcaster/mod only).
 * `!voiceoff`: Disable voice playback but keep chat replies on (broadcaster/mod only).
 * `!voiceon`: Re-enable voice playback (broadcaster/mod only).
 * `!voicestatus`: Report whether voice playback is currently on or off (broadcaster/mod only).
 * `!elroyoff`: Disconnect Elroy from chat entirely (broadcaster/mod only).
+
+## 🔊 Sound Effects
+
+Elroy plays these sounds automatically during stream events. Most are generated once via ElevenLabs and cached; `sub_fanfare` is a bundled MP3.
+
+| ID | Sound | When it plays |
+| --- | --- | --- |
+| `bong_rip` | Glass bong rip (bundled MP3) | Before Elroy speaks (when ding is on) |
+| `sub_fanfare` | La Cucaracha car horn | Sub, resub, or gift sub |
+| `bits_kaching` | Cash register kaching | Bits/cheers |
+| `follow_ding` | Bright notification ding | New follower |
+| `go_live` | Dramatic go-live whoosh | Stream goes live |
+| `mute_zip` | Comedy zipper | "Shut Elroy Up" power-up redeemed |
+| `roast_sting` | Rimshot sting | Someone calls him "L Roy" |
+
+**Fallback:** If `bong_rip` is unavailable, Elroy falls back to `public/sounds/bong.mp3` when ding is enabled.
+
+### Testing sounds
+
+Open any sound directly in your browser (plays inline):
+
+* **Production:** `https://elroy-zeta.vercel.app/api/sfx/<id>`
+* **Local dev:** `http://localhost:3000/api/sfx/<id>`
+
+Examples:
+
+* `https://elroy-zeta.vercel.app/api/sfx/sub_fanfare`
+* `https://elroy-zeta.vercel.app/api/sfx/bong_rip`
+
+Replace `<id>` with any ID from the table above. The first request for an uncached ElevenLabs sound generates it on the server; after that it is served from cache.
+
+To test in-stream, run the overlay and trigger the matching event (sub, bits, follow, go live, etc.). Sounds are warmed up when the bot starts.
 
 ## 🖥️ OBS Setup
 

@@ -10,9 +10,9 @@ export type ElroySfxDefinition = {
 export const ELROY_SFX_CATALOG: Record<string, ElroySfxDefinition> = {
   bong_rip: {
     id: 'bong_rip',
-    prompt: 'Quick glass water bong rip inhale and exhale, short cannabis pipe hit, punchy 1.5 seconds',
-    duration_seconds: 1.5,
-    prompt_influence: 0.75,
+    prompt: 'Bundled glass bong rip',
+    duration_seconds: 2.2,
+    bundled: true,
   },
   sub_fanfare: {
     id: 'sub_fanfare',
@@ -59,6 +59,7 @@ export function getElroySfx(id: string): ElroySfxDefinition | null {
 export function getElroySfxPlaybackUrl(id: string): string | null {
   const definition = getElroySfx(id);
   if (!definition) return null;
+  if (definition.bundled) return `/sounds/elroy/${id}.mp3`;
   return `/api/sfx/${id}`;
 }
 

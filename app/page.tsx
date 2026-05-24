@@ -4,18 +4,19 @@ import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react
 import { useSearchParams } from 'next/navigation';
 import tmi from 'tmi.js';
 import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
+import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
 
 function BongContent() {
   const [isActive, setIsActive] = useState(false);
   const [log, setLog] = useState<any[]>([]);
-  const [isGongOn, setIsGongOn] = useState(true);
+  const [isDingOn, setIsDingOn] = useState(true);
   const [isVoiceOn, setIsVoiceOn] = useState(true);
   const searchParams = useSearchParams();
   const [diagnostics, setDiagnostics] = useState({ chat: "...", speech: "...", sound: "...", quota: "..." });
 
   const DEFAULT_VOLUME = 0.85;
   const clientRef = useRef<tmi.Client | null>(null);
-  const gongEnabledRef = useRef(true);
+  const dingEnabledRef = useRef(true);
   const voiceEnabledRef = useRef(true);
   const volumeRef = useRef(DEFAULT_VOLUME);
   const recentChatRef = useRef<Array<{ user: string; text: string; at: number }>>([]);
@@ -231,9 +232,15 @@ function BongContent() {
     try {
       let url = sfxUrlCacheRef.current.get(id);
       if (!url) {
-        const res = await fetch(`/api/sfx/${id}`);
-        if (!res.ok) return false;
-        url = URL.createObjectURL(await res.blob());
+        const playbackUrl = getElroySfxPlaybackUrl(id);
+        if (!playbackUrl) return false;
+        if (playbackUrl.startsWith('/sounds/')) {
+          url = playbackUrl;
+        } else {
+          const res = await fetch(playbackUrl);
+          if (!res.ok) return false;
+          url = URL.createObjectURL(await res.blob());
+        }
         sfxUrlCacheRef.current.set(id, url);
       }
       const audio = new Audio(url);
@@ -250,8 +257,8 @@ function BongContent() {
   }, []);
 
   const playBongRip = useCallback(async (volume = volumeRef.current) => {
-    if (gongEnabledRef.current && await playElroySfx('bong_rip', volume)) return;
-    if (!gongEnabledRef.current) return;
+    if (!dingEnabledRef.current) return;
+    if (await playElroySfx('bong_rip', volume)) return;
     const rip = new Audio('/sounds/bong.mp3');
     rip.volume = volume;
     await rip.play().catch(() => {});
@@ -259,7 +266,13 @@ function BongContent() {
 
   const warmupElroySfx = useCallback(() => {
     for (const id of ['bong_rip', 'sub_fanfare', 'bits_kaching', 'follow_ding', 'go_live', 'mute_zip', 'roast_sting']) {
-      void fetch(`/api/sfx/${id}`)
+      const playbackUrl = getElroySfxPlaybackUrl(id);
+      if (!playbackUrl) continue;
+      if (playbackUrl.startsWith('/sounds/')) {
+        sfxUrlCacheRef.current.set(id, playbackUrl);
+        continue;
+      }
+      void fetch(playbackUrl)
         .then(async (res) => {
           if (!res.ok) return;
           const url = URL.createObjectURL(await res.blob());
@@ -454,7 +467,7 @@ function BongContent() {
     try {
       const chat = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: 'ping' }) });
       const speech = await fetch('/api/speech', { method: 'POST', body: JSON.stringify({ text: 'ping' }) });
-      const sound = await fetch('/sounds/bong.mp3');
+      const sound = await fetch('/api/sfx/bong_rip');
       const quotaRes = await fetch('/api/quota');
       const qData = await quotaRes.json();
 
@@ -472,7 +485,7 @@ function BongContent() {
   }, [applyVoiceQuotaTier]);
 
   useEffect(() => { runDiagnostics(); }, [runDiagnostics]);
-  useEffect(() => { gongEnabledRef.current = isGongOn; }, [isGongOn]);
+  useEffect(() => { dingEnabledRef.current = isDingOn; }, [isDingOn]);
   useEffect(() => { voiceEnabledRef.current = isVoiceOn; }, [isVoiceOn]);
 
   const speakNow = async (text: string) => {
@@ -598,7 +611,7 @@ function BongContent() {
       isQuota?: boolean;
       forceVoice?: boolean;
       chatOnly?: boolean;
-      skipGong?: boolean;
+      skipDing?: boolean;
       bypassChatCooldown?: boolean;
       bypassVoiceCooldown?: boolean;
       voicePriority?: 'celebration' | 'normal';
@@ -651,11 +664,11 @@ function BongContent() {
 
       if (willUseVoice) {
         lastElroyVoiceRef.current = Date.now();
-        const playGong = gongEnabledRef.current && !opts.skipGong;
-        if (playGong) {
+        const playDing = dingEnabledRef.current && !opts.skipDing;
+        if (playDing) {
           await playBongRip(volumeRef.current);
         }
-        const speechDelayMs = playGong ? 1600 : 0;
+        const speechDelayMs = playDing ? 1600 : 0;
         if (speechDelayMs > 0) {
           await new Promise<void>((resolve) => setTimeout(resolve, speechDelayMs));
         }
@@ -671,7 +684,7 @@ function BongContent() {
       isQuota?: boolean;
       forceVoice?: boolean;
       chatOnly?: boolean;
-      skipGong?: boolean;
+      skipDing?: boolean;
       bypassChatCooldown?: boolean;
       bypassVoiceCooldown?: boolean;
       voicePriority?: 'celebration' | 'normal';
@@ -774,12 +787,12 @@ function BongContent() {
     responseQueueRef.current = responseQueueRef.current
       .then(() => processBongLogic(buildStreamGoodbyePrompt(), undefined, {
         chatOnly: true,
-        skipGong: true,
+        skipDing: true,
         bypassChatCooldown: true,
       }))
       .then(() => processBongLogic(summaryPrompt, undefined, {
         chatOnly: true,
-        skipGong: true,
+        skipDing: true,
         bypassChatCooldown: true,
       }))
       .then(() => { clearStreamSession(); })
@@ -853,12 +866,12 @@ function BongContent() {
     void queueBongLogic(buildLRoyRoastPrompt(username, message), username);
   }, [buildLRoyRoastPrompt, playElroySfx, queueBongLogic]);
 
-  const toggleGong = useCallback((user?: string) => {
+  const toggleDing = useCallback((user?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-    const nextState = !gongEnabledRef.current;
-    gongEnabledRef.current = nextState;
-    setIsGongOn(nextState);
-    clientRef.current?.say(channel, user ? `@${user} gong ${nextState ? 'on' : 'off'}.` : `gong ${nextState ? 'on' : 'off'}.`);
+    const nextState = !dingEnabledRef.current;
+    dingEnabledRef.current = nextState;
+    setIsDingOn(nextState);
+    clientRef.current?.say(channel, user ? `@${user} ding ${nextState ? 'on' : 'off'}.` : `ding ${nextState ? 'on' : 'off'}.`);
   }, []);
 
   const toggleVoice = useCallback((user?: string) => {
@@ -948,10 +961,10 @@ function BongContent() {
         if (isFullyMuted()) return;
         return queueBongLogic('', t.username, { isQuota: true });
       }
-      if (m.toLowerCase() === '!gong') {
+      if (m.toLowerCase() === '!ding') {
         const isModerator = t.mod === true;
         if (isBroadcaster || isModerator) {
-          return toggleGong(t.username);
+          return toggleDing(t.username);
         }
         return;
       }
