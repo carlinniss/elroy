@@ -1,16 +1,17 @@
 import { listAvailableElroyTrivia, type TriviaCategory } from '@/lib/cannabis-trivia';
 import { generateTriviaQuestion } from '@/lib/trivia-generator';
 import {
+  claimTriviaQuestion,
   getRecentTriviaQuestions,
+  hasSeenTriviaAnswers,
   hasSeenTriviaQuestion,
   isNearDuplicateTriviaQuestion,
   mergeRecentTriviaQuestions,
-  recordTriviaQuestion,
 } from '@/lib/trivia-recent';
 
 export const dynamic = 'force-dynamic';
 
-const GENERATION_ATTEMPTS = 5;
+const GENERATION_ATTEMPTS = 6;
 
 function shuffle<T>(items: T[]): T[] {
   const copy = [...items];
@@ -23,11 +24,12 @@ function shuffle<T>(items: T[]): T[] {
 
 async function acceptQuestion(
   category: TriviaCategory,
-  question: { question: string },
+  question: { question: string; answers: string[] },
   recentQuestions: string[],
 ) {
   if (isNearDuplicateTriviaQuestion(question.question, recentQuestions)) return false;
   if (await hasSeenTriviaQuestion(question.question, category)) return false;
+  if (await hasSeenTriviaAnswers(question.answers, category)) return false;
   return true;
 }
 
@@ -56,16 +58,19 @@ export async function POST(request: Request) {
         recentQuestions = mergeRecentTriviaQuestions([generated.question], recentQuestions);
         continue;
       }
-
-      await recordTriviaQuestion(generated.question, category);
-      return Response.json({ source: 'generated', question: generated });
+      if (await claimTriviaQuestion(generated.question, category, generated.answers)) {
+        return Response.json({ source: 'generated', question: generated });
+      }
+      recentQuestions = mergeRecentTriviaQuestions([generated.question], recentQuestions);
     }
 
     const staticPool = shuffle(listAvailableElroyTrivia(recentIds, category, recentQuestions));
     for (const fallback of staticPool) {
       if (!(await acceptQuestion(category, fallback, recentQuestions))) continue;
-      await recordTriviaQuestion(fallback.question, category);
-      return Response.json({ source: 'static', question: fallback });
+      if (await claimTriviaQuestion(fallback.question, category, fallback.answers)) {
+        return Response.json({ source: 'static', question: fallback });
+      }
+      recentQuestions = mergeRecentTriviaQuestions([fallback.question], recentQuestions);
     }
 
     return Response.json({ error: 'No fresh trivia available for this category' }, { status: 503 });

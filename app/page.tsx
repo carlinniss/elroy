@@ -907,6 +907,8 @@ function BongContent() {
         if (data.question?.question && Array.isArray(data.question.answers)) {
           picked = data.question as ElroyTriviaQuestion;
         }
+      } else {
+        console.warn('Trivia generation unavailable', generateRes.status);
       }
     } catch (error) {
       console.warn('Gemini trivia generation failed', error);

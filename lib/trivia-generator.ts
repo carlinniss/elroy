@@ -24,7 +24,7 @@ export async function generateTriviaQuestion(
   if (!apiKey) return null;
 
   const avoidBlock = recentQuestions.length
-    ? `\nDo NOT repeat or closely rephrase any of these recent questions (must be a clearly different topic and wording):\n${recentQuestions.slice(0, 30).map((q) => `- ${q}`).join('\n')}`
+    ? `\nDo NOT repeat or closely rephrase any of these recent questions (must be a clearly different topic and wording). Also avoid questions whose correct answer is the same as a recent question:\n${recentQuestions.slice(0, 30).map((q) => `- ${q}`).join('\n')}`
     : '';
 
   try {

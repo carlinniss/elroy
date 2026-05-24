@@ -1,10 +1,11 @@
-import type { TriviaCategory } from '@/lib/cannabis-trivia';
+import { normalizeTriviaAnswer, type TriviaCategory } from '@/lib/cannabis-trivia';
 import { hasRedisStorage, redisCommand, redisPipeline } from '@/lib/redis-rest';
 
 const MAX_RECENT = 50;
 
 const globalStore = globalThis as typeof globalThis & {
   __elroyRecentTrivia?: Partial<Record<TriviaCategory, string[]>>;
+  __elroySeenAnswers?: Partial<Record<TriviaCategory, Set<string>>>;
 };
 
 function recentKey(category: TriviaCategory) {
@@ -13,6 +14,14 @@ function recentKey(category: TriviaCategory) {
 
 function seenKey(category: TriviaCategory) {
   return `elroy:trivia:seen:${category}`;
+}
+
+function answerKey(category: TriviaCategory) {
+  return `elroy:trivia:answers:${category}`;
+}
+
+function redisTruthy(value: unknown) {
+  return value === 1 || value === true || value === '1';
 }
 
 function getMemoryRecent(category: TriviaCategory): string[] {
@@ -25,6 +34,16 @@ function getMemoryRecent(category: TriviaCategory): string[] {
   return globalStore.__elroyRecentTrivia[category]!;
 }
 
+function getMemoryAnswers(category: TriviaCategory): Set<string> {
+  if (!globalStore.__elroySeenAnswers) {
+    globalStore.__elroySeenAnswers = { cannabis: new Set(), freaky: new Set() };
+  }
+  if (!globalStore.__elroySeenAnswers[category]) {
+    globalStore.__elroySeenAnswers[category] = new Set();
+  }
+  return globalStore.__elroySeenAnswers[category]!;
+}
+
 export function normalizeTriviaQuestionText(text: string): string {
   return text
     .toLowerCase()
@@ -33,6 +52,10 @@ export function normalizeTriviaQuestionText(text: string): string {
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function normalizedAnswers(answers: string[]): string[] {
+  return [...new Set(answers.map((answer) => normalizeTriviaAnswer(answer)).filter(Boolean))];
 }
 
 export function isNearDuplicateTriviaQuestion(candidate: string, recent: string[]): boolean {
@@ -46,7 +69,7 @@ export function isNearDuplicateTriviaQuestion(candidate: string, recent: string[
     if (norm.length >= 18 && existingNorm.length >= 18 && (norm.includes(existingNorm) || existingNorm.includes(norm))) {
       return true;
     }
-    if (questionSimilarity(norm, existingNorm) >= 0.55) return true;
+    if (questionSimilarity(norm, existingNorm) >= 0.45) return true;
   }
 
   return false;
@@ -81,6 +104,26 @@ export async function getRecentTriviaQuestions(category: TriviaCategory): Promis
   return [...getMemoryRecent(category)];
 }
 
+export async function hasSeenTriviaAnswers(answers: string[], category: TriviaCategory): Promise<boolean> {
+  const normalized = normalizedAnswers(answers);
+  if (!normalized.length) return false;
+
+  if (hasRedisStorage()) {
+    try {
+      for (const answer of normalized) {
+        const seen = await redisCommand(['SISMEMBER', answerKey(category), answer]);
+        if (redisTruthy(seen)) return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Redis trivia answer check failed', error);
+    }
+  }
+
+  const memory = getMemoryAnswers(category);
+  return normalized.some((answer) => memory.has(answer));
+}
+
 export async function hasSeenTriviaQuestion(question: string, category: TriviaCategory): Promise<boolean> {
   const fingerprint = normalizeTriviaQuestionText(question);
   if (!fingerprint) return true;
@@ -88,38 +131,72 @@ export async function hasSeenTriviaQuestion(question: string, category: TriviaCa
   if (hasRedisStorage()) {
     try {
       const seen = await redisCommand(['SISMEMBER', seenKey(category), fingerprint]);
-      if (seen === 1) return true;
+      if (redisTruthy(seen)) return true;
     } catch (error) {
       console.error('Redis trivia seen check failed', error);
     }
   }
 
-  const recent = getMemoryRecent(category);
-  return isNearDuplicateTriviaQuestion(question, recent);
+  return isNearDuplicateTriviaQuestion(question, getMemoryRecent(category));
 }
 
-export async function recordTriviaQuestion(question: string, category: TriviaCategory): Promise<void> {
+/** Atomically claim a question + answers. Returns false if already used. */
+export async function claimTriviaQuestion(
+  question: string,
+  category: TriviaCategory,
+  answers: string[] = [],
+): Promise<boolean> {
   const trimmed = question.trim();
-  if (!trimmed) return;
+  if (!trimmed) return false;
+
   const fingerprint = normalizeTriviaQuestionText(trimmed);
+  const answerFingerprints = normalizedAnswers(answers);
 
   if (hasRedisStorage()) {
     try {
+      const seen = await redisCommand(['SISMEMBER', seenKey(category), fingerprint]);
+      if (redisTruthy(seen)) return false;
+      if (await hasSeenTriviaAnswers(answers, category)) return false;
+
+      const commands: unknown[][] = [['SADD', seenKey(category), fingerprint]];
+      for (const answer of answerFingerprints) {
+        commands.push(['SADD', answerKey(category), answer]);
+      }
+
+      const results = await redisPipeline(commands);
+      if (!results || !redisTruthy(results[0])) return false;
+
+      for (let i = 0; i < answerFingerprints.length; i += 1) {
+        if (!redisTruthy(results[i + 1])) {
+          await redisCommand(['SREM', seenKey(category), fingerprint]);
+          return false;
+        }
+      }
+
       await redisPipeline([
         ['LREM', recentKey(category), '0', trimmed],
         ['LPUSH', recentKey(category), trimmed],
         ['LTRIM', recentKey(category), '0', MAX_RECENT - 1],
-        ['SADD', seenKey(category), fingerprint],
       ]);
-      return;
+      return true;
     } catch (error) {
-      console.error('Redis trivia recent write failed', error);
+      console.error('Redis trivia claim failed', error);
     }
   }
 
-  const memory = getMemoryRecent(category).filter((q) => q !== trimmed);
-  memory.unshift(trimmed);
-  globalStore.__elroyRecentTrivia![category] = memory.slice(0, MAX_RECENT);
+  if (getMemoryRecent(category).some((existing) => normalizeTriviaQuestionText(existing) === fingerprint)) {
+    return false;
+  }
+  if (answerFingerprints.some((answer) => getMemoryAnswers(category).has(answer))) {
+    return false;
+  }
+
+  getMemoryRecent(category).unshift(trimmed);
+  globalStore.__elroyRecentTrivia![category] = getMemoryRecent(category).slice(0, MAX_RECENT);
+  for (const answer of answerFingerprints) {
+    getMemoryAnswers(category).add(answer);
+  }
+  return true;
 }
 
 export function mergeRecentTriviaQuestions(...lists: string[][]): string[] {
