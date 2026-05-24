@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import tmi from 'tmi.js';
 import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
 import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
-import { matchesTriviaAnswer, pickRandomCannabisTrivia } from '@/lib/cannabis-trivia';
+import { matchesTriviaAnswer, pickRandomElroyTrivia, triviaIntroFor } from '@/lib/cannabis-trivia';
 
 function BongContent() {
   const [isActive, setIsActive] = useState(false);
@@ -867,7 +867,7 @@ function BongContent() {
     if (isFullyMuted() || !streamLiveRef.current) return;
     if (activeTriviaRef.current && !activeTriviaRef.current.answered) return;
 
-    const picked = pickRandomCannabisTrivia(recentTriviaIdsRef.current);
+    const picked = pickRandomElroyTrivia(recentTriviaIdsRef.current);
     if (!picked) return;
 
     recentTriviaIdsRef.current = [...recentTriviaIdsRef.current, picked.id].slice(-8);
@@ -884,7 +884,7 @@ function BongContent() {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     clientRef.current?.say(
       channel,
-      `🌿 Cannabis trivia! ${picked.question} — first correct answer wins!`,
+      `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer wins!`,
     );
   }, []);
 
@@ -911,7 +911,7 @@ function BongContent() {
       `🎉 @${username} got it FIRST! Correct — ${active.displayAnswer}.`,
     );
     void queueBongLogic(
-      `${username} just won cannabis trivia with the first correct answer. Hype them up in one short OG sentence — make them feel legendary.`,
+      `${username} just won trivia with the first correct answer. Hype them up in one short OG sentence — make them feel legendary.`,
       username,
       {
         forceVoice: true,
