@@ -180,3 +180,17 @@ export function buildTriviaLeaderRoastPrompt(leaders: TriviaLeaders): string | n
 
   return `Before a new trivia round, shout out and clown the current trivia leaderboard in Twitch chat. ${lines.join('. ')}. Roast them in Elroy OG style — 2 short funny sentences max, playful crusty humor, @ them by username.`;
 }
+
+export function formatTriviaLeaderboardChatMessage(leaders: TriviaLeaders): string {
+  const parts: string[] = [];
+  if (leaders.cannabis) {
+    parts.push(`🌿 ${leaders.cannabis.username} (${leaders.cannabis.score})`);
+  }
+  if (leaders.freaky) {
+    parts.push(`🔥 ${leaders.freaky.username} (${leaders.freaky.score})`);
+  }
+  if (!parts.length) {
+    return '🏆 No trivia wins yet — first correct answer during trivia wins!';
+  }
+  return `🏆 Trivia leaders: ${parts.join(' | ')}`;
+}

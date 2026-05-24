@@ -69,6 +69,7 @@ Ensure your file structure is exact for Next.js routing:
 
 * Mention **Elroy** in chat: get a chat reply (voice too, when enabled and quota allows).
 * **Trivia:** while live, Gemini generates fresh cannabis or freaky sex trivia every 20 minutes (static bank as fallback). Leaderboard scores persist in Redis; Elroy roasts the category leaders before each question.
+* `!leaderboard` (alias: `!lb`): Show current trivia leaders in chat.
 * `!quota`: Show remaining ElevenLabs character quota.
 * `!ding` (alias: `!gong`): Toggle bong rip sound before voice (broadcaster/mod only).
 * `!voiceoff`: Disable voice playback but keep chat replies on (broadcaster/mod only).

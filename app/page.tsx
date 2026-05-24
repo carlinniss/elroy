@@ -6,7 +6,7 @@ import tmi from 'tmi.js';
 import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
 import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
 import { matchesTriviaAnswer, triviaIntroFor, type ElroyTriviaQuestion, type TriviaCategory } from '@/lib/cannabis-trivia';
-import { buildTriviaLeaderRoastPrompt } from '@/lib/trivia-scores';
+import { buildTriviaLeaderRoastPrompt, formatTriviaLeaderboardChatMessage } from '@/lib/trivia-scores';
 
 function BongContent() {
   const [isActive, setIsActive] = useState(false);
@@ -1080,6 +1080,20 @@ function BongContent() {
     clientRef.current?.say(channel, user ? `@${user} volume ${pct}%.` : `volume ${pct}%.`);
   }, []);
 
+  const announceTriviaLeaderboard = useCallback(async (user?: string) => {
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    try {
+      const res = await fetch('/api/trivia/leaders');
+      if (!res.ok) throw new Error('leader lookup failed');
+      const leaders = await res.json();
+      const message = formatTriviaLeaderboardChatMessage(leaders);
+      clientRef.current?.say(channel, user ? `@${user} ${message}` : message);
+    } catch (error) {
+      console.warn('Trivia leaderboard command failed', error);
+      clientRef.current?.say(channel, user ? `@${user} leaderboard unavailable right now.` : 'Leaderboard unavailable right now.');
+    }
+  }, []);
+
   const stopBot = useCallback(async (announceUser?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const client = clientRef.current;
@@ -1155,6 +1169,10 @@ function BongContent() {
       if (m.toLowerCase() === '!quota') {
         if (isFullyMuted()) return;
         return queueBongLogic('', t.username, { isQuota: true });
+      }
+      if (m.toLowerCase() === '!leaderboard' || m.toLowerCase() === '!lb') {
+        if (isFullyMuted()) return;
+        return void announceTriviaLeaderboard(t.username);
       }
       if (m.toLowerCase() === '!ding' || m.toLowerCase() === '!gong') {
         const isModerator = t.mod === true;
