@@ -84,8 +84,7 @@ function BongContent() {
   const triviaPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamLiveRef = useRef(false);
   const lastTriviaAtRef = useRef(0);
-  const recentTriviaIdsRef = useRef<string[]>([]);
-  const recentTriviaQuestionsRef = useRef<string[]>([]);
+  const recentTriviaHistoryRef = useRef<Array<{ category: TriviaCategory; question: string; id: string }>>([]);
   const activeTriviaRef = useRef<{
     category: TriviaCategory;
     question: string;
@@ -397,8 +396,7 @@ function BongContent() {
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
         startedAt: streamStartedAtRef.current,
         messages: sessionChatRef.current,
-        recentTriviaQuestions: recentTriviaQuestionsRef.current,
-        recentTriviaIds: recentTriviaIdsRef.current,
+        recentTriviaHistory: recentTriviaHistoryRef.current,
       }));
     } catch (e) {
       console.warn('Session save failed', e);
@@ -408,8 +406,7 @@ function BongContent() {
   const clearStreamSession = useCallback(() => {
     sessionChatRef.current = [];
     streamStartedAtRef.current = null;
-    recentTriviaQuestionsRef.current = [];
-    recentTriviaIdsRef.current = [];
+    recentTriviaHistoryRef.current = [];
     if (typeof window !== 'undefined') {
       try { localStorage.removeItem(SESSION_STORAGE_KEY); } catch { /* ignore */ }
     }
@@ -423,6 +420,7 @@ function BongContent() {
       const parsed = JSON.parse(raw) as {
         startedAt?: number;
         messages?: Array<{ user: string; text: string; at: number }>;
+        recentTriviaHistory?: Array<{ category: TriviaCategory; question: string; id: string }>;
         recentTriviaQuestions?: string[];
         recentTriviaIds?: string[];
       };
@@ -430,11 +428,14 @@ function BongContent() {
         streamStartedAtRef.current = parsed.startedAt;
         sessionChatRef.current = parsed.messages.slice(0, SESSION_CHAT_MAX);
       }
-      if (Array.isArray(parsed.recentTriviaQuestions)) {
-        recentTriviaQuestionsRef.current = parsed.recentTriviaQuestions.slice(-20);
-      }
-      if (Array.isArray(parsed.recentTriviaIds)) {
-        recentTriviaIdsRef.current = parsed.recentTriviaIds.slice(-12);
+      if (Array.isArray(parsed.recentTriviaHistory)) {
+        recentTriviaHistoryRef.current = parsed.recentTriviaHistory.slice(-24);
+      } else if (Array.isArray(parsed.recentTriviaQuestions) && Array.isArray(parsed.recentTriviaIds)) {
+        recentTriviaHistoryRef.current = parsed.recentTriviaQuestions.slice(-20).map((question, index) => ({
+          category: 'cannabis' as TriviaCategory,
+          question,
+          id: parsed.recentTriviaIds?.[index] ?? `legacy-${index}`,
+        }));
       }
     } catch (e) {
       console.warn('Session restore failed', e);
@@ -808,8 +809,7 @@ function BongContent() {
       sessionChatRef.current = [];
       lastTriviaAtRef.current = Date.now();
       activeTriviaRef.current = null;
-      recentTriviaQuestionsRef.current = [];
-      recentTriviaIdsRef.current = [];
+      recentTriviaHistoryRef.current = [];
       void playElroySfx('go_live');
       void queueBongLogic(buildStreamGreetingPrompt(viewerCount, randomCannabisFact()), undefined, {
         forceVoice: true,
@@ -890,14 +890,16 @@ function BongContent() {
     const category: TriviaCategory = Math.random() < 0.5 ? 'cannabis' : 'freaky';
     let picked: ElroyTriviaQuestion | null = null;
 
+    const categoryHistory = recentTriviaHistoryRef.current.filter((entry) => entry.category === category);
+
     try {
       const generateRes = await fetch('/api/trivia/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           category,
-          recentQuestions: recentTriviaQuestionsRef.current,
-          recentIds: recentTriviaIdsRef.current,
+          recentQuestions: categoryHistory.map((entry) => entry.question),
+          recentIds: categoryHistory.map((entry) => entry.id),
         }),
       });
       if (generateRes.ok) {
@@ -929,8 +931,10 @@ function BongContent() {
       console.warn('Trivia leader shoutout failed', error);
     }
 
-    recentTriviaIdsRef.current = [...recentTriviaIdsRef.current, picked.id].slice(-12);
-    recentTriviaQuestionsRef.current = [...recentTriviaQuestionsRef.current, picked.question].slice(-20);
+    recentTriviaHistoryRef.current = [
+      ...recentTriviaHistoryRef.current,
+      { category: picked.category, question: picked.question, id: picked.id },
+    ].slice(-24);
     persistStreamSession();
     activeTriviaRef.current = {
       category: picked.category,

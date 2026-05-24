@@ -310,28 +310,34 @@ export function matchesTriviaAnswer(message: string, acceptable: string[]): bool
   return false;
 }
 
+export function listAvailableElroyTrivia(
+  recentIds: string[],
+  category: TriviaCategory,
+  recentQuestions: string[] = [],
+): ElroyTriviaQuestion[] {
+  const recentIdSet = new Set(recentIds);
+  const recentQuestionSet = new Set(
+    recentQuestions.map((question) => normalizeTriviaAnswer(question)).filter(Boolean),
+  );
+
+  return ELROY_TRIVIA.filter((item) => {
+    if (item.category !== category) return false;
+    if (recentIdSet.has(item.id)) return false;
+    if (recentQuestionSet.has(normalizeTriviaAnswer(item.question))) return false;
+    return true;
+  });
+}
+
 export function pickRandomElroyTrivia(
   recentIds: string[],
   category?: TriviaCategory,
   recentQuestions: string[] = [],
 ): ElroyTriviaQuestion | null {
-  const recentIdSet = new Set(recentIds);
-  const recentQuestionSet = new Set(
-    recentQuestions.map((question) => normalizeTriviaAnswer(question)).filter(Boolean),
-  );
-  let pool = ELROY_TRIVIA.filter((item) => {
-    if (recentIdSet.has(item.id)) return false;
-    if (recentQuestionSet.has(normalizeTriviaAnswer(item.question))) return false;
-    return true;
-  });
-  if (category) {
-    const categoryPool = pool.filter((item) => item.category === category);
-    if (categoryPool.length > 0) pool = categoryPool;
-  }
-  const choices = pool.length > 0 ? pool : (category
-    ? ELROY_TRIVIA.filter((item) => item.category === category)
-    : ELROY_TRIVIA);
+  if (!category) return null;
+
+  const choices = listAvailableElroyTrivia(recentIds, category, recentQuestions);
   if (!choices.length) return null;
+
   return choices[Math.floor(Math.random() * choices.length)];
 }
 
