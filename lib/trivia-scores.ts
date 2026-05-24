@@ -1,4 +1,4 @@
-import { hasRedisStorage, redisCommand } from '@/lib/redis-rest';
+import { hasRedisStorage, redisCommand, redisPipeline } from '@/lib/redis-rest';
 
 import type { TriviaCategory } from '@/lib/cannabis-trivia';
 
@@ -19,6 +19,9 @@ const SCORE_KEY: Record<TriviaCategory, string> = {
 };
 
 const DISPLAY_NAMES_KEY = 'elroy:trivia:display-names';
+
+/** Leftover from deploy smoke tests — excluded from leaderboards and cleaned from Redis. */
+const SANDBOX_LOGINS = new Set(['testuser']);
 
 type MemoryScores = Record<TriviaCategory, Map<string, { score: number; username: string }>>;
 
@@ -41,7 +44,8 @@ function normalizeLogin(username: string) {
 function getMemoryLeader(category: TriviaCategory): TriviaLeader | null {
   const board = getMemoryScores()[category];
   let best: TriviaLeader | null = null;
-  for (const entry of board.values()) {
+  for (const [login, entry] of board.entries()) {
+    if (SANDBOX_LOGINS.has(login)) continue;
     if (!best || entry.score > best.score) {
       best = { username: entry.username, score: entry.score };
     }
@@ -64,18 +68,49 @@ async function getRedisDisplayName(login: string): Promise<string | null> {
 }
 
 async function getRedisLeader(category: TriviaCategory): Promise<TriviaLeader | null> {
-  const members = await redisCommand(['ZREVRANGE', SCORE_KEY[category], '0', '0']);
+  const members = await redisCommand(['ZREVRANGE', SCORE_KEY[category], '0', '49']);
   if (!Array.isArray(members) || members.length === 0) return null;
 
-  const login = String(members[0]);
-  if (!login) return null;
+  for (const member of members) {
+    const login = String(member);
+    if (!login || SANDBOX_LOGINS.has(login.toLowerCase())) continue;
 
-  const scoreRaw = await redisCommand(['ZSCORE', SCORE_KEY[category], login]);
-  const score = Number.parseFloat(String(scoreRaw ?? ''));
-  if (!Number.isFinite(score) || score <= 0) return null;
+    const scoreRaw = await redisCommand(['ZSCORE', SCORE_KEY[category], login]);
+    const score = Number.parseFloat(String(scoreRaw ?? ''));
+    if (!Number.isFinite(score) || score <= 0) continue;
 
-  const displayName = await getRedisDisplayName(login);
-  return { username: displayName ?? login, score };
+    const displayName = await getRedisDisplayName(login);
+    return { username: displayName ?? login, score };
+  }
+
+  return null;
+}
+
+export async function removeTriviaPlayer(username: string): Promise<boolean> {
+  const login = normalizeLogin(username);
+  if (!login) return false;
+
+  if (hasRedisStorage()) {
+    try {
+      await redisPipeline([
+        ['ZREM', SCORE_KEY.cannabis, login],
+        ['ZREM', SCORE_KEY.freaky, login],
+        ['HDEL', DISPLAY_NAMES_KEY, login],
+      ]);
+      return true;
+    } catch (error) {
+      console.error('Redis trivia score delete failed', error);
+      return false;
+    }
+  }
+
+  getMemoryScores().cannabis.delete(login);
+  getMemoryScores().freaky.delete(login);
+  return true;
+}
+
+async function cleanupSandboxScores() {
+  await Promise.all([...SANDBOX_LOGINS].map((login) => removeTriviaPlayer(login)));
 }
 
 export function getTriviaScoreStorageMode(): 'redis' | 'memory' {
@@ -111,6 +146,7 @@ export async function getTriviaLeaders(): Promise<TriviaLeaders> {
 
   if (hasRedisStorage()) {
     try {
+      await cleanupSandboxScores();
       const [cannabis, freaky] = await Promise.all([
         getRedisLeader('cannabis'),
         getRedisLeader('freaky'),
