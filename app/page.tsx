@@ -7,9 +7,13 @@ import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice
 import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
 import { matchesTriviaAnswer, triviaIntroFor, type ElroyTriviaQuestion, type TriviaCategory } from '@/lib/cannabis-trivia';
 import { buildTriviaLeaderRoastPrompt, formatTriviaLeaderboardChatMessage } from '@/lib/trivia-scores';
+import { getBotInstanceId } from '@/lib/bot-instance';
+
+const BOT_SESSION_HEARTBEAT_MS = 8_000;
 
 function BongContent() {
   const [isActive, setIsActive] = useState(false);
+  const [botBlockReason, setBotBlockReason] = useState<string | null>(null);
   const [log, setLog] = useState<any[]>([]);
   const [isDingOn, setIsDingOn] = useState(true);
   const [isVoiceOn, setIsVoiceOn] = useState(true);
@@ -18,6 +22,9 @@ function BongContent() {
 
   const DEFAULT_VOLUME = 0.85;
   const clientRef = useRef<tmi.Client | null>(null);
+  const botInstanceIdRef = useRef('');
+  const botSessionHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isActiveRef = useRef(false);
   const dingEnabledRef = useRef(true);
   const voiceEnabledRef = useRef(true);
   const volumeRef = useRef(DEFAULT_VOLUME);
@@ -1118,7 +1125,56 @@ function BongContent() {
     }
   }, []);
 
-  const stopBot = useCallback(async (announceUser?: string) => {
+  const stopBotSessionHeartbeat = useCallback(() => {
+    if (botSessionHeartbeatRef.current) {
+      clearInterval(botSessionHeartbeatRef.current);
+      botSessionHeartbeatRef.current = null;
+    }
+  }, []);
+
+  const releaseBotSessionLock = useCallback(async () => {
+    stopBotSessionHeartbeat();
+    const instanceId = botInstanceIdRef.current || getBotInstanceId();
+    if (!instanceId) return;
+    try {
+      await fetch('/api/bot/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'release', instanceId }),
+        keepalive: true,
+      });
+    } catch (error) {
+      console.warn('Bot session release failed', error);
+    }
+  }, [stopBotSessionHeartbeat]);
+
+  const claimBotSessionLock = useCallback(async () => {
+    const instanceId = getBotInstanceId();
+    botInstanceIdRef.current = instanceId;
+    try {
+      const res = await fetch('/api/bot/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'claim', instanceId }),
+      });
+      if (res.status === 409) {
+        setBotBlockReason('Another Elroy is already running. Close the other browser tab or OBS browser source.');
+        return false;
+      }
+      if (!res.ok) {
+        setBotBlockReason('Could not start Elroy session. Try again in a few seconds.');
+        return false;
+      }
+      setBotBlockReason(null);
+      return true;
+    } catch (error) {
+      console.warn('Bot session claim failed', error);
+      setBotBlockReason('Could not reach Elroy session service.');
+      return false;
+    }
+  }, []);
+
+  const disconnectBotClient = useCallback(async (announceUser?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const client = clientRef.current;
     if (client) {
@@ -1137,11 +1193,47 @@ function BongContent() {
     stopQuotaPolling();
     stopStreamMonitoring();
     stopMuteCountdown();
+    isActiveRef.current = false;
     setIsActive(false);
   }, [stopFollowerPolling, stopPowerupRedemptionPolling, stopQuotaPolling, stopStreamMonitoring, stopMuteCountdown]);
 
+  const stopBot = useCallback(async (announceUser?: string) => {
+    await releaseBotSessionLock();
+    await disconnectBotClient(announceUser);
+  }, [disconnectBotClient, releaseBotSessionLock]);
+
+  const stopBotForSessionLoss = useCallback(async () => {
+    stopBotSessionHeartbeat();
+    setBotBlockReason('Another Elroy instance took over. Close duplicate tabs or OBS sources.');
+    await disconnectBotClient();
+  }, [disconnectBotClient, stopBotSessionHeartbeat]);
+
+  const startBotSessionHeartbeat = useCallback(() => {
+    stopBotSessionHeartbeat();
+    botSessionHeartbeatRef.current = setInterval(() => {
+      void (async () => {
+        const instanceId = botInstanceIdRef.current || getBotInstanceId();
+        if (!instanceId || !isActiveRef.current) return;
+        try {
+          const res = await fetch('/api/bot/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'heartbeat', instanceId }),
+          });
+          if (res.status === 409) {
+            await stopBotForSessionLoss();
+          }
+        } catch (error) {
+          console.warn('Bot session heartbeat failed', error);
+        }
+      })();
+    }, BOT_SESSION_HEARTBEAT_MS);
+  }, [stopBotForSessionLoss, stopBotSessionHeartbeat]);
+
   const startBot = async () => {
     if (isActive) return;
+    if (!(await claimBotSessionLock())) return;
+
     const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
     chatMessageCountRef.current = 0;
@@ -1281,21 +1373,42 @@ function BongContent() {
       celebrate('bits', username, detail);
     });
 
-    await client.connect();
-    clientRef.current = client;
-    setIsActive(true);
-    client.say(chan, `Elroy initiated. ${randomCannabisFact()}`);
-    restoreStreamSession();
-    const foundPowerUp = await resolveShutElroyPowerUpId();
-    if (foundPowerUp) {
-      void ensureEventSubSubscription();
-      startPowerupRedemptionPolling();
+    try {
+      await client.connect();
+      clientRef.current = client;
+      isActiveRef.current = true;
+      setIsActive(true);
+      startBotSessionHeartbeat();
+      client.say(chan, `Elroy initiated. ${randomCannabisFact()}`);
+      restoreStreamSession();
+      const foundPowerUp = await resolveShutElroyPowerUpId();
+      if (foundPowerUp) {
+        void ensureEventSubSubscription();
+        startPowerupRedemptionPolling();
+      }
+      startFollowerPolling();
+      startQuotaPolling();
+      warmupElroySfx();
+      startStreamMonitoring();
+    } catch (error) {
+      console.error('Elroy failed to connect', error);
+      await releaseBotSessionLock();
+      setBotBlockReason('Elroy failed to connect to Twitch. Try again.');
     }
-    startFollowerPolling();
-    startQuotaPolling();
-    warmupElroySfx();
-    startStreamMonitoring();
   };
+
+  useEffect(() => {
+    const onLeave = () => {
+      const instanceId = botInstanceIdRef.current || getBotInstanceId();
+      if (!instanceId || !isActiveRef.current) return;
+      const payload = JSON.stringify({ action: 'release', instanceId });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon('/api/bot/session', new Blob([payload], { type: 'application/json' }));
+      }
+    };
+    window.addEventListener('pagehide', onLeave);
+    return () => window.removeEventListener('pagehide', onLeave);
+  }, []);
 
   useEffect(() => { if (searchParams.get('autostart') === 'true') startBot(); }, [searchParams]);
   return (
@@ -1308,7 +1421,14 @@ function BongContent() {
       )}
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
         {!isActive ? (
-          <button onClick={startBot} style={{ padding: '40px 80px', background: '#9146FF', borderRadius: '20px', fontSize: '40px', fontWeight: 'bold', color: 'white', cursor: 'pointer' }}>IGNITE BONG</button>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
+            <button onClick={startBot} style={{ padding: '40px 80px', background: '#9146FF', borderRadius: '20px', fontSize: '40px', fontWeight: 'bold', color: 'white', cursor: 'pointer' }}>IGNITE BONG</button>
+            {botBlockReason ? (
+              <div style={{ maxWidth: '520px', textAlign: 'center', color: '#FFB4B4', fontSize: '18px', lineHeight: 1.4 }}>
+                {botBlockReason}
+              </div>
+            ) : null}
+          </div>
         ) : (
           <div style={{ width: '800px', display: 'flex', flexDirection: 'column-reverse', gap: '20px' }}>
             {log.map((e, i) => <div key={i} style={{ background: 'rgba(0,0,0,0.9)', padding: '30px', borderRadius: '20px', borderLeft: '10px solid #9146FF', fontSize: '32px' }}>{e.text}</div>)}
