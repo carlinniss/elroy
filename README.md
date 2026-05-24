@@ -68,7 +68,7 @@ Ensure your file structure is exact for Next.js routing:
 ### Useful Chat Commands
 
 * Mention **Elroy** in chat: get a chat reply (voice too, when enabled and quota allows).
-* **Trivia:** while live, Elroy asks cannabis or freaky sex trivia every 20 minutes. He counts down the remaining time every minute; first correct answer wins a shoutout + La Cucaracha fanfare.
+* **Trivia:** while live, Elroy asks cannabis or freaky sex trivia every 20 minutes. Leaderboard scores persist in Redis; he roasts the cannabis and freaky leaders before each question. First correct answer wins a shoutout + La Cucaracha fanfare.
 * `!quota`: Show remaining ElevenLabs character quota.
 * `!ding` (alias: `!gong`): Toggle bong rip sound before voice (broadcaster/mod only).
 * `!voiceoff`: Disable voice playback but keep chat replies on (broadcaster/mod only).

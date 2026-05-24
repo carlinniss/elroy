@@ -6,6 +6,7 @@ import tmi from 'tmi.js';
 import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
 import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
 import { matchesTriviaAnswer, pickRandomElroyTrivia, triviaIntroFor } from '@/lib/cannabis-trivia';
+import { buildTriviaLeaderRoastPrompt, type TriviaCategory } from '@/lib/trivia-scores';
 
 function BongContent() {
   const [isActive, setIsActive] = useState(false);
@@ -85,6 +86,7 @@ function BongContent() {
   const lastTriviaAtRef = useRef(0);
   const recentTriviaIdsRef = useRef<string[]>([]);
   const activeTriviaRef = useRef<{
+    category: TriviaCategory;
     question: string;
     answers: string[];
     displayAnswer: string;
@@ -863,15 +865,33 @@ function BongContent() {
     );
   }, []);
 
-  const askCannabisTrivia = useCallback(() => {
+  const askCannabisTrivia = useCallback(async () => {
     if (isFullyMuted() || !streamLiveRef.current) return;
     if (activeTriviaRef.current && !activeTriviaRef.current.answered) return;
 
     const picked = pickRandomElroyTrivia(recentTriviaIdsRef.current);
     if (!picked) return;
 
+    try {
+      const leadersRes = await fetch('/api/trivia/leaders');
+      if (leadersRes.ok) {
+        const leaders = await leadersRes.json();
+        const roastPrompt = buildTriviaLeaderRoastPrompt(leaders);
+        if (roastPrompt) {
+          await processBongLogic(roastPrompt, undefined, {
+            chatOnly: true,
+            bypassChatCooldown: true,
+            skipDing: true,
+          });
+        }
+      }
+    } catch (error) {
+      console.warn('Trivia leader shoutout failed', error);
+    }
+
     recentTriviaIdsRef.current = [...recentTriviaIdsRef.current, picked.id].slice(-8);
     activeTriviaRef.current = {
+      category: picked.category,
       question: picked.question,
       answers: picked.answers,
       displayAnswer: picked.displayAnswer,
@@ -886,14 +906,14 @@ function BongContent() {
       channel,
       `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer wins!`,
     );
-  }, []);
+  }, [processBongLogic]);
 
   const runTriviaCycle = useCallback(() => {
     if (!streamLiveRef.current || isFullyMuted()) return;
     announceTriviaCountdown();
     expireTriviaIfNeeded();
     if (Date.now() - lastTriviaAtRef.current >= TRIVIA_INTERVAL_MS) {
-      askCannabisTrivia();
+      void askCannabisTrivia();
     }
   }, [announceTriviaCountdown, askCannabisTrivia, expireTriviaIfNeeded]);
 
@@ -903,6 +923,14 @@ function BongContent() {
 
     active.answered = true;
     lastTriviaAtRef.current = Date.now();
+
+    void fetch('/api/trivia/win', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, category: active.category }),
+    }).catch((error) => {
+      console.warn('Trivia score update failed', error);
+    });
 
     void playElroySfx('sub_fanfare');
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
