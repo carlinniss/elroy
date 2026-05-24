@@ -120,6 +120,7 @@ function BongContent() {
     answered: boolean;
     lastCountdownMinute: number;
   } | null>(null);
+  const triviaAskInFlightRef = useRef(false);
   const sessionChatRef = useRef<Array<{ user: string; text: string; at: number }>>([]);
   const streamStartedAtRef = useRef<number | null>(null);
   const shutElroyPowerUpIdRef = useRef<string | null>(null);
@@ -982,74 +983,88 @@ function BongContent() {
   const askCannabisTrivia = useCallback(async () => {
     if (isFullyMuted() || !streamLiveRef.current) return;
     if (activeTriviaRef.current && !activeTriviaRef.current.answered) return;
+    if (triviaAskInFlightRef.current) return;
 
-    const category: TriviaCategory = Math.random() < 0.5 ? 'cannabis' : 'freaky';
-    let picked: ElroyTriviaQuestion | null = null;
-
-    const categoryHistory = recentTriviaHistoryRef.current.filter((entry) => entry.category === category);
-
-    try {
-      const generateRes = await fetch('/api/trivia/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          category,
-          recentQuestions: categoryHistory.map((entry) => entry.question),
-          recentIds: categoryHistory.map((entry) => entry.id),
-        }),
-      });
-      if (generateRes.ok) {
-        const data = await generateRes.json();
-        if (data.question?.question && Array.isArray(data.question.answers)) {
-          picked = data.question as ElroyTriviaQuestion;
-        }
-      } else {
-        console.warn('Trivia generation unavailable', generateRes.status);
-      }
-    } catch (error) {
-      console.warn('Gemini trivia generation failed', error);
-    }
-
-    if (!picked) return;
-
-    try {
-      const leadersRes = await fetch('/api/trivia/leaders');
-      if (leadersRes.ok) {
-        const leaders = await leadersRes.json();
-        const roastPrompt = buildTriviaLeaderRoastPrompt(leaders);
-        if (roastPrompt) {
-          await processBongLogic(roastPrompt, undefined, {
-            chatOnly: !ambientVoiceAllowedRef.current,
-            bypassChatCooldown: true,
-            skipDing: true,
-          });
-        }
-      }
-    } catch (error) {
-      console.warn('Trivia leader shoutout failed', error);
-    }
-
-    recentTriviaHistoryRef.current = [
-      ...recentTriviaHistoryRef.current,
-      { category: picked.category, question: picked.question, id: picked.id },
-    ].slice(-40);
-    persistStreamSession();
-    activeTriviaRef.current = {
-      category: picked.category,
-      question: picked.question,
-      answers: picked.answers,
-      displayAnswer: picked.displayAnswer,
-      askedAt: Date.now(),
-      answered: false,
-      lastCountdownMinute: 0,
-    };
+    triviaAskInFlightRef.current = true;
     lastTriviaAtRef.current = Date.now();
 
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-    clientRef.current?.say(
-      channel,
-      `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer wins!`,
-    );
+    try {
+      const category: TriviaCategory = Math.random() < 0.5 ? 'cannabis' : 'freaky';
+      let picked: ElroyTriviaQuestion | null = null;
+
+      const categoryHistory = recentTriviaHistoryRef.current.filter((entry) => entry.category === category);
+
+      try {
+        const generateRes = await fetch('/api/trivia/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            category,
+            recentQuestions: categoryHistory.map((entry) => entry.question),
+            recentIds: categoryHistory.map((entry) => entry.id),
+          }),
+        });
+        if (generateRes.ok) {
+          const data = await generateRes.json();
+          if (data.question?.question && Array.isArray(data.question.answers)) {
+            picked = data.question as ElroyTriviaQuestion;
+          }
+        } else {
+          console.warn('Trivia generation unavailable', generateRes.status);
+        }
+      } catch (error) {
+        console.warn('Gemini trivia generation failed', error);
+      }
+
+      if (!picked) {
+        lastTriviaAtRef.current = Date.now() - TRIVIA_INTERVAL_MS + 2 * 60 * 1000;
+        return;
+      }
+
+      if (activeTriviaRef.current && !activeTriviaRef.current.answered) return;
+
+      try {
+        const leadersRes = await fetch('/api/trivia/leaders');
+        if (leadersRes.ok) {
+          const leaders = await leadersRes.json();
+          const roastPrompt = buildTriviaLeaderRoastPrompt(leaders);
+          if (roastPrompt) {
+            await processBongLogic(roastPrompt, undefined, {
+              chatOnly: !ambientVoiceAllowedRef.current,
+              bypassChatCooldown: true,
+              skipDing: true,
+            });
+          }
+        }
+      } catch (error) {
+        console.warn('Trivia leader shoutout failed', error);
+      }
+
+      if (activeTriviaRef.current && !activeTriviaRef.current.answered) return;
+
+      recentTriviaHistoryRef.current = [
+        ...recentTriviaHistoryRef.current,
+        { category: picked.category, question: picked.question, id: picked.id },
+      ].slice(-40);
+      persistStreamSession();
+      activeTriviaRef.current = {
+        category: picked.category,
+        question: picked.question,
+        answers: picked.answers,
+        displayAnswer: picked.displayAnswer,
+        askedAt: Date.now(),
+        answered: false,
+        lastCountdownMinute: 0,
+      };
+
+      const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+      clientRef.current?.say(
+        channel,
+        `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer wins!`,
+      );
+    } finally {
+      triviaAskInFlightRef.current = false;
+    }
   }, [persistStreamSession, processBongLogic]);
 
   const runTriviaCycle = useCallback(() => {
@@ -1261,6 +1276,7 @@ function BongContent() {
       blackjackPollRef.current = null;
     }
     activeTriviaRef.current = null;
+    triviaAskInFlightRef.current = false;
     streamLiveRef.current = false;
   }, []);
 
