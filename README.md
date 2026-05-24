@@ -79,6 +79,22 @@ Ensure your file structure is exact for Next.js routing:
 * `!voicestatus`: Report whether voice playback is currently on or off (broadcaster/mod only).
 * `!elroyoff`: Disconnect Elroy from chat entirely (broadcaster/mod only).
 
+## 🎛️ Live prompt control (broadcaster)
+
+Steer Elroy's spontaneous content during a stream without redeploying:
+
+1. Set `ELROY_CONTROL_SECRET` in Vercel (any long random string).
+2. Open **`/control`** on your Elroy site (e.g. `https://elroy-zeta.vercel.app/control`) on your phone or a second monitor.
+3. Paste the secret once — it stays in that browser tab for the session.
+
+| Mode | What it does |
+| --- | --- |
+| **Sticky** | Stays active until removed. Elroy weaves it into banter, check-ins, mentions, etc. |
+| **Next response** | Injected once on Elroy's very next AI line, then cleared. |
+| **Push now** | Elroy responds immediately (within ~12s). Optional chat-only or force-voice. |
+
+The overlay polls Redis every ~12 seconds. Keep the OBS browser source running so push/next directives take effect.
+
 ## 🔊 Sound Effects
 
 Elroy plays these sounds automatically during stream events. Most are generated once via ElevenLabs and cached; `sub_fanfare` is a bundled MP3.

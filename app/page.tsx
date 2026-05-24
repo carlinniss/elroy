@@ -9,6 +9,7 @@ import { matchesTriviaAnswer, triviaIntroFor, type ElroyTriviaQuestion, type Tri
 import { buildTriviaLeaderRoastPrompt, formatTriviaLeaderboardChatMessage } from '@/lib/trivia-scores';
 import { getBotInstanceId } from '@/lib/bot-instance';
 import { getBuildLabel } from '@/lib/build-version';
+import { formatDirectiveInjection } from '@/lib/live-directives';
 import type { UserMemoryEvent } from '@/lib/user-memory';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
@@ -86,6 +87,7 @@ function BongContent() {
   const SESSION_STORAGE_KEY = 'elroy-stream-session';
   const AUTO_RESUME_STORAGE_KEY = 'elroy-auto-resume';
   const VERSION_POLL_MS = 90_000;
+  const DIRECTIVE_POLL_MS = 12_000;
 
   const CANNABIS_FACTS = [
     'The word "canvas" comes from cannabis — sailcloth was historically made from hemp.',
@@ -146,6 +148,9 @@ function BongContent() {
   const lastQuotaTierRef = useRef<string | null>(null);
   const quotaPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const versionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const directivePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const liveDirectivesRef = useRef<{ sticky: string[]; next: string[] }>({ sticky: [], next: [] });
+  const processedPushIdsRef = useRef<Set<string>>(new Set());
   const pendingDeployReloadRef = useRef(false);
   const bundledBuildIdRef = useRef(process.env.NEXT_PUBLIC_BUILD_ID || 'dev');
   const sfxUrlCacheRef = useRef<Map<string, string>>(new Map());
@@ -807,6 +812,11 @@ function BongContent() {
         && (opts.forceVoice || voiceEnabledRef.current),
       );
 
+      const sticky = liveDirectivesRef.current.sticky;
+      const next = liveDirectivesRef.current.next;
+      const directiveBlock = formatDirectiveInjection(sticky, next);
+      const hadNextDirectives = next.length > 0;
+
       const personalizationRule = user
         ? `- Personalize the response directly for ${user} by name (say their username naturally in the message).`
         : `- Keep it general for the whole chat, not aimed at one person.`;
@@ -817,9 +827,19 @@ function BongContent() {
 - Add extra OG personality: a setup line, the main take, and a closing quip or call-out when it fits.
 - Stay under 480 characters (Twitch chat limit).
 - If the task above asks for something short, ignore that — expand for chat-only.`;
-      const fullPrompt = `${input}\n\nResponse requirements:\n${lengthRule}\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
+      const fullPrompt = `${input}${directiveBlock}\n\nResponse requirements:\n${lengthRule}\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
       const res = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: fullPrompt }) });
       const data = await res.json();
+      if (hadNextDirectives && !opts.isQuota) {
+        liveDirectivesRef.current = { ...liveDirectivesRef.current, next: [] };
+        void fetch('/api/directives', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'consume-next' }),
+        }).catch((error) => {
+          console.warn('Directive consume failed', error);
+        });
+      }
       setLog(p => [{ text: data.text }, ...p].slice(0, 5));
       clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, user ? `@${user} ${data.text}` : data.text);
       lastElroyChatRef.current = Date.now();
@@ -858,6 +878,62 @@ function BongContent() {
       .catch((e) => { console.error(e); });
     return responseQueueRef.current;
   }, [processBongLogic]);
+
+  const pollLiveDirectives = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/directives?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json() as {
+        sticky?: Array<{ id: string; text: string }>;
+        next?: Array<{ id: string; text: string }>;
+        push?: Array<{ id: string; text: string; chatOnly?: boolean; forceVoice?: boolean }>;
+      };
+
+      liveDirectivesRef.current = {
+        sticky: (data.sticky ?? []).map((item) => item.text),
+        next: (data.next ?? []).map((item) => item.text),
+      };
+
+      for (const item of data.push ?? []) {
+        if (processedPushIdsRef.current.has(item.id)) continue;
+        processedPushIdsRef.current.add(item.id);
+
+        void queueBongLogic(
+          `Broadcaster pushed a live prompt — respond in your OG voice now:\n${item.text}`,
+          undefined,
+          {
+            chatOnly: item.chatOnly,
+            forceVoice: item.forceVoice,
+            bypassChatCooldown: true,
+            bypassVoiceCooldown: Boolean(item.forceVoice),
+          },
+        );
+
+        void fetch('/api/directives', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'ack-push', id: item.id }),
+        }).catch((error) => {
+          console.warn('Push ack failed', error);
+        });
+      }
+    } catch (error) {
+      console.warn('Directive poll failed', error);
+    }
+  }, [queueBongLogic]);
+
+  useEffect(() => {
+    void pollLiveDirectives();
+    directivePollRef.current = setInterval(() => {
+      void pollLiveDirectives();
+    }, DIRECTIVE_POLL_MS);
+    return () => {
+      if (directivePollRef.current) {
+        clearInterval(directivePollRef.current);
+        directivePollRef.current = null;
+      }
+    };
+  }, [pollLiveDirectives]);
 
   const enterSilence = useCallback(() => {
     silencedUntilRef.current = Date.now() + SHUT_UP_DURATION_MS;
