@@ -76,6 +76,8 @@ function BongContent() {
   const ambientVoiceAllowedRef = useRef(false);
   const SESSION_CHAT_MAX = 600;
   const SESSION_STORAGE_KEY = 'elroy-stream-session';
+  const AUTO_RESUME_STORAGE_KEY = 'elroy-auto-resume';
+  const VERSION_POLL_MS = 90_000;
 
   const CANNABIS_FACTS = [
     'The word "canvas" comes from cannabis — sailcloth was historically made from hemp.',
@@ -134,6 +136,9 @@ function BongContent() {
   const elevenLabsRemainingRef = useRef<number | null>(null);
   const lastQuotaTierRef = useRef<string | null>(null);
   const quotaPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const versionPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pendingDeployReloadRef = useRef(false);
+  const bundledBuildIdRef = useRef(process.env.NEXT_PUBLIC_BUILD_ID || 'dev');
   const sfxUrlCacheRef = useRef<Map<string, string>>(new Map());
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
@@ -456,6 +461,71 @@ function BongContent() {
     }
   }, []);
 
+  const canSafelyReloadForDeploy = useCallback(() => {
+    if (isSpeakingRef.current) return false;
+    const trivia = activeTriviaRef.current;
+    if (trivia && !trivia.answered) return false;
+    return true;
+  }, []);
+
+  const tryApplyDeployUpdate = useCallback(async () => {
+    if (!pendingDeployReloadRef.current) return;
+
+    if (isActiveRef.current && !canSafelyReloadForDeploy()) {
+      return;
+    }
+
+    pendingDeployReloadRef.current = false;
+    persistStreamSession();
+
+    if (isActiveRef.current) {
+      localStorage.setItem(AUTO_RESUME_STORAGE_KEY, '1');
+      const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+      const client = clientRef.current;
+      if (client) {
+        try {
+          await client.say(channel, '🔄 Elroy updating — back in a few seconds.');
+          await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    window.location.reload();
+  }, [canSafelyReloadForDeploy, persistStreamSession]);
+
+  const pollDeployVersion = useCallback(async () => {
+    try {
+      const res = await fetch('/api/version', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json() as { buildId?: string };
+      const remoteBuildId = typeof data.buildId === 'string' ? data.buildId : '';
+      if (!remoteBuildId || remoteBuildId === bundledBuildIdRef.current) return;
+
+      console.info('Elroy deploy detected:', bundledBuildIdRef.current, '->', remoteBuildId);
+      pendingDeployReloadRef.current = true;
+      await tryApplyDeployUpdate();
+    } catch (error) {
+      console.warn('Deploy version poll failed', error);
+    }
+  }, [tryApplyDeployUpdate]);
+
+  const startVersionPolling = useCallback(() => {
+    if (versionPollRef.current) return;
+    void pollDeployVersion();
+    versionPollRef.current = setInterval(() => {
+      void pollDeployVersion();
+    }, VERSION_POLL_MS);
+  }, [pollDeployVersion]);
+
+  const stopVersionPolling = useCallback(() => {
+    if (versionPollRef.current) {
+      clearInterval(versionPollRef.current);
+      versionPollRef.current = null;
+    }
+  }, []);
+
   const rememberChatLine = useCallback((user: string, text: string) => {
     const normalized = text.trim();
     if (!normalized) return;
@@ -535,6 +605,10 @@ function BongContent() {
   useEffect(() => { runDiagnostics(); }, [runDiagnostics]);
   useEffect(() => { dingEnabledRef.current = isDingOn; }, [isDingOn]);
   useEffect(() => { voiceEnabledRef.current = isVoiceOn; }, [isVoiceOn]);
+  useEffect(() => {
+    startVersionPolling();
+    return () => stopVersionPolling();
+  }, [startVersionPolling, stopVersionPolling]);
 
   const speakNow = async (text: string) => {
     try {
@@ -1342,6 +1416,11 @@ function BongContent() {
   }, [stopFollowerPolling, stopPowerupRedemptionPolling, stopQuotaPolling, stopStreamMonitoring, stopMuteCountdown]);
 
   const stopBot = useCallback(async (announceUser?: string) => {
+    try {
+      localStorage.removeItem(AUTO_RESUME_STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
     await releaseBotSessionLock();
     await disconnectBotClient(announceUser);
   }, [disconnectBotClient, releaseBotSessionLock]);
@@ -1554,6 +1633,11 @@ function BongContent() {
       clientRef.current = client;
       isActiveRef.current = true;
       setIsActive(true);
+      try {
+        localStorage.setItem(AUTO_RESUME_STORAGE_KEY, '1');
+      } catch {
+        /* ignore */
+      }
       startBotSessionHeartbeat();
       client.say(chan, `Elroy initiated. ${randomCannabisFact()}`);
       restoreStreamSession();
@@ -1591,7 +1675,14 @@ function BongContent() {
     return () => window.removeEventListener('pagehide', onLeave);
   }, []);
 
-  useEffect(() => { if (searchParams.get('autostart') === 'true') startBot(); }, [searchParams]);
+  useEffect(() => {
+    const shouldAutoStart =
+      searchParams.get('autostart') === 'true'
+      || (typeof window !== 'undefined' && localStorage.getItem(AUTO_RESUME_STORAGE_KEY) === '1');
+    if (shouldAutoStart) {
+      void startBot();
+    }
+  }, [searchParams]);
   return (
     <div style={{ height: '100vh', padding: '60px', color: 'white', backgroundColor: 'transparent', fontFamily: 'sans-serif' }}>
       {!isActive && (
