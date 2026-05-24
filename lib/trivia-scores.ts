@@ -109,10 +109,6 @@ export async function removeTriviaPlayer(username: string): Promise<boolean> {
   return true;
 }
 
-async function cleanupSandboxScores() {
-  await Promise.all([...SANDBOX_LOGINS].map((login) => removeTriviaPlayer(login)));
-}
-
 export function getTriviaScoreStorageMode(): 'redis' | 'memory' {
   return hasRedisStorage() ? 'redis' : 'memory';
 }
@@ -146,7 +142,6 @@ export async function getTriviaLeaders(): Promise<TriviaLeaders> {
 
   if (hasRedisStorage()) {
     try {
-      await cleanupSandboxScores();
       const [cannabis, freaky] = await Promise.all([
         getRedisLeader('cannabis'),
         getRedisLeader('freaky'),
