@@ -84,8 +84,8 @@ Ensure your file structure is exact for Next.js routing:
 Steer Elroy's spontaneous content during a stream without redeploying:
 
 1. Set `ELROY_CONTROL_SECRET` in Vercel (any long random string).
-2. Open **`/control`** on your Elroy site (e.g. `https://elroy-zeta.vercel.app/control`) on your phone or a second monitor.
-3. Paste the secret once — it stays in that browser tab for the session.
+2. Open **`/control/your-secret`** on your Elroy site (e.g. `https://elroy-zeta.vercel.app/control/dtl` if your secret is `dtl`) on your phone or a second monitor.
+3. The secret in the URL must match `ELROY_CONTROL_SECRET` in Vercel — the page auto-loads it.
 
 | Mode | What it does |
 | --- | --- |
