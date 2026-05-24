@@ -1,27 +1,59 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { hasRedisStorage, redisCommand } from '@/lib/redis-rest';
+import { getElroySfx } from '@/lib/elroy-sfx';
 
 const SFX_DIR = path.join(process.cwd(), 'public', 'sounds', 'elroy');
 const redisKey = (id: string) => `elroy:sfx:v2:${id}`;
+const BUNDLED_EXTENSIONS = ['.wav', '.mp3', '.ogg'] as const;
 
 export type SfxCacheSource = 'file' | 'redis' | 'generated';
 
-export async function readCachedSfx(id: string): Promise<Buffer | null> {
-  try {
-    return await fs.readFile(path.join(SFX_DIR, `${id}.mp3`));
-  } catch {
+export type CachedSfx = {
+  audio: Buffer;
+  contentType: string;
+  source: SfxCacheSource;
+};
+
+function contentTypeForExtension(ext: string): string {
+  if (ext === '.wav') return 'audio/wav';
+  if (ext === '.ogg') return 'audio/ogg';
+  return 'audio/mpeg';
+}
+
+async function readBundledSfx(id: string): Promise<CachedSfx | null> {
+  for (const ext of BUNDLED_EXTENSIONS) {
+    try {
+      const audio = await fs.readFile(path.join(SFX_DIR, `${id}${ext}`));
+      return { audio, contentType: contentTypeForExtension(ext), source: 'file' };
+    } catch {
+    }
+  }
+  return null;
+}
+
+export async function readCachedSfx(id: string): Promise<CachedSfx | null> {
+  const definition = getElroySfx(id);
+  if (definition?.bundled) {
+    return readBundledSfx(id);
   }
 
-  if (!hasRedisStorage()) return null;
+  const bundled = await readBundledSfx(id);
+  if (bundled) return bundled;
 
-  try {
-    const encoded = await redisCommand(['GET', redisKey(id)]);
-    if (typeof encoded === 'string' && encoded.length > 0) {
-      return Buffer.from(encoded, 'base64');
+  if (hasRedisStorage()) {
+    try {
+      const encoded = await redisCommand(['GET', redisKey(id)]);
+      if (typeof encoded === 'string' && encoded.length > 0) {
+        return {
+          audio: Buffer.from(encoded, 'base64'),
+          contentType: 'audio/mpeg',
+          source: 'redis',
+        };
+      }
+    } catch (error) {
+      console.warn(`SFX redis read failed (${id})`, error);
     }
-  } catch (error) {
-    console.warn(`SFX redis read failed (${id})`, error);
   }
 
   return null;

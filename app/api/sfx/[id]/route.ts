@@ -14,23 +14,29 @@ export async function GET(
     return new Response('Unknown sound effect', { status: 404 });
   }
 
-  let audio = await readCachedSfx(id);
-  let source = audio ? 'cache' : 'generated';
+  let cached = await readCachedSfx(id);
+  let source = cached?.source ?? 'generated';
 
-  if (!audio) {
+  if (!cached && !definition.bundled) {
     try {
-      audio = await generateElevenLabsSfx(definition);
+      const audio = await generateElevenLabsSfx(definition);
       const savedTo = await writeCachedSfx(id, audio);
       console.info(`Generated Elroy SFX "${id}"`, { savedTo });
+      cached = { audio, contentType: 'audio/mpeg', source: 'generated' };
+      source = 'generated';
     } catch (error) {
       const message = error instanceof Error ? error.message : 'SFX generation failed';
       return Response.json({ error: message }, { status: 500 });
     }
   }
 
-  return new Response(new Uint8Array(audio), {
+  if (!cached) {
+    return new Response('Sound effect unavailable', { status: 404 });
+  }
+
+  return new Response(new Uint8Array(cached.audio), {
     headers: {
-      'Content-Type': 'audio/mpeg',
+      'Content-Type': cached.contentType,
       'Cache-Control': 'public, max-age=31536000, immutable',
       'X-Elroy-Sfx-Source': source,
     },

@@ -3,6 +3,8 @@ export type ElroySfxDefinition = {
   prompt: string;
   duration_seconds: number;
   prompt_influence?: number;
+  /** Bundled file in public/sounds/elroy — skips ElevenLabs generation. */
+  bundled?: boolean;
 };
 
 export const ELROY_SFX_CATALOG: Record<string, ElroySfxDefinition> = {
@@ -14,10 +16,9 @@ export const ELROY_SFX_CATALOG: Record<string, ElroySfxDefinition> = {
   },
   sub_fanfare: {
     id: 'sub_fanfare',
-    prompt:
-      'Old Mexican car horn honking the melody of La Cucaracha, vintage rusty automobile horn, festive celebratory sub alert, 3 seconds',
+    prompt: 'Bundled La Cucaracha car horn melody',
     duration_seconds: 3,
-    prompt_influence: 0.8,
+    bundled: true,
   },
   bits_kaching: {
     id: 'bits_kaching',
