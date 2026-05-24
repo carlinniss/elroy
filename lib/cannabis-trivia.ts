@@ -313,9 +313,17 @@ export function matchesTriviaAnswer(message: string, acceptable: string[]): bool
 export function pickRandomElroyTrivia(
   recentIds: string[],
   category?: TriviaCategory,
+  recentQuestions: string[] = [],
 ): ElroyTriviaQuestion | null {
-  const recent = new Set(recentIds);
-  let pool = ELROY_TRIVIA.filter((item) => !recent.has(item.id));
+  const recentIdSet = new Set(recentIds);
+  const recentQuestionSet = new Set(
+    recentQuestions.map((question) => normalizeTriviaAnswer(question)).filter(Boolean),
+  );
+  let pool = ELROY_TRIVIA.filter((item) => {
+    if (recentIdSet.has(item.id)) return false;
+    if (recentQuestionSet.has(normalizeTriviaAnswer(item.question))) return false;
+    return true;
+  });
   if (category) {
     const categoryPool = pool.filter((item) => item.category === category);
     if (categoryPool.length > 0) pool = categoryPool;

@@ -397,6 +397,8 @@ function BongContent() {
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
         startedAt: streamStartedAtRef.current,
         messages: sessionChatRef.current,
+        recentTriviaQuestions: recentTriviaQuestionsRef.current,
+        recentTriviaIds: recentTriviaIdsRef.current,
       }));
     } catch (e) {
       console.warn('Session save failed', e);
@@ -406,6 +408,8 @@ function BongContent() {
   const clearStreamSession = useCallback(() => {
     sessionChatRef.current = [];
     streamStartedAtRef.current = null;
+    recentTriviaQuestionsRef.current = [];
+    recentTriviaIdsRef.current = [];
     if (typeof window !== 'undefined') {
       try { localStorage.removeItem(SESSION_STORAGE_KEY); } catch { /* ignore */ }
     }
@@ -416,10 +420,21 @@ function BongContent() {
     try {
       const raw = localStorage.getItem(SESSION_STORAGE_KEY);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { startedAt?: number; messages?: Array<{ user: string; text: string; at: number }> };
+      const parsed = JSON.parse(raw) as {
+        startedAt?: number;
+        messages?: Array<{ user: string; text: string; at: number }>;
+        recentTriviaQuestions?: string[];
+        recentTriviaIds?: string[];
+      };
       if (parsed.startedAt && Array.isArray(parsed.messages)) {
         streamStartedAtRef.current = parsed.startedAt;
         sessionChatRef.current = parsed.messages.slice(0, SESSION_CHAT_MAX);
+      }
+      if (Array.isArray(parsed.recentTriviaQuestions)) {
+        recentTriviaQuestionsRef.current = parsed.recentTriviaQuestions.slice(-20);
+      }
+      if (Array.isArray(parsed.recentTriviaIds)) {
+        recentTriviaIdsRef.current = parsed.recentTriviaIds.slice(-12);
       }
     } catch (e) {
       console.warn('Session restore failed', e);
@@ -794,6 +809,7 @@ function BongContent() {
       lastTriviaAtRef.current = Date.now();
       activeTriviaRef.current = null;
       recentTriviaQuestionsRef.current = [];
+      recentTriviaIdsRef.current = [];
       void playElroySfx('go_live');
       void queueBongLogic(buildStreamGreetingPrompt(viewerCount, randomCannabisFact()), undefined, {
         forceVoice: true,
@@ -881,6 +897,7 @@ function BongContent() {
         body: JSON.stringify({
           category,
           recentQuestions: recentTriviaQuestionsRef.current,
+          recentIds: recentTriviaIdsRef.current,
         }),
       });
       if (generateRes.ok) {
@@ -914,6 +931,7 @@ function BongContent() {
 
     recentTriviaIdsRef.current = [...recentTriviaIdsRef.current, picked.id].slice(-12);
     recentTriviaQuestionsRef.current = [...recentTriviaQuestionsRef.current, picked.question].slice(-20);
+    persistStreamSession();
     activeTriviaRef.current = {
       category: picked.category,
       question: picked.question,
@@ -930,7 +948,7 @@ function BongContent() {
       channel,
       `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer wins!`,
     );
-  }, [processBongLogic]);
+  }, [persistStreamSession, processBongLogic]);
 
   const runTriviaCycle = useCallback(() => {
     if (!streamLiveRef.current || isFullyMuted()) return;
