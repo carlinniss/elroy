@@ -5,7 +5,7 @@ import { getElroySfx } from '@/lib/elroy-sfx';
 
 const SFX_DIR = path.join(process.cwd(), 'public', 'sounds', 'elroy');
 const redisKey = (id: string) => `elroy:sfx:v2:${id}`;
-const BUNDLED_EXTENSIONS = ['.wav', '.mp3', '.ogg'] as const;
+const BUNDLED_EXTENSIONS = ['.mp3', '.wav', '.ogg'] as const;
 
 export type SfxCacheSource = 'file' | 'redis' | 'generated';
 

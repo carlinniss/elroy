@@ -16,7 +16,7 @@ export const ELROY_SFX_CATALOG: Record<string, ElroySfxDefinition> = {
   },
   sub_fanfare: {
     id: 'sub_fanfare',
-    prompt: 'Bundled La Cucaracha car horn melody',
+    prompt: 'Bundled La Cucaracha car horn (LT Sound Effects, free use)',
     duration_seconds: 3,
     bundled: true,
   },
