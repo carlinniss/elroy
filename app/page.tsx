@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react
 import { useSearchParams } from 'next/navigation';
 import tmi from 'tmi.js';
 import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
+import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
 
 function BongContent() {
   const [isActive, setIsActive] = useState(false);
@@ -231,9 +232,14 @@ function BongContent() {
     try {
       let url = sfxUrlCacheRef.current.get(id);
       if (!url) {
-        const res = await fetch(`/api/sfx/${id}`);
-        if (!res.ok) return false;
-        url = URL.createObjectURL(await res.blob());
+        const playbackUrl = getElroySfxPlaybackUrl(id);
+        if (!playbackUrl) return false;
+        url = playbackUrl;
+        if (playbackUrl.startsWith('/api/')) {
+          const res = await fetch(playbackUrl);
+          if (!res.ok) return false;
+          url = URL.createObjectURL(await res.blob());
+        }
         sfxUrlCacheRef.current.set(id, url);
       }
       const audio = new Audio(url);
@@ -259,7 +265,13 @@ function BongContent() {
 
   const warmupElroySfx = useCallback(() => {
     for (const id of ['bong_rip', 'sub_fanfare', 'bits_kaching', 'follow_ding', 'go_live', 'mute_zip', 'roast_sting']) {
-      void fetch(`/api/sfx/${id}`)
+      const playbackUrl = getElroySfxPlaybackUrl(id);
+      if (!playbackUrl) continue;
+      if (playbackUrl.startsWith('/sounds/')) {
+        sfxUrlCacheRef.current.set(id, playbackUrl);
+        continue;
+      }
+      void fetch(playbackUrl)
         .then(async (res) => {
           if (!res.ok) return;
           const url = URL.createObjectURL(await res.blob());

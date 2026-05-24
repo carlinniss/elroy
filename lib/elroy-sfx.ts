@@ -56,4 +56,11 @@ export function getElroySfx(id: string): ElroySfxDefinition | null {
   return ELROY_SFX_CATALOG[id] ?? null;
 }
 
+export function getElroySfxPlaybackUrl(id: string): string | null {
+  const definition = getElroySfx(id);
+  if (!definition) return null;
+  if (definition.bundled) return `/sounds/elroy/${id}.wav`;
+  return `/api/sfx/${id}`;
+}
+
 export const ELROY_SFX_IDS = Object.keys(ELROY_SFX_CATALOG);

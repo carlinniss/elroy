@@ -5,13 +5,17 @@ import { readCachedSfx, writeCachedSfx } from '@/lib/sfx-storage';
 export const dynamic = 'force-dynamic';
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params;
   const definition = getElroySfx(id);
   if (!definition) {
     return new Response('Unknown sound effect', { status: 404 });
+  }
+
+  if (definition.bundled) {
+    return Response.redirect(new URL(`/sounds/elroy/${id}.wav`, request.url), 307);
   }
 
   let cached = await readCachedSfx(id);
