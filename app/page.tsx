@@ -859,7 +859,7 @@ function BongContent() {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     clientRef.current?.say(
       channel,
-      `⏳ ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} left to answer trivia!`,
+      `⏳ ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} left! ${active.question}`,
     );
   }, []);
 
