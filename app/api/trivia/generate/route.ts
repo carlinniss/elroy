@@ -1,5 +1,5 @@
 import { listAvailableElroyTrivia, type TriviaCategory } from '@/lib/cannabis-trivia';
-import { generateTriviaQuestion } from '@/lib/trivia-generator';
+import { generateTriviaQuestion, isGenericTriviaQuestion, isOverusedTriviaAnswer } from '@/lib/trivia-generator';
 import {
   claimTriviaQuestion,
   getRecentTriviaQuestions,
@@ -11,7 +11,7 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-const GENERATION_ATTEMPTS = 8;
+const GENERATION_ATTEMPTS = 12;
 
 function shuffle<T>(items: T[]): T[] {
   const copy = [...items];
@@ -27,6 +27,8 @@ async function acceptQuestion(
   question: { question: string; answers: string[] },
   recentQuestions: string[],
 ) {
+  if (isGenericTriviaQuestion(question.question)) return false;
+  if (isOverusedTriviaAnswer(question.answers)) return false;
   if (isNearDuplicateTriviaQuestion(question.question, recentQuestions)) return false;
   if (await hasSeenTriviaQuestion(question.question, category)) return false;
   if (await hasSeenTriviaAnswers(question.answers, category)) return false;
@@ -52,7 +54,7 @@ export async function POST(request: Request) {
     let recentQuestions = mergeRecentTriviaQuestions(clientRecent, serverRecent);
 
     for (let attempt = 0; attempt < GENERATION_ATTEMPTS; attempt += 1) {
-      const generated = await generateTriviaQuestion(category, recentQuestions);
+      const generated = await generateTriviaQuestion(category, recentQuestions, attempt);
       if (!generated) continue;
       if (!(await acceptQuestion(category, generated, recentQuestions))) {
         recentQuestions = mergeRecentTriviaQuestions([generated.question], recentQuestions);
@@ -66,7 +68,9 @@ export async function POST(request: Request) {
 
     const staticPool = shuffle(listAvailableElroyTrivia(recentIds, category, recentQuestions));
     for (const fallback of staticPool) {
-      if (!(await acceptQuestion(category, fallback, recentQuestions))) continue;
+      if (isNearDuplicateTriviaQuestion(fallback.question, recentQuestions)) continue;
+      if (await hasSeenTriviaQuestion(fallback.question, category)) continue;
+      if (await hasSeenTriviaAnswers(fallback.answers, category)) continue;
       if (await claimTriviaQuestion(fallback.question, category, fallback.answers)) {
         return Response.json({ source: 'static', question: fallback });
       }

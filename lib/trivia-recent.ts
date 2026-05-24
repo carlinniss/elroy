@@ -68,10 +68,10 @@ export function isNearDuplicateTriviaQuestion(candidate: string, recent: string[
     const existingNorm = normalizeTriviaQuestionText(existing);
     if (!existingNorm) continue;
     if (norm === existingNorm) return true;
-    if (norm.length >= 18 && existingNorm.length >= 18 && (norm.includes(existingNorm) || existingNorm.includes(norm))) {
+    if (norm.length >= 14 && existingNorm.length >= 14 && (norm.includes(existingNorm) || existingNorm.includes(norm))) {
       return true;
     }
-    if (questionSimilarity(norm, existingNorm) >= 0.45) return true;
+    if (questionSimilarity(norm, existingNorm) >= 0.32) return true;
   }
 
   return false;

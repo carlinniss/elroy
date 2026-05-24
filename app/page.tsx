@@ -958,7 +958,7 @@ function BongContent() {
     recentTriviaHistoryRef.current = [
       ...recentTriviaHistoryRef.current,
       { category: picked.category, question: picked.question, id: picked.id },
-    ].slice(-24);
+    ].slice(-40);
     persistStreamSession();
     activeTriviaRef.current = {
       category: picked.category,
