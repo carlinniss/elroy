@@ -70,7 +70,10 @@ function BongContent() {
   const TRIVIA_CHECK_MS = 60_000;
   const BLACKJACK_TICK_MS = 4_000;
   const CHAT_ACTIVITY_MESSAGE_THRESHOLD = 90;
-  const CHAT_ACTIVITY_CHANCE = 0.55;
+  const CHAT_ACTIVITY_CHANCE = 0.75;
+  const chatActivityThresholdRef = useRef(CHAT_ACTIVITY_MESSAGE_THRESHOLD);
+  const chatActivityChanceRef = useRef(CHAT_ACTIVITY_CHANCE);
+  const ambientVoiceAllowedRef = useRef(false);
   const SESSION_CHAT_MAX = 600;
   const SESSION_STORAGE_KEY = 'elroy-stream-session';
 
@@ -222,6 +225,9 @@ function BongContent() {
     celebrationVoiceCooldownMsRef.current = tier.celebrationVoiceCooldownMs;
     quotaVoiceAllowedRef.current = tier.voiceAllowed;
     celebrationsVoiceOnlyRef.current = tier.celebrationsVoiceOnly;
+    ambientVoiceAllowedRef.current = tier.ambientVoice;
+    chatActivityThresholdRef.current = tier.chatActivityThreshold;
+    chatActivityChanceRef.current = tier.chatActivityChance;
     elevenLabsRemainingRef.current = remaining;
 
     setDiagnostics((prev) => ({
@@ -939,7 +945,7 @@ function BongContent() {
         const roastPrompt = buildTriviaLeaderRoastPrompt(leaders);
         if (roastPrompt) {
           await processBongLogic(roastPrompt, undefined, {
-            chatOnly: true,
+            chatOnly: !ambientVoiceAllowedRef.current,
             bypassChatCooldown: true,
             skipDing: true,
           });
@@ -1039,7 +1045,9 @@ function BongContent() {
   const runStreamCheckin = useCallback(async () => {
     if (isSilenced() || !streamLiveRef.current) return;
     const { streamStatus, viewerCount } = await fetchStreamStatus();
-    void queueBongLogic(buildStreamCheckinPrompt(viewerCount, streamStatus), undefined, { chatOnly: true });
+    void queueBongLogic(buildStreamCheckinPrompt(viewerCount, streamStatus), undefined, {
+      chatOnly: !ambientVoiceAllowedRef.current,
+    });
   }, [buildStreamCheckinPrompt, fetchStreamStatus, queueBongLogic]);
 
   const sayBlackjackLines = useCallback((lines: string[]) => {
@@ -1410,11 +1418,13 @@ function BongContent() {
           } else if (streamLiveRef.current && !isFullyMuted() && !isSilenced() && !isBroadcaster) {
             chatMessageCountRef.current += 1;
             if (
-              chatMessageCountRef.current >= CHAT_ACTIVITY_MESSAGE_THRESHOLD
-              && Math.random() < CHAT_ACTIVITY_CHANCE
+              chatMessageCountRef.current >= chatActivityThresholdRef.current
+              && Math.random() < chatActivityChanceRef.current
             ) {
               chatMessageCountRef.current = 0;
-              void queueBongLogic(buildChatAwarePrompt(), undefined, { chatOnly: true });
+              void queueBongLogic(buildChatAwarePrompt(), undefined, {
+                chatOnly: !ambientVoiceAllowedRef.current,
+              });
             }
           }
         }

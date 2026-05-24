@@ -94,13 +94,15 @@ Elroy plays these sounds automatically during stream events. Most are generated 
 | `roast_sting` | Rimshot sting | Someone calls him "L Roy" |
 | `cough` | Short chest cough (bundled MP3) | After every voice line |
 
-Elroy polls ElevenLabs character quota every **2 minutes** and adjusts voice frequency automatically. More credits = more voice:
+Elroy polls ElevenLabs character quota every **2 minutes** and adjusts voice frequency automatically — more credits = more voice (but still paced so you do not burn the budget in one stream):
 
 | Characters left | Voice behavior |
 | --- | --- |
-| 50,000+ | Full — voice about every 90s |
-| 15,000–49,999 | Comfortable — about every 2 min |
-| 5,000–14,999 | Moderate — about every 3 min |
+| 250,000+ | Abundant — voice ~every 40s, ambient check-ins/banter use TTS |
+| 100,000–249,999 | Plentiful — ~every 50s, ambient voice on |
+| 50,000–99,999 | Full — ~every 70s, ambient voice on |
+| 15,000–49,999 | Comfortable — ~every 2 min, chat banter text-only |
+| 5,000–14,999 | Moderate — ~every 3 min |
 | 1,000–4,999 | Low — subs/bits celebrations only |
 | Under 1,000 | Voice off until credits added |
 
