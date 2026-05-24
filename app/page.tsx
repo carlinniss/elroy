@@ -941,26 +941,33 @@ function BongContent() {
     }
   }, [announceTriviaCountdown, askCannabisTrivia, expireTriviaIfNeeded]);
 
-  const awardTriviaWinner = useCallback((username: string) => {
+  const awardTriviaWinner = useCallback(async (username: string) => {
     const active = activeTriviaRef.current;
     if (!active || active.answered) return;
 
     active.answered = true;
     lastTriviaAtRef.current = Date.now();
 
-    void fetch('/api/trivia/win', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, category: active.category }),
-    }).catch((error) => {
+    let totalWins = 1;
+    try {
+      const winRes = await fetch('/api/trivia/win', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, category: active.category }),
+      });
+      if (winRes.ok) {
+        const data = await winRes.json();
+        if (typeof data.score === 'number' && data.score > 0) totalWins = data.score;
+      }
+    } catch (error) {
       console.warn('Trivia score update failed', error);
-    });
+    }
 
     void playElroySfx('sub_fanfare');
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     clientRef.current?.say(
       channel,
-      `🎉 @${username} got it FIRST! Correct — ${active.displayAnswer}.`,
+      `🎉 @${username} got it FIRST! Correct — ${active.displayAnswer}. (${totalWins} trivia win${totalWins === 1 ? '' : 's'} total)`,
     );
     void queueBongLogic(
       `${username} just won trivia with the first correct answer. Hype them up in one short OG sentence — make them feel legendary.`,

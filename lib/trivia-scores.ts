@@ -1,4 +1,4 @@
-import { hasRedisStorage, redisCommand, redisPipeline } from '@/lib/redis-rest';
+import { hasRedisStorage, redisCommand } from '@/lib/redis-rest';
 
 import type { TriviaCategory } from '@/lib/cannabis-trivia';
 
@@ -64,12 +64,15 @@ async function getRedisDisplayName(login: string): Promise<string | null> {
 }
 
 async function getRedisLeader(category: TriviaCategory): Promise<TriviaLeader | null> {
-  const raw = await redisCommand(['ZREVRANGE', SCORE_KEY[category], '0', '0', 'WITHSCORES']);
-  if (!Array.isArray(raw) || raw.length < 2) return null;
+  const members = await redisCommand(['ZREVRANGE', SCORE_KEY[category], '0', '0']);
+  if (!Array.isArray(members) || members.length === 0) return null;
 
-  const login = String(raw[0]);
-  const score = Number.parseInt(String(raw[1]), 10);
-  if (!login || !Number.isFinite(score) || score <= 0) return null;
+  const login = String(members[0]);
+  if (!login) return null;
+
+  const scoreRaw = await redisCommand(['ZSCORE', SCORE_KEY[category], login]);
+  const score = Number.parseFloat(String(scoreRaw ?? ''));
+  if (!Number.isFinite(score) || score <= 0) return null;
 
   const displayName = await getRedisDisplayName(login);
   return { username: displayName ?? login, score };
@@ -88,12 +91,13 @@ export async function incrementTriviaWin(
 
   if (hasRedisStorage()) {
     try {
-      const results = await redisPipeline([
-        ['ZINCRBY', SCORE_KEY[category], '1', login],
-        ['HSET', DISPLAY_NAMES_KEY, login, username.trim()],
-      ]);
-      const score = Number.parseInt(String(results?.[0] ?? '0'), 10);
-      return Number.isFinite(score) ? score : incrementMemoryScore(username, category);
+      const scoreRaw = await redisCommand(['ZINCRBY', SCORE_KEY[category], '1', login]);
+      const score = Number.parseFloat(String(scoreRaw ?? ''));
+      if (!Number.isFinite(score) || score <= 0) {
+        return incrementMemoryScore(username, category);
+      }
+      await redisCommand(['HSET', DISPLAY_NAMES_KEY, login, username.trim()]);
+      return score;
     } catch (error) {
       console.error('Redis trivia score write failed, using memory fallback', error);
     }

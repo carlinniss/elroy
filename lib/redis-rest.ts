@@ -32,11 +32,16 @@ export async function redisCommand(command: unknown[]): Promise<unknown | null> 
   return data.result ?? null;
 }
 
+function getRedisPipelineUrl(baseUrl: string) {
+  const trimmed = baseUrl.replace(/\/$/, '');
+  return trimmed.endsWith('/pipeline') ? trimmed : `${trimmed}/pipeline`;
+}
+
 export async function redisPipeline(commands: unknown[][]): Promise<unknown[] | null> {
   const config = getRedisRestConfig();
   if (!config) return null;
 
-  const res = await fetch(config.url, {
+  const res = await fetch(getRedisPipelineUrl(config.url), {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.token}` },
     body: JSON.stringify(commands),
