@@ -7,6 +7,8 @@ export const MAX_BET = 200;
 export const SEATING_MS = 45_000;
 export const BETTING_MS = 30_000;
 export const TURN_MS = 25_000;
+/** Warn the active player once when this much time is left on their turn. */
+export const TURN_NUDGE_REMAINING_MS = 12_000;
 export const LEADERBOARD_SIZE = 5;
 
 const TABLE_KEY = 'elroy:bj:table';
@@ -47,6 +49,8 @@ export type BjTable = {
   deck: Card[];
   currentSeatIndex: number;
   phaseEndsAt: number;
+  /** One reminder per turn to !hit or !stand before auto-stand. */
+  turnNudged?: boolean;
 };
 
 export type BjLeader = {
@@ -472,6 +476,7 @@ async function dealRound(table: BjTable): Promise<{ table: BjTable; messages: st
     state: 'player_turn',
     currentSeatIndex: first,
     phaseEndsAt: Date.now() + TURN_MS,
+    turnNudged: false,
   };
   messages.push(`🃏 @${seats[first].displayName} you're up — !hit or !stand.`);
   return { table: playing, messages };
@@ -497,6 +502,7 @@ function advanceAfterSeatAction(table: BjTable): { table: BjTable; messages: str
         ...table,
         currentSeatIndex: nextIdx,
         phaseEndsAt: Date.now() + TURN_MS,
+        turnNudged: false,
       },
       messages: [`🃏 @${seat.displayName} you're up — !hit or !stand.`],
       toSettle: false,
@@ -577,6 +583,24 @@ async function advancePhase(table: BjTable): Promise<{ table: BjTable; messages:
   if (table.state === 'idle' || table.state === 'settle') {
     return { table, messages: [] };
   }
+
+  if (table.state === 'player_turn') {
+    const remaining = table.phaseEndsAt - Date.now();
+    const seat = table.seats[table.currentSeatIndex];
+    if (
+      seat?.status === 'playing'
+      && !table.turnNudged
+      && remaining > 0
+      && remaining <= TURN_NUDGE_REMAINING_MS
+    ) {
+      const secs = Math.max(1, Math.ceil(remaining / 1000));
+      return {
+        table: { ...table, turnNudged: true },
+        messages: [`🃏 @${seat.displayName} — !hit or !stand, you got ${secs}s left.`],
+      };
+    }
+  }
+
   if (Date.now() < table.phaseEndsAt) {
     return { table, messages: [] };
   }
@@ -639,7 +663,13 @@ async function hitCurrentSeat(table: BjTable): Promise<{ table: BjTable; message
 
   seats[idx] = { ...seat, hand, status: 'playing' };
   return {
-    table: { ...table, seats, deck: drawn.deck, phaseEndsAt: Date.now() + TURN_MS },
+    table: {
+      ...table,
+      seats,
+      deck: drawn.deck,
+      phaseEndsAt: Date.now() + TURN_MS,
+      turnNudged: false,
+    },
     messages: [`🃏 @${seat.displayName} draws ${formatCard(drawn.card)} — now ${total}. !hit or !stand.`],
   };
 }
