@@ -8,6 +8,7 @@ import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
 import { matchesTriviaAnswer, triviaIntroFor, type ElroyTriviaQuestion, type TriviaCategory } from '@/lib/cannabis-trivia';
 import { buildTriviaLeaderRoastPrompt, formatTriviaLeaderboardChatMessage } from '@/lib/trivia-scores';
 import { getBotInstanceId } from '@/lib/bot-instance';
+import { getBuildLabel } from '@/lib/build-version';
 import type { UserMemoryEvent } from '@/lib/user-memory';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
@@ -29,7 +30,14 @@ function BongContent() {
   const [isDingOn, setIsDingOn] = useState(true);
   const [isVoiceOn, setIsVoiceOn] = useState(true);
   const searchParams = useSearchParams();
-  const [diagnostics, setDiagnostics] = useState({ chat: "...", speech: "...", sound: "...", quota: "..." });
+  const [diagnostics, setDiagnostics] = useState({
+    chat: '...',
+    speech: '...',
+    sound: '...',
+    quota: '...',
+    build: getBuildLabel(process.env.NEXT_PUBLIC_BUILD_ID || 'dev'),
+    update: 'auto-update checking…',
+  });
 
   const DEFAULT_VOLUME = 0.85;
   const clientRef = useRef<tmi.Client | null>(null);
@@ -473,6 +481,10 @@ function BongContent() {
     if (!pendingDeployReloadRef.current) return;
 
     if (isActiveRef.current && !canSafelyReloadForDeploy()) {
+      setDiagnostics((prev) => ({
+        ...prev,
+        update: 'update pending — waiting for safe moment',
+      }));
       return;
     }
 
@@ -498,17 +510,37 @@ function BongContent() {
 
   const pollDeployVersion = useCallback(async () => {
     try {
-      const res = await fetch('/api/version', { cache: 'no-store' });
-      if (!res.ok) return;
-      const data = await res.json() as { buildId?: string };
+      const res = await fetch(`/api/version?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) {
+        setDiagnostics((prev) => ({ ...prev, update: 'auto-update check failed' }));
+        return;
+      }
+      const data = await res.json() as { buildId?: string; label?: string };
       const remoteBuildId = typeof data.buildId === 'string' ? data.buildId : '';
-      if (!remoteBuildId || remoteBuildId === bundledBuildIdRef.current) return;
+      const localLabel = getBuildLabel(bundledBuildIdRef.current);
+      const remoteLabel = typeof data.label === 'string' ? data.label : getBuildLabel(remoteBuildId);
+
+      if (!remoteBuildId || remoteBuildId === bundledBuildIdRef.current) {
+        pendingDeployReloadRef.current = false;
+        setDiagnostics((prev) => ({
+          ...prev,
+          build: localLabel,
+          update: 'live · auto-update on',
+        }));
+        return;
+      }
 
       console.info('Elroy deploy detected:', bundledBuildIdRef.current, '->', remoteBuildId);
+      setDiagnostics((prev) => ({
+        ...prev,
+        build: localLabel,
+        update: `update ${remoteLabel} available`,
+      }));
       pendingDeployReloadRef.current = true;
       await tryApplyDeployUpdate();
     } catch (error) {
       console.warn('Deploy version poll failed', error);
+      setDiagnostics((prev) => ({ ...prev, update: 'auto-update check failed' }));
     }
   }, [tryApplyDeployUpdate]);
 
@@ -595,6 +627,7 @@ function BongContent() {
       }
 
       setDiagnostics((prev) => ({
+        ...prev,
         chat: chat.status === 200 ? '✅' : '❌',
         speech: speech.status === 200 ? '✅' : '❌',
         sound: sound.ok ? '✅' : '❌',
@@ -1701,12 +1734,31 @@ function BongContent() {
   }, [searchParams]);
   return (
     <div style={{ height: '100vh', padding: '60px', color: 'white', backgroundColor: 'transparent', fontFamily: 'sans-serif' }}>
-      {!isActive && (
-        <div style={{ position: 'fixed', top: 20, right: 20, background: 'rgba(0,0,0,0.9)', padding: '20px', borderRadius: '15px', border: '2px solid #9146FF' }}>
-          <div>Brain: {diagnostics.chat} | Voice: {diagnostics.speech} | Sound: {diagnostics.sound}</div>
-          <div style={{ color: '#00FF00', marginTop: '5px' }}>Quota: {diagnostics.quota}</div>
+      <div
+        style={{
+          position: 'fixed',
+          top: 20,
+          right: 20,
+          background: 'rgba(0,0,0,0.85)',
+          padding: isActive ? '10px 14px' : '20px',
+          borderRadius: '15px',
+          border: '2px solid #9146FF',
+          fontSize: isActive ? '14px' : '16px',
+          lineHeight: 1.4,
+          maxWidth: '420px',
+          zIndex: 1000,
+        }}
+      >
+        {!isActive && (
+          <>
+            <div>Brain: {diagnostics.chat} | Voice: {diagnostics.speech} | Sound: {diagnostics.sound}</div>
+            <div style={{ color: '#00FF00', marginTop: '5px' }}>Quota: {diagnostics.quota}</div>
+          </>
+        )}
+        <div style={{ color: '#B794F6', marginTop: isActive ? 0 : '8px' }}>
+          Build {diagnostics.build} · {diagnostics.update}
         </div>
-      )}
+      </div>
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
         {!isActive ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
