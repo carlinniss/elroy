@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import tmi from 'tmi.js';
 import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
 import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
-import { matchesTriviaAnswer, triviaIntroFor, type ElroyTriviaQuestion, type TriviaCategory } from '@/lib/cannabis-trivia';
+import { matchesTriviaAnswer, triviaIntroFor, type ElroyTriviaQuestion, type TriviaCategory, detectElroyTriviaCheat } from '@/lib/cannabis-trivia';
 import { buildTriviaLeaderRoastPrompt, formatTriviaLeaderboardChatMessage } from '@/lib/trivia-scores';
 import { getBotInstanceId } from '@/lib/bot-instance';
 import { getBuildLabel } from '@/lib/build-version';
@@ -723,6 +723,20 @@ function BongContent() {
   const buildJoinGreetingPrompt = useCallback((user: string) =>
     `${user} just entered the Twitch chat while the stream is live. Give a quick, warm welcome by username — one or two sentences. Make them feel noticed without being cheesy or over the top.`, []);
 
+  const buildTriviaCheatRoastPrompt = useCallback((
+    user: string,
+    message: string,
+    triviaQuestion: string,
+    cheatKind: 'answer' | 'question' | 'help',
+  ) => {
+    const cheatLine = cheatKind === 'answer'
+      ? `${user} tagged Elroy trying to slip in the trivia answer: "${message}"`
+      : cheatKind === 'question'
+        ? `${user} tried to ask Elroy the same trivia question instead of answering fair: "${message}"`
+        : `${user} tried to fish the trivia answer out of Elroy: "${message}"`;
+    return `${cheatLine}\n\nLive trivia question: "${triviaQuestion}"\n\nRoast ${user} by username for tryna cheat trivia through Elroy — funny, crusty, playful not cruel. Make it clear they gotta answer in chat themselves.`;
+  }, []);
+
   const buildSubPrompt = useCallback((user: string, details: string) =>
     `${user} just subscribed to the channel! ${details} Celebrate them in your OG style — genuine gratitude, stream hype, make them feel legendary.`, []);
 
@@ -1279,6 +1293,7 @@ function BongContent() {
 
   const tryHandleTriviaAnswer = useCallback((username: string, message: string) => {
     if (isFullyMuted()) return false;
+    if (mentionsElroy(message)) return false;
     const active = activeTriviaRef.current;
     if (!active || active.answered) return false;
     if (Date.now() - active.askedAt > TRIVIA_ANSWER_WINDOW_MS) return false;
@@ -1287,6 +1302,27 @@ function BongContent() {
     awardTriviaWinner(username);
     return true;
   }, [awardTriviaWinner]);
+
+  const tryRoastTriviaCheat = useCallback((username: string, displayName: string, message: string) => {
+    if (isFullyMuted()) return false;
+    const active = activeTriviaRef.current;
+    if (!active || active.answered) return false;
+    if (Date.now() - active.askedAt > TRIVIA_ANSWER_WINDOW_MS) return false;
+
+    const cheatKind = detectElroyTriviaCheat(message, active.question, active.answers);
+    if (!cheatKind) return false;
+
+    rememberUser(username, displayName, { type: 'mention', message });
+    if (!canRespondInChat(MENTION_COOLDOWN_MS)) return true;
+
+    void playElroySfx('roast_sting');
+    void queueBongLogic(
+      buildTriviaCheatRoastPrompt(username, message, active.question, cheatKind),
+      username,
+      { chatOnly: true },
+    );
+    return true;
+  }, [buildTriviaCheatRoastPrompt, playElroySfx, queueBongLogic]);
 
   const runStreamCheckin = useCallback(async () => {
     if (isSilenced() || !streamLiveRef.current) return;
@@ -1650,6 +1686,11 @@ function BongContent() {
       const isBotAccount = normalizedUser === normalizedChannel;
 
       if (!m.startsWith('!')) {
+        if (!isBotAccount && !isWizebot && tryRoastTriviaCheat(username, displayName, m)) {
+          rememberChatLine(username, m);
+          return;
+        }
+
         if (!isBotAccount && !isWizebot && tryHandleTriviaAnswer(username, m)) {
           rememberChatLine(username, m);
           return;

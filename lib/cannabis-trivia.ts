@@ -263,6 +263,59 @@ export function matchesTriviaAnswer(message: string, acceptable: string[]): bool
   return false;
 }
 
+export function mentionsElroy(text: string) {
+  return /\belroy\b/i.test(text);
+}
+
+export function stripElroyFromMessage(text: string) {
+  return text.replace(/@?\belroy\b/gi, ' ').replace(/\s+/g, ' ').trim();
+}
+
+export function isAskingElroyForTriviaHelp(message: string) {
+  const msg = normalizeTriviaAnswer(stripElroyFromMessage(message));
+  if (!msg) return false;
+  const patterns = [
+    /\bwhat is the answer\b/,
+    /\bwhats the answer\b/,
+    /\btell me the answer\b/,
+    /\bgive me the answer\b/,
+    /\btrivia answer\b/,
+    /\banswer to (the|this) trivia\b/,
+    /\bwhat was the answer\b/,
+  ];
+  return patterns.some((pattern) => pattern.test(msg));
+}
+
+export function isRepeatingActiveTriviaQuestion(message: string, question: string) {
+  const msg = normalizeTriviaAnswer(stripElroyFromMessage(message));
+  const q = normalizeTriviaAnswer(question);
+  if (!msg || !q || msg.length < 12) return false;
+  if (msg.includes(q) || q.includes(msg)) return true;
+
+  const stop = new Set([
+    'what', 'which', 'who', 'when', 'where', 'the', 'and', 'for', 'with', 'that', 'this',
+    'from', 'into', 'about', 'name', 'first', 'under', 'most', 'what year', 'which country',
+  ]);
+  const qWords = q.split(' ').filter((word) => word.length >= 4 && !stop.has(word));
+  if (qWords.length < 2) return false;
+  const matched = qWords.filter((word) => msg.includes(word));
+  return matched.length >= Math.min(3, Math.ceil(qWords.length * 0.45));
+}
+
+export type ElroyTriviaCheatKind = 'answer' | 'question' | 'help';
+
+export function detectElroyTriviaCheat(
+  message: string,
+  question: string,
+  answers: string[],
+): ElroyTriviaCheatKind | null {
+  if (!mentionsElroy(message)) return null;
+  if (matchesTriviaAnswer(message, answers)) return 'answer';
+  if (isRepeatingActiveTriviaQuestion(message, question)) return 'question';
+  if (isAskingElroyForTriviaHelp(message)) return 'help';
+  return null;
+}
+
 export function listAvailableElroyTrivia(
   recentIds: string[],
   category: TriviaCategory,
