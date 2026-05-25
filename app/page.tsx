@@ -71,6 +71,7 @@ function BongContent() {
   const CELEBRATION_COOLDOWN_MS = 25_000;
   const FOLLOW_CELEBRATION_COOLDOWN_MS = 60_000;
   const JOIN_GREET_COOLDOWN_MS = 45_000;
+  const JOIN_GREET_WARMUP_MS = 60_000;
   const FOLLOWER_POLL_MS = 45_000;
   const STREAM_CHECKIN_MS = 15 * 60 * 1000;
   const STREAM_POLL_MS = 60_000;
@@ -114,6 +115,7 @@ function BongContent() {
   const lastCelebrationRef = useRef(0);
   const knownFollowerIdsRef = useRef<Set<string>>(new Set());
   const greetedThisSessionRef = useRef<Set<string>>(new Set());
+  const joinGreetWarmupUntilRef = useRef(0);
   const followersInitializedRef = useRef(false);
   const followerPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamCheckinRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -444,6 +446,7 @@ function BongContent() {
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
         startedAt: streamStartedAtRef.current,
         messages: sessionChatRef.current,
+        greetedJoiners: [...greetedThisSessionRef.current],
       }));
     } catch (e) {
       console.warn('Session save failed', e);
@@ -467,10 +470,21 @@ function BongContent() {
       const parsed = JSON.parse(raw) as {
         startedAt?: number;
         messages?: Array<{ user: string; text: string; at: number }>;
+        greetedJoiners?: string[];
       };
       if (parsed.startedAt && Array.isArray(parsed.messages)) {
         streamStartedAtRef.current = parsed.startedAt;
         sessionChatRef.current = parsed.messages.slice(0, SESSION_CHAT_MAX);
+      }
+      if (Array.isArray(parsed.greetedJoiners)) {
+        for (const login of parsed.greetedJoiners) {
+          if (typeof login === 'string' && login.trim()) {
+            greetedThisSessionRef.current.add(login.toLowerCase());
+          }
+        }
+      }
+      for (const entry of sessionChatRef.current) {
+        greetedThisSessionRef.current.add(entry.user.toLowerCase());
       }
     } catch (e) {
       console.warn('Session restore failed', e);
@@ -965,16 +979,20 @@ function BongContent() {
 
   const tryGreetChatter = useCallback((username: string, normalizedUser: string, normalizedChannel: string) => {
     if (!streamLiveRef.current || isFullyMuted() || isSilenced()) return;
+    if (Date.now() < joinGreetWarmupUntilRef.current) return;
     if (shouldSkipJoinGreet(normalizedUser, normalizedChannel)) return;
     if (greetedThisSessionRef.current.has(normalizedUser)) return;
     if (!canRespondInChat(JOIN_GREET_COOLDOWN_MS)) return;
 
     greetedThisSessionRef.current.add(normalizedUser);
+    if (streamStartedAtRef.current) {
+      persistStreamSession();
+    }
     void queueBongLogic(buildJoinGreetingPrompt(username), username, {
       chatOnly: true,
       chatCooldownMs: JOIN_GREET_COOLDOWN_MS,
     });
-  }, [buildJoinGreetingPrompt, queueBongLogic, shouldSkipJoinGreet]);
+  }, [buildJoinGreetingPrompt, persistStreamSession, queueBongLogic, shouldSkipJoinGreet]);
 
   const celebrate = useCallback((kind: 'follow' | 'sub' | 'bits', username: string, extra = '', bitsAmount?: number) => {
     if (!streamLiveRef.current || isFullyMuted() || !canCelebrate(kind)) return;
@@ -1632,10 +1650,6 @@ function BongContent() {
       const isBotAccount = normalizedUser === normalizedChannel;
 
       if (!m.startsWith('!')) {
-        if (!isBotAccount && !isWizebot && streamLiveRef.current) {
-          tryGreetChatter(username, normalizedUser, normalizedChannel);
-        }
-
         if (!isBotAccount && !isWizebot && tryHandleTriviaAnswer(username, m)) {
           rememberChatLine(username, m);
           return;
@@ -1794,6 +1808,7 @@ function BongContent() {
 
     try {
       await client.connect();
+      joinGreetWarmupUntilRef.current = Date.now() + JOIN_GREET_WARMUP_MS;
       clientRef.current = client;
       isActiveRef.current = true;
       setIsActive(true);
