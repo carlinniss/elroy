@@ -3,6 +3,7 @@ import { hasRedisStorage, redisCommand, redisPipeline } from '@/lib/redis-rest';
 export const STARTING_CHIPS = 1000;
 export const MAX_SEATS = 5;
 export const MIN_BET = 10;
+/** @deprecated Table no longer caps bets below chip stack — use player chip count. */
 export const MAX_BET = 200;
 export const SEATING_MS = 45_000;
 export const BETTING_MS = 30_000;
@@ -31,6 +32,7 @@ export type BjSeat = {
   bet: number;
   hand: Card[];
   status: SeatStatus;
+  doubledDown?: boolean;
 };
 
 export type BjTableState =
@@ -71,6 +73,7 @@ export type BjActionRequest = {
     | 'bet'
     | 'hit'
     | 'stand'
+    | 'double'
     | 'table'
     | 'chips'
     | 'leaders'
@@ -79,6 +82,8 @@ export type BjActionRequest = {
   username: string;
   displayName?: string;
   amount?: number;
+  /** Raw !bet argument (e.g. "100", "all") — preferred over amount. */
+  betInput?: string;
   isMod?: boolean;
 };
 
@@ -111,6 +116,33 @@ function mem(): MemoryStore {
 
 export function normalizeLogin(username: string) {
   return username.trim().toLowerCase();
+}
+
+/** Parse !bet amount — numeric or all/max for entire stack. */
+export function parseBetAmount(
+  input: string,
+  chips: number,
+): { ok: true; amount: number } | { ok: false; error: string } {
+  const raw = input.trim().toLowerCase();
+  if (raw === 'all' || raw === 'max') {
+    if (chips < MIN_BET) {
+      return { ok: false, error: `You need at least ${MIN_BET} chips to bet.` };
+    }
+    return { ok: true, amount: chips };
+  }
+
+  const amount = Math.floor(Number(raw));
+  if (!Number.isFinite(amount) || amount < MIN_BET) {
+    return { ok: false, error: `Bet must be at least ${MIN_BET} chips.` };
+  }
+  if (amount > chips) {
+    return { ok: false, error: `You only have ${chips} chips.` };
+  }
+  return { ok: true, amount };
+}
+
+function betHelpText() {
+  return `!bet ${MIN_BET}+ or !bet all`;
 }
 
 function idleTable(): BjTable {
@@ -442,13 +474,15 @@ export function tableStatusMessage(table: BjTable): string {
   if (table.state === 'betting') {
     const secs = Math.max(0, Math.ceil((table.phaseEndsAt - Date.now()) / 1000));
     const names = table.seats.map((s) => `@${s.displayName}`).join(' ');
-    return `🃏 Betting (${secs}s) ${names} — !bet ${MIN_BET}-${MAX_BET}`;
+    return `🃏 Betting (${secs}s) ${names} — ${betHelpText()}`;
   }
   if (table.state === 'player_turn') {
     const seat = table.seats[table.currentSeatIndex];
     const secs = Math.max(0, Math.ceil((table.phaseEndsAt - Date.now()) / 1000));
     const hands = table.seats.map(seatSummary).join(' | ');
-    return `🃏 ${hands} | Dealer: ${formatHand(table.dealerHand, true)} — @${seat?.displayName} !hit or !stand (${secs}s)`;
+    const canDouble = seat?.status === 'playing' && seat.hand.length === 2 && !isNaturalBlackjack(seat.hand);
+    const actions = canDouble ? '!hit, !stand, or !double' : '!hit or !stand';
+    return `🃏 ${hands} | Dealer: ${formatHand(table.dealerHand, true)} — @${seat?.displayName} ${actions} (${secs}s)`;
   }
   return '🃏 Table busy.';
 }
@@ -483,6 +517,12 @@ function anyPlayingSeatsRemain(seats: BjSeat[]): boolean {
   return seats.some((seat) => seat.status === 'playing');
 }
 
+function turnPromptForSeat(seat: BjSeat): string {
+  const canDouble = seat.status === 'playing' && seat.hand.length === 2 && !isNaturalBlackjack(seat.hand);
+  const actions = canDouble ? '!hit, !stand, or !double' : '!hit or !stand';
+  return `🃏 @${seat.displayName} you're up — ${actions}.`;
+}
+
 function promptNextTurn(table: BjTable, seatIndex: number): { table: BjTable; messages: string[] } {
   const seat = table.seats[seatIndex];
   return {
@@ -493,7 +533,7 @@ function promptNextTurn(table: BjTable, seatIndex: number): { table: BjTable; me
       phaseEndsAt: Date.now() + TURN_MS,
       turnNudged: false,
     },
-    messages: [`🃏 @${seat.displayName} you're up — !hit or !stand.`],
+    messages: [turnPromptForSeat(seat)],
   };
 }
 
@@ -714,7 +754,7 @@ async function advancePhase(table: BjTable): Promise<{ table: BjTable; messages:
       const secs = Math.max(1, Math.ceil(remaining / 1000));
       return {
         table: { ...table, turnNudged: true },
-        messages: [`🃏 @${seat.displayName} — !hit or !stand, you got ${secs}s left.`],
+        messages: [`🃏 @${seat.displayName} — ${seat.hand.length === 2 && !isNaturalBlackjack(seat.hand) ? '!hit, !stand, or !double' : '!hit or !stand'}, you got ${secs}s left.`],
       };
     }
   }
@@ -731,7 +771,7 @@ async function advancePhase(table: BjTable): Promise<{ table: BjTable; messages:
     return {
       table: betting,
       messages: [
-        `🃏 Seats locked: ${betting.seats.map((s) => `@${s.displayName}`).join(' ')} — !bet ${MIN_BET}-${MAX_BET} (${BETTING_MS / 1000}s)`,
+        `🃏 Seats locked: ${betting.seats.map((s) => `@${s.displayName}`).join(' ')} — ${betHelpText()} (${BETTING_MS / 1000}s)`,
       ],
     };
   }
@@ -816,6 +856,71 @@ async function applyStand(table: BjTable): Promise<{ table: BjTable; messages: s
     return { table: settled.table, messages: [...messages, ...settled.messages] };
   }
   return { table: stood.table, messages: [...messages, ...stood.messages] };
+}
+
+async function doubleDownCurrentSeat(table: BjTable): Promise<{ table: BjTable; messages: string[] }> {
+  const idx = table.currentSeatIndex;
+  const seat = table.seats[idx];
+  if (!seat || seat.status !== 'playing') {
+    return { table, messages: [] };
+  }
+
+  if (seat.hand.length !== 2) {
+    return {
+      table,
+      messages: [`🃏 @${seat.displayName} double down is only on your first two cards — !hit or !stand.`],
+    };
+  }
+
+  if (isNaturalBlackjack(seat.hand)) {
+    return {
+      table,
+      messages: [`🃏 @${seat.displayName} can't double down on a natural blackjack.`],
+    };
+  }
+
+  const additional = seat.bet;
+  let chips = await getPlayerChips(seat.login);
+  if (chips < additional) {
+    return {
+      table,
+      messages: [
+        `🃏 @${seat.displayName} need ${additional} more chips to double down (you have ${chips}).`,
+      ],
+    };
+  }
+
+  chips -= additional;
+  await setPlayerChips(seat.login, chips, seat.displayName);
+  await syncLeaderboard(seat.login, chips);
+
+  const doubledBet = seat.bet + additional;
+  const drawn = drawCard(table.deck);
+  const hand = [...seat.hand, drawn.card];
+  const total = handValue(hand);
+  const seats = [...table.seats];
+  const status: SeatStatus = total > 21 ? 'bust' : 'stood';
+
+  seats[idx] = {
+    ...seat,
+    hand,
+    bet: doubledBet,
+    status,
+    doubledDown: true,
+  };
+
+  const messages = [
+    `🃏 @${seat.displayName} DOUBLE DOWN to ${doubledBet} — draws ${formatCard(drawn.card)} (${total})${
+      status === 'bust' ? ' BUST' : ''
+    }.`,
+  ];
+
+  const advanced = advanceAfterSeatAction({ ...table, seats, deck: drawn.deck });
+  if (advanced.toSettle) {
+    const settled = await finishDealerAndSettle(advanced.table);
+    return { table: settled.table, messages: [...messages, ...settled.messages] };
+  }
+  return { table: advanced.table, messages: [...messages, ...advanced.messages] };
 }
 
 export async function handleBlackjackAction(req: BjActionRequest): Promise<BjActionResult> {
@@ -925,7 +1030,7 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
       if (table.state === 'betting') {
         const secs = Math.max(1, Math.ceil((table.phaseEndsAt - Date.now()) / 1000));
         messages.push(
-          `🃏 @${displayName} took a seat (${table.seats.length}/${MAX_SEATS}) — !bet ${MIN_BET}-${MAX_BET} (${secs}s left).`,
+          `🃏 @${displayName} took a seat (${table.seats.length}/${MAX_SEATS}) — ${betHelpText()} (${secs}s left).`,
         );
       } else {
         messages.push(`🃏 @${displayName} took a seat (${table.seats.length}/${MAX_SEATS}).`);
@@ -968,19 +1073,20 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
         };
       }
 
-      const amount = Math.floor(req.amount ?? 0);
-      if (!Number.isFinite(amount) || amount < MIN_BET || amount > MAX_BET) {
+      let chips = await getPlayerChips(login);
+      const parsed = parseBetAmount(req.betInput ?? String(req.amount ?? ''), chips);
+      if (!parsed.ok) {
         return {
           table,
           result: {
             ok: false,
-            messages: [`🃏 Bet must be ${MIN_BET}-${MAX_BET} chips.`],
+            messages: [`🃏 ${parsed.error}`],
             error: 'invalid bet',
           },
         };
       }
+      const amount = parsed.amount;
 
-      let chips = await getPlayerChips(login);
       if (chips < amount) {
         return {
           table,
@@ -1010,13 +1116,14 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
         messages.push('🃏 Betting extended a few seconds so the table can lock in.');
       }
 
-      messages.push(`🃏 @${displayName} bets ${amount} (${chips} left) — you're in this hand.`);
+      const allInNote = amount === chips ? ' (all-in)' : '';
+      messages.push(`🃏 @${displayName} bets ${amount}${allInNote} (${chips} left) — you're in this hand.`);
 
       return { table: nextTable, result: { ok: true, messages } };
     });
   }
 
-  if (req.action === 'hit' || req.action === 'stand') {
+  if (req.action === 'hit' || req.action === 'stand' || req.action === 'double') {
     return withTableMutation(async (table) => {
       if (table.state !== 'player_turn') {
         return {
@@ -1037,7 +1144,11 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
         };
       }
 
-      const result = req.action === 'hit' ? await hitCurrentSeat(table) : await applyStand(table);
+      const result = req.action === 'hit'
+        ? await hitCurrentSeat(table)
+        : req.action === 'double'
+          ? await doubleDownCurrentSeat(table)
+          : await applyStand(table);
       return { table: result.table, result: { ok: true, messages: result.messages } };
     });
   }

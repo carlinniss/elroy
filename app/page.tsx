@@ -7,6 +7,7 @@ import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice
 import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
 import { matchesTriviaAnswer, triviaIntroFor, type ElroyTriviaQuestion, type TriviaCategory, detectElroyTriviaCheat } from '@/lib/cannabis-trivia';
 import { buildTriviaLeaderRoastPrompt, formatTriviaLeaderboardChatMessage } from '@/lib/trivia-scores';
+import { buildTriviaProgressHint } from '@/lib/trivia-hints';
 import { getBotInstanceId } from '@/lib/bot-instance';
 import { getBuildLabel } from '@/lib/build-version';
 import { formatDirectiveInjection } from '@/lib/live-directives';
@@ -1144,10 +1145,11 @@ function BongContent() {
     active.lastCountdownMinute = minuteBucket;
     const remainingMs = TRIVIA_ANSWER_WINDOW_MS - elapsedMs;
     const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
+    const hint = buildTriviaProgressHint(active.answers, active.displayAnswer, minuteBucket);
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     clientRef.current?.say(
       channel,
-      `⏳ ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} left! ${active.question}`,
+      `⏳ ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} left! ${hint}`,
     );
   }, []);
 
@@ -1344,6 +1346,7 @@ function BongContent() {
     username: string;
     displayName?: string;
     amount?: number;
+    betInput?: string;
     isMod?: boolean;
   }) => {
     try {
@@ -1392,14 +1395,18 @@ function BongContent() {
       return;
     }
     if (cmd === 'bet') {
-      const match = rawMessage.trim().match(/^!bet\s+(\d+)$/i);
+      const match = rawMessage.trim().match(/^!bet\s+(\S+)$/i);
       if (!match) return;
       void postBlackjackAction({
         action: 'bet',
         username,
         displayName,
-        amount: Number.parseInt(match[1], 10),
+        betInput: match[1],
       });
+      return;
+    }
+    if (cmd === 'double' || cmd === 'dd') {
+      void postBlackjackAction({ action: 'double', username, displayName });
       return;
     }
     if (cmd === 'hit' || cmd === 'h') {
@@ -1738,8 +1745,11 @@ function BongContent() {
       if (lowerCmd === '!bj' || lowerCmd === '!blackjack') {
         return handleBlackjackCommand('bj', username, displayName, normalizedChannel, t.mod === true || isBroadcaster, m);
       }
-      if (/^!bet\s+\d+$/i.test(lowerCmd)) {
+      if (/^!bet\s+\S+$/i.test(lowerCmd)) {
         return handleBlackjackCommand('bet', username, displayName, normalizedChannel, false, m);
+      }
+      if (lowerCmd === '!double' || lowerCmd === '!dd') {
+        return handleBlackjackCommand('double', username, displayName, normalizedChannel, false, m);
       }
       if (lowerCmd === '!hit' || lowerCmd === '!h') {
         return handleBlackjackCommand('hit', username, displayName, normalizedChannel, false, m);
