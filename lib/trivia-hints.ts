@@ -65,7 +65,26 @@ function buildSingleWordHint(answer: string, minuteBucket: number): string {
 }
 
 /** Progressive hints for minute 1–4 of a 5-minute trivia window (bucket = minutes elapsed). */
-export function buildTriviaProgressHint(answers: string[], minuteBucket: number): string {
+export function buildTriviaProgressHint(
+  question: string,
+  answers: string[],
+  minuteBucket: number,
+  maxLength = 500,
+): string {
+  const answerHint = buildAnswerProgressHint(answers, minuteBucket);
+  const trimmedQuestion = question.trim();
+  if (!trimmedQuestion) return answerHint;
+
+  const combined = `${trimmedQuestion} — ${answerHint}`;
+  if (combined.length <= maxLength) return combined;
+
+  const questionBudget = maxLength - answerHint.length - 3;
+  if (questionBudget < 12) return answerHint;
+
+  return `${trimmedQuestion.slice(0, questionBudget - 1).trim()}… — ${answerHint}`;
+}
+
+function buildAnswerProgressHint(answers: string[], minuteBucket: number): string {
   const primary = normalizeTriviaAnswer(pickHintAnswer(answers));
   if (!primary) return 'Hint: dig deeper — answer’s still hiding.';
 
