@@ -1145,7 +1145,7 @@ function BongContent() {
     active.lastCountdownMinute = minuteBucket;
     const remainingMs = TRIVIA_ANSWER_WINDOW_MS - elapsedMs;
     const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
-    const hint = buildTriviaProgressHint(active.answers, active.displayAnswer, minuteBucket);
+    const hint = buildTriviaProgressHint(active.answers, minuteBucket);
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     clientRef.current?.say(
       channel,
