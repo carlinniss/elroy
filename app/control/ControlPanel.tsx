@@ -49,11 +49,20 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
   }, [initialSecret]);
 
   const refresh = useCallback(async () => {
+    if (!savedSecret) {
+      setDirectives({ sticky: [], next: [], push: [] });
+      setStatus('Save your control secret to load directives.');
+      return;
+    }
+
     try {
-      const res = await fetch(`/api/directives?t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/directives?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: authHeaders(savedSecret),
+      });
       const data = await res.json() as DirectiveSnapshot & { error?: string };
       if (!res.ok) {
-        setStatus(data.error || 'Failed to load directives');
+        setStatus(data.error === 'Unauthorized' ? 'Wrong control secret.' : (data.error || 'Failed to load directives'));
         return;
       }
       setDirectives({
@@ -65,13 +74,14 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     } catch {
       setStatus('Could not reach Elroy');
     }
-  }, []);
+  }, [savedSecret]);
 
   useEffect(() => {
+    if (!savedSecret) return undefined;
     void refresh();
     const timer = setInterval(() => { void refresh(); }, 12_000);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, savedSecret]);
 
   const saveSecret = () => {
     const trimmed = secret.trim();

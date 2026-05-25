@@ -40,6 +40,7 @@ Bong Bot is a high-performance, AI-driven Twitch overlay and chat assistant. Elr
     GEMINI_API_KEY=your_google_ai_studio_key
     ELEVENLABS_API_KEY=your_elevenlabs_key
     ELEVENLABS_VOICE_ID=pNInz6obpgDQGcFmaJgB
+    ELROY_CONTROL_SECRET=your_long_random_control_secret
     ```
 
 ## ⚙️ Configuration Notes
@@ -93,7 +94,8 @@ Steer Elroy's spontaneous content during a stream without redeploying:
 | **Next response** | Injected once on Elroy's very next AI line, then cleared. |
 | **Push now** | Elroy responds immediately (within ~12s). Optional chat-only or force-voice. |
 
-The overlay polls Redis every ~12 seconds. Keep the OBS browser source running so push/next directives take effect.
+The overlay polls Redis every ~12 seconds. Keep the OBS browser source running with
+`?controlKey=your-secret` in the URL so push/next directives can be read and consumed.
 
 ## 🔊 Sound Effects
 
