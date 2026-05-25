@@ -252,12 +252,29 @@ export function matchesTriviaAnswer(message: string, acceptable: string[]): bool
   const normalized = normalizeTriviaAnswer(message);
   if (!normalized) return false;
 
+  const msgTokens = normalized.split(/\s+/).filter(Boolean);
+
   for (const answer of acceptable) {
     const target = normalizeTriviaAnswer(answer);
     if (!target) continue;
+
     if (normalized === target) return true;
-    if (normalized.includes(target) && target.length >= 4) return true;
-    if (target.includes(normalized) && normalized.length >= 4) return true;
+
+    const answerTokens = target.split(/\s+/).filter(Boolean);
+    if (!answerTokens.length) continue;
+
+    // Every answer token must appear as a whole token in chat (not a substring like crop → cropping).
+    const allAnswerTokensPresent = answerTokens.every((token) =>
+      msgTokens.some((msgToken) => msgToken === token),
+    );
+    if (!allAnswerTokensPresent) continue;
+
+    // Reject partial guesses: chat can't be mostly unrelated words.
+    const extraTokens = msgTokens.filter((token) => !answerTokens.includes(token));
+    if (extraTokens.length > 1) continue;
+    if (extraTokens.some((token) => token.length > 3)) continue;
+
+    return true;
   }
 
   return false;
