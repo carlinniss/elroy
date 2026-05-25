@@ -7,9 +7,11 @@ export type TriviaLeader = {
   score: number;
 };
 
+export const TRIVIA_LEADERBOARD_SIZE = 3;
+
 export type TriviaLeaders = {
-  cannabis: TriviaLeader | null;
-  freaky: TriviaLeader | null;
+  cannabis: TriviaLeader[];
+  freaky: TriviaLeader[];
   storage: 'redis' | 'memory';
 };
 
@@ -41,16 +43,14 @@ function normalizeLogin(username: string) {
   return username.trim().toLowerCase();
 }
 
-function getMemoryLeader(category: TriviaCategory): TriviaLeader | null {
+function getMemoryLeaders(category: TriviaCategory, limit = TRIVIA_LEADERBOARD_SIZE): TriviaLeader[] {
   const board = getMemoryScores()[category];
-  let best: TriviaLeader | null = null;
-  for (const [login, entry] of board.entries()) {
-    if (SANDBOX_LOGINS.has(login)) continue;
-    if (!best || entry.score > best.score) {
-      best = { username: entry.username, score: entry.score };
-    }
-  }
-  return best;
+  return [...board.entries()]
+    .filter(([login]) => !SANDBOX_LOGINS.has(login))
+    .map(([, entry]) => ({ username: entry.username, score: entry.score }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
 }
 
 function incrementMemoryScore(username: string, category: TriviaCategory): number {
@@ -67,23 +67,27 @@ async function getRedisDisplayName(login: string): Promise<string | null> {
   return typeof name === 'string' && name.length > 0 ? name : null;
 }
 
-async function getRedisLeader(category: TriviaCategory): Promise<TriviaLeader | null> {
-  const members = await redisCommand(['ZREVRANGE', SCORE_KEY[category], '0', '49']);
-  if (!Array.isArray(members) || members.length === 0) return null;
+async function getRedisLeaders(
+  category: TriviaCategory,
+  limit = TRIVIA_LEADERBOARD_SIZE,
+): Promise<TriviaLeader[]> {
+  const rows = await redisCommand(['ZREVRANGE', SCORE_KEY[category], '0', String(limit * 3), 'WITHSCORES']);
+  if (!Array.isArray(rows) || rows.length === 0) return [];
 
-  for (const member of members) {
-    const login = String(member);
+  const leaders: TriviaLeader[] = [];
+  for (let i = 0; i < rows.length; i += 2) {
+    const login = String(rows[i] ?? '');
     if (!login || SANDBOX_LOGINS.has(login.toLowerCase())) continue;
 
-    const scoreRaw = await redisCommand(['ZSCORE', SCORE_KEY[category], login]);
-    const score = Number.parseFloat(String(scoreRaw ?? ''));
+    const score = Number.parseFloat(String(rows[i + 1] ?? ''));
     if (!Number.isFinite(score) || score <= 0) continue;
 
     const displayName = await getRedisDisplayName(login);
-    return { username: displayName ?? login, score };
+    leaders.push({ username: displayName ?? login, score });
+    if (leaders.length >= limit) break;
   }
 
-  return null;
+  return leaders;
 }
 
 export async function removeTriviaPlayer(username: string): Promise<boolean> {
@@ -148,8 +152,8 @@ export async function getTriviaLeaders(): Promise<TriviaLeaders> {
     try {
       await cleanupSandboxScores();
       const [cannabis, freaky] = await Promise.all([
-        getRedisLeader('cannabis'),
-        getRedisLeader('freaky'),
+        getRedisLeaders('cannabis'),
+        getRedisLeaders('freaky'),
       ]);
       return { cannabis, freaky, storage };
     } catch (error) {
@@ -158,39 +162,41 @@ export async function getTriviaLeaders(): Promise<TriviaLeaders> {
   }
 
   return {
-    cannabis: getMemoryLeader('cannabis'),
-    freaky: getMemoryLeader('freaky'),
+    cannabis: getMemoryLeaders('cannabis'),
+    freaky: getMemoryLeaders('freaky'),
     storage: 'memory',
   };
 }
 
+function formatLeaderList(leaders: TriviaLeader[]): string {
+  return leaders
+    .map((entry, index) => `${index + 1}. ${entry.username} (${entry.score})`)
+    .join(', ');
+}
+
 export function buildTriviaLeaderRoastPrompt(leaders: TriviaLeaders): string | null {
   const lines: string[] = [];
-  if (leaders.cannabis) {
-    lines.push(
-      `Cannabis trivia leader: ${leaders.cannabis.username} with ${leaders.cannabis.score} win${leaders.cannabis.score === 1 ? '' : 's'}`,
-    );
+  if (leaders.cannabis.length) {
+    lines.push(`Cannabis trivia top 3: ${formatLeaderList(leaders.cannabis)}`);
   }
-  if (leaders.freaky) {
-    lines.push(
-      `Freaky sex trivia leader: ${leaders.freaky.username} with ${leaders.freaky.score} win${leaders.freaky.score === 1 ? '' : 's'}`,
-    );
+  if (leaders.freaky.length) {
+    lines.push(`Freaky sex trivia top 3: ${formatLeaderList(leaders.freaky)}`);
   }
   if (!lines.length) return null;
 
-  return `Before a new trivia round, shout out and clown the current trivia leaderboard in Twitch chat. ${lines.join('. ')}. Roast them in Elroy OG style — playful crusty humor, @ them by username. Take a few sentences and really sell the bit.`;
+  return `Before a new trivia round, shout out and clown the current trivia leaderboard in Twitch chat. ${lines.join('. ')}. Roast the top players in Elroy OG style — playful crusty humor, @ them by username. Take a few sentences and really sell the bit.`;
 }
 
 export function formatTriviaLeaderboardChatMessage(leaders: TriviaLeaders): string {
   const parts: string[] = [];
-  if (leaders.cannabis) {
-    parts.push(`🌿 ${leaders.cannabis.username} (${leaders.cannabis.score})`);
+  if (leaders.cannabis.length) {
+    parts.push(`🌿 ${formatLeaderList(leaders.cannabis)}`);
   }
-  if (leaders.freaky) {
-    parts.push(`🔥 ${leaders.freaky.username} (${leaders.freaky.score})`);
+  if (leaders.freaky.length) {
+    parts.push(`🔥 ${formatLeaderList(leaders.freaky)}`);
   }
   if (!parts.length) {
     return '🏆 No trivia wins yet — first correct answer during trivia wins!';
   }
-  return `🏆 Trivia leaders: ${parts.join(' | ')}`;
+  return `🏆 Trivia top 3: ${parts.join(' | ')}`;
 }

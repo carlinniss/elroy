@@ -9,7 +9,7 @@ export const BETTING_MS = 30_000;
 export const TURN_MS = 25_000;
 /** Warn the active player once when this much time is left on their turn. */
 export const TURN_NUDGE_REMAINING_MS = 12_000;
-export const LEADERBOARD_SIZE = 5;
+export const LEADERBOARD_SIZE = 3;
 
 const TABLE_KEY = 'elroy:bj:table';
 const CHIPS_KEY = 'elroy:bj:chips';
