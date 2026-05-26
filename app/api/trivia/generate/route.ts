@@ -42,7 +42,12 @@ export async function POST(request: Request) {
       recentIds?: string[];
     };
 
-    const category = body.category === 'freaky' ? 'freaky' : 'cannabis';
+    const category =
+      body.category === 'freaky'
+        ? 'freaky'
+        : body.category === 'music90s'
+          ? 'music90s'
+          : 'cannabis';
     const clientRecent = Array.isArray(body.recentQuestions)
       ? body.recentQuestions.filter((q): q is string => typeof q === 'string')
       : [];

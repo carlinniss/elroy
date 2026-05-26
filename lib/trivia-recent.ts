@@ -28,7 +28,7 @@ function redisTruthy(value: unknown) {
 
 function getMemoryRecent(category: TriviaCategory): string[] {
   if (!globalStore.__elroyRecentTrivia) {
-    globalStore.__elroyRecentTrivia = { cannabis: [], freaky: [] };
+    globalStore.__elroyRecentTrivia = { cannabis: [], freaky: [], music90s: [] };
   }
   if (!globalStore.__elroyRecentTrivia[category]) {
     globalStore.__elroyRecentTrivia[category] = [];
@@ -38,7 +38,7 @@ function getMemoryRecent(category: TriviaCategory): string[] {
 
 function getMemoryAnswers(category: TriviaCategory): Set<string> {
   if (!globalStore.__elroySeenAnswers) {
-    globalStore.__elroySeenAnswers = { cannabis: new Set(), freaky: new Set() };
+    globalStore.__elroySeenAnswers = { cannabis: new Set(), freaky: new Set(), music90s: new Set() };
   }
   if (!globalStore.__elroySeenAnswers[category]) {
     globalStore.__elroySeenAnswers[category] = new Set();
@@ -207,10 +207,13 @@ export async function resetTriviaQuestionHistory(): Promise<boolean> {
       await redisPipeline([
         ['DEL', recentKey('cannabis')],
         ['DEL', recentKey('freaky')],
+        ['DEL', recentKey('music90s')],
         ['DEL', seenKey('cannabis')],
         ['DEL', seenKey('freaky')],
+        ['DEL', seenKey('music90s')],
         ['DEL', answerKey('cannabis')],
         ['DEL', answerKey('freaky')],
+        ['DEL', answerKey('music90s')],
       ]);
       return true;
     } catch (error) {
@@ -219,8 +222,8 @@ export async function resetTriviaQuestionHistory(): Promise<boolean> {
     }
   }
 
-  globalStore.__elroyRecentTrivia = { cannabis: [], freaky: [] };
-  globalStore.__elroySeenAnswers = { cannabis: new Set(), freaky: new Set() };
+  globalStore.__elroyRecentTrivia = { cannabis: [], freaky: [], music90s: [] };
+  globalStore.__elroySeenAnswers = { cannabis: new Set(), freaky: new Set(), music90s: new Set() };
   return true;
 }
 

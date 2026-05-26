@@ -40,6 +40,19 @@ const FREAKY_ANGLES = [
   'paraphilia terminology from DSM/clinical context (definitions requiring real knowledge)',
 ];
 
+const MUSIC_90S_ANGLES = [
+  '1990s hip-hop album chronology (release year, city, label, producer credits)',
+  'East Coast vs West Coast era specifics (labels, diss tracks, timeline details)',
+  '90s R&B and hip-hop crossover samples (original song + sampled hit)',
+  'Billboard Hot 100 and rap chart milestones from 1990-1999',
+  'iconic 90s music video directors, cameos, and MTV-era deep cuts',
+  'regional rap scenes in the 90s (Houston, Bay, Atlanta, NYC borough ties)',
+  'producer signatures (DJ Premier, RZA, Dre, Timbaland) and exact tracks',
+  'label roster lore (Bad Boy, Death Row, Ruff Ryders, No Limit) with dates',
+  '90s festival/award moments (The Source Awards, Grammys, MTV VMAs)',
+  'one-hit-wonder and posse-cut details from 90s rap/r&b radio',
+];
+
 const GENERIC_QUESTION_PATTERNS = [
   /what does (thc|cbd|ecs|bdsm|nsfw|dom|sub)\b/i,
   /what (is|does) (thc|cbd) stand for/i,
@@ -136,7 +149,11 @@ BANNED correct answers (too easy): THC, CBD, terpenes, ECS, indica, sativa, 420,
 }
 
 function buildPrompt(category: TriviaCategory, recentQuestions: string[], attempt: number): string {
-  const angles = category === 'freaky' ? FREAKY_ANGLES : CANNABIS_ANGLES;
+  const angles = category === 'freaky'
+    ? FREAKY_ANGLES
+    : category === 'music90s'
+      ? MUSIC_90S_ANGLES
+      : CANNABIS_ANGLES;
   const primaryAngle = pickRandom(angles);
   const secondaryAngle = pickRandom(angles.filter((a) => a !== primaryAngle));
   const difficulty =

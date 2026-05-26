@@ -1,4 +1,4 @@
-export type TriviaCategory = 'cannabis' | 'freaky';
+export type TriviaCategory = 'cannabis' | 'freaky' | 'music90s';
 
 export type ElroyTriviaQuestion = {
   id: string;
@@ -8,6 +8,8 @@ export type ElroyTriviaQuestion = {
   answers: string[];
   /** Shown when revealing the answer. */
   displayAnswer: string;
+  /** Optional bonus scoring weight. Defaults to 1 point. */
+  points?: number;
 };
 
 /** @deprecated Use ElroyTriviaQuestion */
@@ -229,12 +231,60 @@ const FREAKY_QUESTIONS: ElroyTriviaQuestion[] = [
   },
 ];
 
-export const ELROY_TRIVIA = [...CANNABIS_QUESTIONS, ...FREAKY_QUESTIONS];
+const MUSIC_90S_QUESTIONS: ElroyTriviaQuestion[] = [
+  {
+    id: 'music90s-grunge-nevermind-year',
+    category: 'music90s',
+    question: 'Nirvana released "Nevermind" in what year?',
+    answers: ['1991', 'nineteen ninety one'],
+    displayAnswer: '1991',
+  },
+  {
+    id: 'music90s-mariah-fantasy-sample',
+    category: 'music90s',
+    question: 'Mariah Carey\'s 1995 "Fantasy" famously samples which Tom Tom Club song?',
+    answers: ['genius of love', 'the genius of love'],
+    displayAnswer: 'Genius of Love',
+  },
+  {
+    id: 'music90s-hiphop-bonus-illmatic',
+    category: 'music90s',
+    question: '🎤 BONUS (2 points): Nas dropped "Illmatic" in 1994. What NYC borough is he most associated with?',
+    answers: ['queensbridge', 'queens', 'qb'],
+    displayAnswer: 'Queensbridge, Queens',
+    points: 2,
+  },
+  {
+    id: 'music90s-hiphop-bonus-ready-to-die-label',
+    category: 'music90s',
+    question: '🎤 BONUS (2 points): The Notorious B.I.G.\'s "Ready to Die" was released on which label founded by Puff Daddy?',
+    answers: ['bad boy', 'bad boy records', 'bad boy entertainment'],
+    displayAnswer: 'Bad Boy Records',
+    points: 2,
+  },
+  {
+    id: 'music90s-wu-36-chambers-year',
+    category: 'music90s',
+    question: 'Wu-Tang Clan\'s debut "Enter the Wu-Tang (36 Chambers)" dropped in what year?',
+    answers: ['1993', 'nineteen ninety three'],
+    displayAnswer: '1993',
+  },
+  {
+    id: 'music90s-lauryn-miseducation-year',
+    category: 'music90s',
+    question: 'Lauryn Hill\'s "The Miseducation of Lauryn Hill" won Album of the Year in what year?',
+    answers: ['1999', 'nineteen ninety nine'],
+    displayAnswer: '1999',
+  },
+];
+
+export const ELROY_TRIVIA = [...CANNABIS_QUESTIONS, ...FREAKY_QUESTIONS, ...MUSIC_90S_QUESTIONS];
 
 /** @deprecated Use ELROY_TRIVIA */
 export const CANNABIS_TRIVIA = ELROY_TRIVIA;
 
 export function triviaIntroFor(category: ElroyTriviaQuestion['category']): string {
+  if (category === 'music90s') return '🎵 90s music trivia!';
   return category === 'freaky' ? '😈 Freaky sex trivia!' : '🌿 Cannabis trivia!';
 }
 

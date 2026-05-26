@@ -11,7 +11,7 @@ export type UserMemoryProfile = {
   firstSeenAt: number;
   lastSeenAt: number;
   mentionCount: number;
-  triviaWins: { cannabis: number; freaky: number };
+  triviaWins: { cannabis: number; freaky: number; music90s: number };
   notes: string[];
   recentToElroy: string[];
 };
@@ -51,7 +51,7 @@ function emptyProfile(login: string, displayName: string): UserMemoryProfile {
     firstSeenAt: now,
     lastSeenAt: now,
     mentionCount: 0,
-    triviaWins: { cannabis: 0, freaky: 0 },
+    triviaWins: { cannabis: 0, freaky: 0, music90s: 0 },
     notes: [],
     recentToElroy: [],
   };
@@ -94,7 +94,7 @@ function applyEvent(profile: UserMemoryProfile, event: UserMemoryEvent): UserMem
     case 'trivia_win':
       next.triviaWins = {
         ...next.triviaWins,
-        [event.category]: Math.max(next.triviaWins[event.category], event.totalWins),
+        [event.category]: Math.max(next.triviaWins[event.category] ?? 0, event.totalWins),
       };
       next.notes = pushUniqueNote(
         next.notes,
@@ -180,7 +180,7 @@ export async function getUserMemoryProfile(username: string): Promise<UserMemory
 export function profileHasMemory(profile: UserMemoryProfile | null): boolean {
   if (!profile) return false;
   if (profile.mentionCount > 0) return true;
-  if (profile.triviaWins.cannabis > 0 || profile.triviaWins.freaky > 0) return true;
+  if ((profile.triviaWins.cannabis ?? 0) > 0 || (profile.triviaWins.freaky ?? 0) > 0 || (profile.triviaWins.music90s ?? 0) > 0) return true;
   if (profile.notes.length > 0) return true;
   if (profile.recentToElroy.length > 0) return true;
   return false;
@@ -192,7 +192,7 @@ export function formatProfileFacts(profile: UserMemoryProfile): string {
     `- First seen in chat: ${new Date(profile.firstSeenAt).toISOString()}`,
     `- Last seen in chat: ${new Date(profile.lastSeenAt).toISOString()}`,
     `- Times they engaged me directly: ${profile.mentionCount}`,
-    `- Trivia wins logged: cannabis ${profile.triviaWins.cannabis}, freaky ${profile.triviaWins.freaky}`,
+    `- Trivia wins logged: cannabis ${profile.triviaWins.cannabis ?? 0}, freaky ${profile.triviaWins.freaky ?? 0}, music90s ${profile.triviaWins.music90s ?? 0}`,
   ];
 
   if (profile.recentToElroy.length) {

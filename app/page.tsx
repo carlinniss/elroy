@@ -136,6 +136,7 @@ function BongContent() {
     question: string;
     answers: string[];
     displayAnswer: string;
+    points: number;
     askedAt: number;
     answered: boolean;
     lastCountdownMinute: number;
@@ -1160,7 +1161,8 @@ function BongContent() {
     lastTriviaAtRef.current = Date.now();
 
     try {
-      const category: TriviaCategory = Math.random() < 0.5 ? 'cannabis' : 'freaky';
+      const roll = Math.random();
+      const category: TriviaCategory = roll < 0.4 ? 'music90s' : roll < 0.7 ? 'cannabis' : 'freaky';
       let picked: ElroyTriviaQuestion | null = null;
 
       const categoryHistory = recentTriviaHistoryRef.current.filter((entry) => entry.category === category);
@@ -1222,15 +1224,17 @@ function BongContent() {
         question: picked.question,
         answers: picked.answers,
         displayAnswer: picked.displayAnswer,
+        points: Math.max(1, Number(picked.points) || 1),
         askedAt: Date.now(),
         answered: false,
         lastCountdownMinute: 0,
       };
 
       const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+      const roundPoints = Math.max(1, Number(picked.points) || 1);
       clientRef.current?.say(
         channel,
-        `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer wins!`,
+        `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer gets ${roundPoints} point${roundPoints === 1 ? '' : 's'}!`,
       );
     } finally {
       triviaAskInFlightRef.current = false;
@@ -1311,11 +1315,12 @@ function BongContent() {
     lastTriviaAtRef.current = Date.now();
 
     let totalWins = 1;
+    const awardedPoints = Math.max(1, active.points || 1);
     try {
       const winRes = await fetch('/api/trivia/win', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, category: active.category }),
+        body: JSON.stringify({ username, category: active.category, points: awardedPoints }),
       });
       if (winRes.ok) {
         const data = await winRes.json();
@@ -1329,7 +1334,7 @@ function BongContent() {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     clientRef.current?.say(
       channel,
-      `🎉 @${username} got it FIRST! Correct — ${active.displayAnswer}. (${totalWins} trivia win${totalWins === 1 ? '' : 's'} total)`,
+      `🎉 @${username} got it FIRST! Correct — ${active.displayAnswer}. (+${awardedPoints} point${awardedPoints === 1 ? '' : 's'} • ${totalWins} total)`,
     );
     void queueBongLogic(
       `${username} just won trivia with the first correct answer. Hype them up in one short OG sentence — make them feel legendary.`,
