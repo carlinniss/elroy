@@ -57,11 +57,19 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
   }, [initialSecret]);
 
   const refresh = useCallback(async () => {
+    if (!savedSecret) {
+      setStatus('Save your control secret first (Setup tab).');
+      return;
+    }
+
     try {
-      const res = await fetch(`/api/directives?t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/directives?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: authHeaders(savedSecret),
+      });
       const data = await res.json() as DirectiveSnapshot & { error?: string };
       if (!res.ok) {
-        setStatus(data.error || 'Failed to load directives');
+        setStatus(data.error === 'Unauthorized' ? 'Wrong control secret.' : (data.error || 'Failed to load directives'));
         return;
       }
       setDirectives({
@@ -73,7 +81,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     } catch {
       setStatus('Could not reach Elroy');
     }
-  }, []);
+  }, [savedSecret]);
 
   useEffect(() => {
     void refresh();
@@ -271,7 +279,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
 
           <h3 style={subheadingStyle}>While streaming</h3>
           <ul style={checklistStyle}>
-            <li>OBS overlay open with bot <strong>ignited</strong></li>
+            <li>OBS overlay open with <code style={codeStyle}>?controlKey=your-secret</code> and bot <strong>ignited</strong></li>
             <li>Push / next directives land within ~12s</li>
             <li>Spotify reactions need you <strong>live on Twitch</strong></li>
           </ul>
