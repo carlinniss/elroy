@@ -13,6 +13,7 @@ export async function POST(req: Request) {
       model: google("gemini-2.5-flash"), 
       system: process.env.SYSTEM_PROMPT || "You are Bong, a wise, rhyming OG. Always rhyme.",
       prompt: prompt || "Say hello.",
+      maxOutputTokens: 220,
     });
 
     return new Response(JSON.stringify({ text }), { headers: { "Content-Type": "application/json" } });

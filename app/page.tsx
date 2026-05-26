@@ -16,6 +16,8 @@ import { formatDirectiveInjection } from '@/lib/live-directives';
 import type { UserMemoryEvent } from '@/lib/user-memory';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
+const MAX_TWITCH_CHAT_CHARS = 480;
+const MAX_VOICE_REPLY_CHARS = 220;
 
 function rememberUser(username: string, displayName: string | undefined, event: UserMemoryEvent) {
   void fetch('/api/users/remember', {
@@ -25,6 +27,30 @@ function rememberUser(username: string, displayName: string | undefined, event: 
   }).catch((error) => {
     console.warn('User memory write failed', error);
   });
+}
+
+function clampReplyLength(text: string, maxChars: number): string {
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  if (!cleaned) return '...';
+  if (cleaned.length <= maxChars) return cleaned;
+
+  const clipped = cleaned.slice(0, maxChars);
+  const lastSentenceBreak = Math.max(
+    clipped.lastIndexOf('. '),
+    clipped.lastIndexOf('! '),
+    clipped.lastIndexOf('? '),
+  );
+  const lastWordBreak = clipped.lastIndexOf(' ');
+  const breakAt = lastSentenceBreak >= Math.floor(maxChars * 0.55)
+    ? lastSentenceBreak + 1
+    : lastWordBreak;
+
+  const safe = (breakAt > 0 ? clipped.slice(0, breakAt) : clipped)
+    .trim()
+    .replace(/[.,;:!?-]+$/, '')
+    .trim();
+
+  return `${safe}…`;
 }
 
 function BongContent() {
@@ -860,8 +886,15 @@ function BongContent() {
           console.warn('Directive consume failed', error);
         });
       }
-      setLog(p => [{ text: data.text }, ...p].slice(0, 5));
-      clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, user ? `@${user} ${data.text}` : data.text);
+      const maxBodyChars = user
+        ? Math.max(120, MAX_TWITCH_CHAT_CHARS - (`@${user} `.length))
+        : MAX_TWITCH_CHAT_CHARS;
+      const safeChatText = clampReplyLength(data.text ?? '', maxBodyChars);
+      setLog(p => [{ text: safeChatText }, ...p].slice(0, 5));
+      clientRef.current?.say(
+        process.env.NEXT_PUBLIC_TWITCH_CHANNEL!,
+        user ? `@${user} ${safeChatText}` : safeChatText,
+      );
 
       if (willUseVoice) {
         lastElroyVoiceRef.current = Date.now();
@@ -873,7 +906,7 @@ function BongContent() {
         if (speechDelayMs > 0) {
           await new Promise<void>((resolve) => setTimeout(resolve, speechDelayMs));
         }
-        await speak(data.text);
+        await speak(clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS));
       }
     } catch (e) { console.error(e); }
   }, [playBongRip, speak]);
