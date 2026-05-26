@@ -1546,13 +1546,21 @@ function BongContent() {
   const handleElroyMention = useCallback((username: string, displayName: string, message: string) => {
     if (isFullyMuted()) return;
     rememberUser(username, displayName, { type: 'mention', message });
+
+    const lower = message.toLowerCase();
+    const looksLikeSongQuestion = /\b(now\s+playing|what('?s)?\s+playing|playing\s+now|song\s+playing|what\s+song|what\s+track|current\s+song|current\s+track|what\s+music|what\s+music\s+is)\b/.test(lower);
+    if (!isSilenced() && looksLikeSongQuestion) {
+      void requestSpotifyComment(username);
+      return;
+    }
+
     if (isSilenced()) {
       if (!streamLiveRef.current || Math.random() >= COMEBACK_CHANCE) return;
       void queueBongLogic(buildComebackPrompt(username, message), username, { chatOnly: true });
       return;
     }
     void queueBongLogic(buildMentionPrompt(username, message), username);
-  }, [buildComebackPrompt, buildMentionPrompt, queueBongLogic]);
+  }, [buildComebackPrompt, buildMentionPrompt, queueBongLogic, requestSpotifyComment]);
 
   const handleLRoyMisname = useCallback((username: string, displayName: string, message: string) => {
     if (isFullyMuted()) return;
