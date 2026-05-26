@@ -129,6 +129,7 @@ async function writeTokens(tokens: TokenBundle | null) {
       await redisCommand(['SET', TOKEN_KEY, JSON.stringify(tokens)]);
     } catch (error) {
       console.error('Redis Spotify token write failed', error);
+      throw new Error('Spotify token storage failed');
     }
     return;
   }
