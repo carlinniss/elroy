@@ -1,24 +1,33 @@
-import { google } from "@ai-sdk/google";
-import { generateText } from "ai";
+import { google } from '@ai-sdk/google';
+import { generateText } from 'ai';
+import { clampReplyLength, mapBrainErrorMessage, MAX_TWITCH_CHAT_CHARS } from '@/lib/chat-reply';
 
 export async function POST(req: Request) {
   try {
     const { prompt } = await req.json();
     const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    
-    if (!apiKey) return new Response("Key missing", { status: 500 });
+
+    if (!apiKey) {
+      return Response.json({ error: 'GOOGLE_GENERATIVE_AI_API_KEY missing' }, { status: 500 });
+    }
 
     const { text } = await generateText({
-      // Stable 2026 identifier for the Flash model
-      model: google("gemini-2.5-flash"), 
-      system: process.env.SYSTEM_PROMPT || "You are Bong, a wise, rhyming OG. Always rhyme.",
-      prompt: prompt || "Say hello.",
-      maxOutputTokens: 220,
+      model: google('gemini-2.5-flash'),
+      system: process.env.SYSTEM_PROMPT || 'You are Bong, a wise, rhyming OG. Always rhyme.',
+      prompt: prompt || 'Say hello.',
     });
 
-    return new Response(JSON.stringify({ text }), { headers: { "Content-Type": "application/json" } });
-  } catch (error: any) {
-    console.error("BRAIN ERROR:", error.message);
-    return new Response(JSON.stringify({ text: "Brain stall..." }), { status: 500 });
+    const trimmed = text?.trim();
+    if (!trimmed) {
+      return Response.json({ error: 'Gemini returned an empty reply' }, { status: 502 });
+    }
+
+    return Response.json({
+      text: clampReplyLength(trimmed, MAX_TWITCH_CHAT_CHARS),
+    });
+  } catch (error: unknown) {
+    const message = mapBrainErrorMessage(error);
+    console.error('BRAIN ERROR:', error instanceof Error ? error.message : error);
+    return Response.json({ error: message }, { status: 500 });
   }
 }

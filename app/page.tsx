@@ -13,11 +13,15 @@ import type { SpotifyTrackSnapshot } from '@/lib/spotify';
 import { getBotInstanceId } from '@/lib/bot-instance';
 import { getBuildLabel } from '@/lib/build-version';
 import { formatDirectiveInjection } from '@/lib/live-directives';
+import {
+  clampReplyLength,
+  formatChatReplyBody,
+  MAX_TWITCH_CHAT_CHARS,
+  MAX_VOICE_REPLY_CHARS,
+} from '@/lib/chat-reply';
 import type { UserMemoryEvent } from '@/lib/user-memory';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
-const MAX_TWITCH_CHAT_CHARS = 480;
-const MAX_VOICE_REPLY_CHARS = 220;
 
 function rememberUser(username: string, displayName: string | undefined, event: UserMemoryEvent) {
   void fetch('/api/users/remember', {
@@ -27,30 +31,6 @@ function rememberUser(username: string, displayName: string | undefined, event: 
   }).catch((error) => {
     console.warn('User memory write failed', error);
   });
-}
-
-function clampReplyLength(text: string, maxChars: number): string {
-  const cleaned = text.replace(/\s+/g, ' ').trim();
-  if (!cleaned) return '...';
-  if (cleaned.length <= maxChars) return cleaned;
-
-  const clipped = cleaned.slice(0, maxChars);
-  const lastSentenceBreak = Math.max(
-    clipped.lastIndexOf('. '),
-    clipped.lastIndexOf('! '),
-    clipped.lastIndexOf('? '),
-  );
-  const lastWordBreak = clipped.lastIndexOf(' ');
-  const breakAt = lastSentenceBreak >= Math.floor(maxChars * 0.55)
-    ? lastSentenceBreak + 1
-    : lastWordBreak;
-
-  const safe = (breakAt > 0 ? clipped.slice(0, breakAt) : clipped)
-    .trim()
-    .replace(/[.,;:!?-]+$/, '')
-    .trim();
-
-  return `${safe}…`;
 }
 
 function BongContent() {
@@ -868,14 +848,23 @@ function BongContent() {
         : `- Keep it general for the whole chat, not aimed at one person.`;
       const lengthRule = willUseVoice
         ? '- Keep it SHORT for voice: one or two sentences, roughly 80-160 characters.'
-        : `- Chat only (no voice): write 3-5 sentences, roughly 350-480 characters.
-- No voice means chat carries the whole performance — be noticeably more verbose, descriptive, and colorful than voice lines.
-- Add extra OG personality: a setup line, the main take, and a closing quip or call-out when it fits.
-- Stay under 480 characters (Twitch chat limit).
-- If the task above asks for something short, ignore that — expand for chat-only.`;
+        : `- Chat only (no voice): write 2-4 sentences, roughly 250-450 characters.
+- Stay under 480 characters (Twitch chat limit). Never write stories, lists, or multi-paragraph replies.
+- No voice means chat carries the performance, but keep it tight — one setup, one take, one closing quip.`;
       const fullPrompt = `${input}${directiveBlock}\n\nResponse requirements:\n${lengthRule}\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
       const res = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: fullPrompt }) });
-      const data = await res.json();
+      const data = await res.json() as { text?: string; error?: string };
+      if (!res.ok || !data.text?.trim()) {
+        console.warn('Chat brain failed', data.error || res.status);
+        if (user) {
+          const failLine = clampReplyLength(
+            data.error || 'Brain stall — check Gemini billing in AI Studio.',
+            MAX_TWITCH_CHAT_CHARS - (`@${user} `.length),
+          );
+          clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${user} ${failLine}`);
+        }
+        return;
+      }
       if (hadNextDirectives && !opts.isQuota) {
         liveDirectivesRef.current = { ...liveDirectivesRef.current, next: [] };
         void fetch('/api/directives', {
@@ -886,10 +875,7 @@ function BongContent() {
           console.warn('Directive consume failed', error);
         });
       }
-      const maxBodyChars = user
-        ? Math.max(120, MAX_TWITCH_CHAT_CHARS - (`@${user} `.length))
-        : MAX_TWITCH_CHAT_CHARS;
-      const safeChatText = clampReplyLength(data.text ?? '', maxBodyChars);
+      const safeChatText = formatChatReplyBody(data.text, user);
       setLog(p => [{ text: safeChatText }, ...p].slice(0, 5));
       clientRef.current?.say(
         process.env.NEXT_PUBLIC_TWITCH_CHANNEL!,
