@@ -8,6 +8,8 @@ import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
 import { matchesTriviaAnswer, triviaIntroFor, type ElroyTriviaQuestion, type TriviaCategory, detectElroyTriviaCheat } from '@/lib/cannabis-trivia';
 import { buildTriviaLeaderRoastPrompt, formatTriviaLeaderboardChatMessage } from '@/lib/trivia-scores';
 import { buildTriviaProgressHint } from '@/lib/trivia-hints';
+import { buildSpotifyTrackPrompt } from '@/lib/spotify-prompt';
+import type { SpotifyTrackSnapshot } from '@/lib/spotify';
 import { getBotInstanceId } from '@/lib/bot-instance';
 import { getBuildLabel } from '@/lib/build-version';
 import { formatDirectiveInjection } from '@/lib/live-directives';
@@ -55,7 +57,6 @@ function BongContent() {
   const silencedUntilRef = useRef(0);
   const silenceModeRef = useRef<'none' | 'voice' | 'full'>('none');
   const muteCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastElroyChatRef = useRef(0);
   const lastElroyVoiceRef = useRef(0);
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -63,15 +64,11 @@ function BongContent() {
   const SHUT_UP_DURATION_MS = 8 * 60 * 1000;
   const POWERUP_MUTE_MS = 10 * 60 * 1000;
   const SHUT_ELROY_POWERUP_PATTERN = /shut\s+elroy\s+up(\s+for\s+10\s+minutes?)?/i;
-  const MENTION_COOLDOWN_MS = 35_000;
-  const CHAT_COOLDOWN_MS = 35_000;
   const VOICE_COOLDOWN_MS = 90_000;
   const CELEBRATION_VOICE_COOLDOWN_MS = 25_000;
-  const COMEBACK_COOLDOWN_MS = 5 * 60 * 1000;
   const COMEBACK_CHANCE = 0.12;
   const CELEBRATION_COOLDOWN_MS = 25_000;
   const FOLLOW_CELEBRATION_COOLDOWN_MS = 60_000;
-  const JOIN_GREET_COOLDOWN_MS = 45_000;
   const JOIN_GREET_WARMUP_MS = 60_000;
   const FOLLOWER_POLL_MS = 45_000;
   const STREAM_CHECKIN_MS = 15 * 60 * 1000;
@@ -91,6 +88,7 @@ function BongContent() {
   const AUTO_RESUME_STORAGE_KEY = 'elroy-auto-resume';
   const VERSION_POLL_MS = 90_000;
   const DIRECTIVE_POLL_MS = 12_000;
+  const SPOTIFY_POLL_MS = 5_000;
 
   const CANNABIS_FACTS = [
     'The word "canvas" comes from cannabis — sailcloth was historically made from hemp.',
@@ -123,6 +121,8 @@ function BongContent() {
   const streamPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const triviaPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const blackjackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const spotifyPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastSpotifyTrackIdRef = useRef<string | null>(null);
   const streamLiveRef = useRef(false);
   const lastTriviaAtRef = useRef(0);
   const recentTriviaHistoryRef = useRef<Array<{ category: TriviaCategory; question: string; id: string }>>([]);
@@ -230,9 +230,6 @@ function BongContent() {
       /\bpower[\s-]?up\b/.test(lower),
     );
   };
-
-  const canRespondInChat = (cooldownMs = CHAT_COOLDOWN_MS) =>
-    Date.now() - lastElroyChatRef.current >= cooldownMs;
 
   const canUseVoice = (priority: 'celebration' | 'normal' = 'normal') => {
     if (!quotaVoiceAllowedRef.current) return false;
@@ -809,22 +806,12 @@ function BongContent() {
       forceVoice?: boolean;
       chatOnly?: boolean;
       skipDing?: boolean;
-      bypassChatCooldown?: boolean;
       bypassVoiceCooldown?: boolean;
       voicePriority?: 'celebration' | 'normal';
-      chatCooldownMs?: number;
     } = {},
   ) => {
     try {
       if (isFullyMuted() && !opts.isQuota) return;
-      const chatCooldown = opts.chatCooldownMs ?? CHAT_COOLDOWN_MS;
-      if (
-        !opts.isQuota
-        && !opts.bypassChatCooldown
-        && Date.now() - lastElroyChatRef.current < chatCooldown
-      ) {
-        return;
-      }
       if (opts.isQuota) {
         const res = await fetch('/api/quota');
         const d = await res.json();
@@ -876,7 +863,6 @@ function BongContent() {
       }
       setLog(p => [{ text: data.text }, ...p].slice(0, 5));
       clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, user ? `@${user} ${data.text}` : data.text);
-      lastElroyChatRef.current = Date.now();
 
       if (willUseVoice) {
         lastElroyVoiceRef.current = Date.now();
@@ -901,10 +887,8 @@ function BongContent() {
       forceVoice?: boolean;
       chatOnly?: boolean;
       skipDing?: boolean;
-      bypassChatCooldown?: boolean;
       bypassVoiceCooldown?: boolean;
       voicePriority?: 'celebration' | 'normal';
-      chatCooldownMs?: number;
     } = {},
   ) => {
     responseQueueRef.current = responseQueueRef.current
@@ -938,7 +922,6 @@ function BongContent() {
           {
             chatOnly: item.chatOnly,
             forceVoice: item.forceVoice,
-            bypassChatCooldown: true,
             bypassVoiceCooldown: Boolean(item.forceVoice),
           },
         );
@@ -997,21 +980,16 @@ function BongContent() {
     if (Date.now() < joinGreetWarmupUntilRef.current) return;
     if (shouldSkipJoinGreet(normalizedUser, normalizedChannel)) return;
     if (greetedThisSessionRef.current.has(normalizedUser)) return;
-    if (!canRespondInChat(JOIN_GREET_COOLDOWN_MS)) return;
 
     greetedThisSessionRef.current.add(normalizedUser);
     if (streamStartedAtRef.current) {
       persistStreamSession();
     }
-    void queueBongLogic(buildJoinGreetingPrompt(username), username, {
-      chatOnly: true,
-      chatCooldownMs: JOIN_GREET_COOLDOWN_MS,
-    });
+    void queueBongLogic(buildJoinGreetingPrompt(username), username, { chatOnly: true });
   }, [buildJoinGreetingPrompt, persistStreamSession, queueBongLogic, shouldSkipJoinGreet]);
 
   const celebrate = useCallback((kind: 'follow' | 'sub' | 'bits', username: string, extra = '', bitsAmount?: number) => {
     if (!streamLiveRef.current || isFullyMuted() || !canCelebrate(kind)) return;
-    if (kind === 'follow' && !canRespondInChat(FOLLOW_CELEBRATION_COOLDOWN_MS)) return;
     lastCelebrationRef.current = Date.now();
     if (kind === 'follow') rememberUser(username, username, { type: 'follow' });
     if (kind === 'sub') rememberUser(username, username, { type: 'sub' });
@@ -1024,7 +1002,6 @@ function BongContent() {
       : buildBitsPrompt(username, extra);
     void queueBongLogic(prompt, username, {
       forceVoice: true,
-      bypassChatCooldown: kind !== 'follow',
       voicePriority: kind === 'follow' ? 'normal' : 'celebration',
     });
   }, [buildBitsPrompt, buildFollowPrompt, buildSubPrompt, playElroySfx, queueBongLogic]);
@@ -1082,7 +1059,6 @@ function BongContent() {
       void playElroySfx('go_live');
       void queueBongLogic(buildStreamGreetingPrompt(viewerCount, randomCannabisFact()), undefined, {
         forceVoice: true,
-        bypassChatCooldown: true,
         bypassVoiceCooldown: true,
       });
     }
@@ -1095,12 +1071,10 @@ function BongContent() {
       .then(() => processBongLogic(buildStreamGoodbyePrompt(), undefined, {
         chatOnly: true,
         skipDing: true,
-        bypassChatCooldown: true,
       }))
       .then(() => processBongLogic(summaryPrompt, undefined, {
         chatOnly: true,
         skipDing: true,
-        bypassChatCooldown: true,
       }))
       .then(() => { clearStreamSession(); })
       .catch((e) => { console.error(e); });
@@ -1210,7 +1184,6 @@ function BongContent() {
           if (roastPrompt) {
             await processBongLogic(roastPrompt, undefined, {
               chatOnly: !ambientVoiceAllowedRef.current,
-              bypassChatCooldown: true,
               skipDing: true,
             });
           }
@@ -1255,6 +1228,63 @@ function BongContent() {
     }
   }, [announceTriviaCountdown, askCannabisTrivia, expireTriviaIfNeeded]);
 
+  const commentOnSpotifyTrack = useCallback((
+    track: SpotifyTrackSnapshot,
+    requestedBy?: string,
+  ) => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+
+    lastSpotifyTrackIdRef.current = track.id;
+    void queueBongLogic(buildSpotifyTrackPrompt(track), requestedBy, { chatOnly: true });
+  }, [queueBongLogic]);
+
+  const pollSpotifyNowPlaying = useCallback(async () => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+
+    try {
+      const res = await fetch(`/api/spotify/now-playing?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json() as {
+        connected?: boolean;
+        playing?: boolean;
+        track?: SpotifyTrackSnapshot | null;
+      };
+      if (!data.connected || !data.playing || !data.track) return;
+      if (data.track.id === lastSpotifyTrackIdRef.current) return;
+      commentOnSpotifyTrack(data.track);
+    } catch (error) {
+      console.warn('Spotify poll failed', error);
+    }
+  }, [commentOnSpotifyTrack]);
+
+  const requestSpotifyComment = useCallback(async (username: string) => {
+    if (isFullyMuted()) return;
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+
+    try {
+      const res = await fetch(`/api/spotify/now-playing?t=${Date.now()}`, { cache: 'no-store' });
+      const data = await res.json() as {
+        connected?: boolean;
+        playing?: boolean;
+        track?: SpotifyTrackSnapshot | null;
+        error?: string;
+      };
+
+      if (!data.connected) {
+        clientRef.current?.say(channel, `@${username} Spotify ain't linked — broadcaster connects it from /control.`);
+        return;
+      }
+      if (!data.track || !data.playing) {
+        clientRef.current?.say(channel, `@${username} Nothing playing on Spotify right now.`);
+        return;
+      }
+
+      commentOnSpotifyTrack(data.track, username);
+    } catch {
+      clientRef.current?.say(channel, `@${username} Couldn't read Spotify — try again in a sec.`);
+    }
+  }, [commentOnSpotifyTrack]);
+
   const awardTriviaWinner = useCallback(async (username: string) => {
     const active = activeTriviaRef.current;
     if (!active || active.answered) return;
@@ -1288,7 +1318,6 @@ function BongContent() {
       username,
       {
         forceVoice: true,
-        bypassChatCooldown: true,
         voicePriority: 'celebration',
       },
     );
@@ -1321,7 +1350,6 @@ function BongContent() {
     if (!cheatKind) return false;
 
     rememberUser(username, displayName, { type: 'mention', message });
-    if (!canRespondInChat(MENTION_COOLDOWN_MS)) return true;
 
     void playElroySfx('roast_sting');
     void queueBongLogic(
@@ -1462,7 +1490,13 @@ function BongContent() {
         tickBlackjackTable();
       }, BLACKJACK_TICK_MS);
     }
-  }, [pollStreamLive, runStreamCheckin, runTriviaCycle, tickBlackjackTable]);
+    if (!spotifyPollRef.current) {
+      void pollSpotifyNowPlaying();
+      spotifyPollRef.current = setInterval(() => {
+        void pollSpotifyNowPlaying();
+      }, SPOTIFY_POLL_MS);
+    }
+  }, [pollStreamLive, pollSpotifyNowPlaying, runStreamCheckin, runTriviaCycle, tickBlackjackTable]);
 
   const stopStreamMonitoring = useCallback(() => {
     if (streamPollRef.current) {
@@ -1481,6 +1515,11 @@ function BongContent() {
       clearInterval(blackjackPollRef.current);
       blackjackPollRef.current = null;
     }
+    if (spotifyPollRef.current) {
+      clearInterval(spotifyPollRef.current);
+      spotifyPollRef.current = null;
+    }
+    lastSpotifyTrackIdRef.current = null;
     activeTriviaRef.current = null;
     triviaAskInFlightRef.current = false;
     streamLiveRef.current = false;
@@ -1490,11 +1529,10 @@ function BongContent() {
     if (isFullyMuted()) return;
     rememberUser(username, displayName, { type: 'mention', message });
     if (isSilenced()) {
-      if (!streamLiveRef.current || !canRespondInChat(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
+      if (!streamLiveRef.current || Math.random() >= COMEBACK_CHANCE) return;
       void queueBongLogic(buildComebackPrompt(username, message), username, { chatOnly: true });
       return;
     }
-    if (!canRespondInChat(MENTION_COOLDOWN_MS)) return;
     void queueBongLogic(buildMentionPrompt(username, message), username);
   }, [buildComebackPrompt, buildMentionPrompt, queueBongLogic]);
 
@@ -1502,11 +1540,10 @@ function BongContent() {
     if (isFullyMuted()) return;
     rememberUser(username, displayName, { type: 'mention', message });
     if (isSilenced()) {
-      if (!streamLiveRef.current || !canRespondInChat(COMEBACK_COOLDOWN_MS) || Math.random() >= COMEBACK_CHANCE) return;
+      if (!streamLiveRef.current || Math.random() >= COMEBACK_CHANCE) return;
       void queueBongLogic(buildLRoyRoastPrompt(username, message), username, { chatOnly: true });
       return;
     }
-    if (!canRespondInChat(MENTION_COOLDOWN_MS)) return;
     void playElroySfx('roast_sting');
     void queueBongLogic(buildLRoyRoastPrompt(username, message), username);
   }, [buildLRoyRoastPrompt, playElroySfx, queueBongLogic]);
@@ -1748,6 +1785,10 @@ function BongContent() {
         return void announceAboutMe(username);
       }
       const lowerCmd = m.toLowerCase().trim();
+      if (lowerCmd === '!np' || lowerCmd === '!nowplaying' || lowerCmd === '!song') {
+        if (isFullyMuted()) return;
+        return void requestSpotifyComment(username);
+      }
       if (lowerCmd === '!bj' || lowerCmd === '!blackjack') {
         return handleBlackjackCommand('bj', username, displayName, normalizedChannel, t.mod === true || isBroadcaster, m);
       }

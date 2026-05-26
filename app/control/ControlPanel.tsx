@@ -34,6 +34,12 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
   const [directives, setDirectives] = useState<DirectiveSnapshot>({ sticky: [], next: [], push: [] });
   const [status, setStatus] = useState('Enter your control secret to start.');
   const [busy, setBusy] = useState(false);
+  const [spotifyStatus, setSpotifyStatus] = useState<{
+    configured?: boolean;
+    connected?: boolean;
+    playing?: boolean;
+    track?: { name: string; artists: string[] } | null;
+  } | null>(null);
 
   useEffect(() => {
     const fromUrl = initialSecret?.trim();
@@ -72,6 +78,42 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     const timer = setInterval(() => { void refresh(); }, 12_000);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  const refreshSpotify = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/spotify/status?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      setSpotifyStatus(await res.json());
+    } catch {
+      setSpotifyStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSpotify();
+    const timer = setInterval(() => { void refreshSpotify(); }, 15_000);
+    return () => clearInterval(timer);
+  }, [refreshSpotify]);
+
+  const disconnectSpotify = async () => {
+    if (!savedSecret) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/spotify/disconnect', {
+        method: 'POST',
+        headers: authHeaders(savedSecret),
+      });
+      if (!res.ok) {
+        const data = await res.json() as { error?: string };
+        setStatus(data.error || 'Spotify disconnect failed');
+        return;
+      }
+      setStatus('Spotify disconnected.');
+      await refreshSpotify();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const saveSecret = () => {
     const trimmed = secret.trim();
@@ -280,8 +322,50 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
         )}
       </section>
 
+      <section style={panelStyle}>
+        <h2 style={headingStyle}>Spotify (now playing)</h2>
+        <p style={hintStyle}>
+          Connect the stream account so Elroy comments when tracks change — trivia, smoke/sex ratings, hot takes.
+          Add redirect URI <code style={codeStyle}>/api/spotify/callback</code> in your Spotify Developer app.
+        </p>
+        {spotifyStatus?.configured === false && (
+          <p style={hintStyle}>Set <code style={codeStyle}>SPOTIFY_CLIENT_ID</code> and <code style={codeStyle}>SPOTIFY_CLIENT_SECRET</code> in Vercel.</p>
+        )}
+        {spotifyStatus?.connected ? (
+          <>
+            <p style={{ margin: '0 0 12px', color: '#86efac' }}>Connected</p>
+            {spotifyStatus.playing && spotifyStatus.track ? (
+              <p style={{ margin: '0 0 12px', lineHeight: 1.45 }}>
+                Now: <strong>{spotifyStatus.track.name}</strong>
+                {' '}— {spotifyStatus.track.artists.join(', ') || 'Unknown artist'}
+              </p>
+            ) : (
+              <p style={{ margin: '0 0 12px', color: '#c4b5fd' }}>Nothing playing right now.</p>
+            )}
+            <button type="button" onClick={() => { void disconnectSpotify(); }} disabled={busy || !savedSecret} style={ghostButtonStyle}>
+              Disconnect Spotify
+            </button>
+          </>
+        ) : spotifyStatus?.configured !== false ? (
+          <button
+            type="button"
+            disabled={!savedSecret}
+            style={primaryButtonStyle}
+            onClick={() => {
+              if (!savedSecret) return;
+              window.location.href = `/api/spotify/auth?secret=${encodeURIComponent(savedSecret)}`;
+            }}
+          >
+            Connect Spotify account
+          </button>
+        ) : null}
+        {!savedSecret && (
+          <p style={{ ...hintStyle, marginTop: '12px' }}>Save your control secret above first.</p>
+        )}
+      </section>
+
       <p style={{ ...hintStyle, marginTop: '20px' }}>
-        Overlay must be running for push/next to take effect. Sticky notes sync every ~12 seconds.
+        Overlay must be running for push/next and Spotify reactions. Sticky notes sync every ~12 seconds.
       </p>
     </main>
   );

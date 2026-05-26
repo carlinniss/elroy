@@ -72,6 +72,7 @@ Ensure your file structure is exact for Next.js routing:
 * `!aboutme`: Elroy tells you what he remembers about you in chat (trivia wins, subs, mentions, etc.).
 * **Blackjack (single table, play-money):** `!bj` open/sit → `!bet 10+` or `!bet all` → `!hit` / `!stand` / `!double` on your turn (double on first two cards only). You can still `!bj` during the betting window if you missed seating. Everyone starts with **1000 OG chips**. `!chips` balance, `!table` status, `!bjtop` high rollers (only players who have bet at least once). Mods: `!bjstop`.
 * `!leaderboard` (alias: `!lb`): Show current trivia leaders in chat.
+* `!np` / `!nowplaying` / `!song`: Elroy reacts to the current Spotify track (when connected).
 * `!quota`: Show remaining ElevenLabs character quota.
 * `!ding` (alias: `!gong`): Toggle bong rip sound before voice (broadcaster/mod only).
 * `!voiceoff`: Disable voice playback but keep chat replies on (broadcaster/mod only).
@@ -94,6 +95,20 @@ Steer Elroy's spontaneous content during a stream without redeploying:
 | **Push now** | Elroy responds immediately (within ~12s). Optional chat-only or force-voice. |
 
 The overlay polls Redis every ~12 seconds. Keep the OBS browser source running so push/next directives take effect.
+
+## 🎵 Spotify (now playing)
+
+Elroy can read what is playing on the broadcaster's Spotify account and react in chat when tracks change (trivia, 1–10 smoke/sex ratings, hot takes).
+
+1. Create a [Spotify Developer app](https://developer.spotify.com/dashboard) and add redirect URI: `https://your-elroy-site.vercel.app/api/spotify/callback`
+2. In Vercel, set:
+   - `SPOTIFY_CLIENT_ID`
+   - `SPOTIFY_CLIENT_SECRET`
+   - Optional: `SPOTIFY_REDIRECT_URI` (defaults to `https://<VERCEL_URL>/api/spotify/callback`)
+3. Open **`/control/your-secret`** and click **Connect Spotify account** (uses the same `ELROY_CONTROL_SECRET` as live control).
+4. Play music from that Spotify account while live. Elroy polls every ~5s and comments when the track changes (no chat cooldown — voice lines still respect quota/cooldowns).
+
+Chat: `!np`, `!nowplaying`, or `!song` — force a take on the current track (if something is playing).
 
 ## 🔊 Sound Effects
 
