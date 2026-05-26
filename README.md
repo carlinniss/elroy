@@ -70,7 +70,7 @@ Ensure your file structure is exact for Next.js routing:
 * Mention **Elroy** in chat: get a chat reply (voice too, when enabled and quota allows).
 * **Trivia:** while live, fresh cannabis or freaky trivia every **10 minutes** (first round ~5 min after go-live). Questions never repeat — dedup is permanent in Redis. Leaderboard scores persist too; Elroy roasts leaders before each question.
 * `!aboutme`: Elroy tells you what he remembers about you in chat (trivia wins, subs, mentions, etc.).
-* **Blackjack (single table, play-money):** `!bj` open/sit → `!bet 10+` or `!bet all` → `!hit` / `!stand` / `!double` on your turn (double on first two cards only). You can still `!bj` during the betting window if you missed seating. Everyone starts with **1000 OG chips**. `!chips` balance, `!table` status, `!bjtop` high rollers (only players who have bet at least once). Mods: `!bjstop`.
+* **Blackjack (single table, play-money):** `!bj` open/sit → `!bet 10+` or `!bet all` → `!hit` / `!stand` / `!double` on your turn (double on first two cards only). You can still `!bj` during the betting window if you missed seating. Everyone starts with **1000 OG chips**. `!chips` balance, `!table` status, `!bjtop` high rollers (only players who have bet at least once). Need help: `!dare` (small bailout + roast, cooldown), `!loan` (big bailout with debt), `!debt` (what you owe). Mods: `!bjstop`.
 * `!leaderboard` (alias: `!lb`): Show current trivia leaders in chat.
 * `!np` / `!nowplaying` / `!song`: Elroy reacts to the current Spotify track (when connected).
 * `!quota`: Show remaining ElevenLabs character quota.

@@ -11,12 +11,18 @@ export const TURN_MS = 25_000;
 /** Warn the active player once when this much time is left on their turn. */
 export const TURN_NUDGE_REMAINING_MS = 12_000;
 export const LEADERBOARD_SIZE = 3;
+const DARE_REWARD_CHIPS = 120;
+const DARE_COOLDOWN_MS = 20 * 60 * 1000;
+const LOAN_AMOUNT = 400;
+const LOAN_REPAY_AMOUNT = 600;
 
 const TABLE_KEY = 'elroy:bj:table';
 const CHIPS_KEY = 'elroy:bj:chips';
 const PLAYED_KEY = 'elroy:bj:played';
 const LEADERBOARD_KEY = 'elroy:bj:leaderboard';
 const DISPLAY_NAMES_KEY = 'elroy:bj:display-names';
+const DARE_LAST_KEY = 'elroy:bj:dare:last';
+const LOAN_DEBT_KEY = 'elroy:bj:loan:debt';
 
 const SANDBOX_LOGINS = new Set(['testuser']);
 
@@ -76,6 +82,9 @@ export type BjActionRequest = {
     | 'double'
     | 'table'
     | 'chips'
+    | 'dare'
+    | 'loan'
+    | 'debt'
     | 'leaders'
     | 'tick'
     | 'stop';
@@ -98,6 +107,8 @@ type MemoryStore = {
   chips: Map<string, number>;
   played: Set<string>;
   displayNames: Map<string, string>;
+  dareLastAt: Map<string, number>;
+  loanDebt: Map<string, number>;
 };
 
 const globalStore = globalThis as typeof globalThis & { __elroyBlackjack?: MemoryStore };
@@ -109,6 +120,8 @@ function mem(): MemoryStore {
       chips: new Map(),
       played: new Set(),
       displayNames: new Map(),
+      dareLastAt: new Map(),
+      loanDebt: new Map(),
     };
   }
   return globalStore.__elroyBlackjack;
@@ -364,6 +377,65 @@ async function setPlayerChips(login: string, chips: number, displayName?: string
   mem().chips.set(login, value);
 }
 
+async function getLoanDebt(login: string): Promise<number> {
+  if (hasRedisStorage()) {
+    try {
+      const raw = await redisCommand(['HGET', LOAN_DEBT_KEY, login]);
+      if (raw !== null && raw !== undefined) {
+        const debt = Number.parseInt(String(raw), 10);
+        if (Number.isFinite(debt) && debt > 0) return debt;
+      }
+    } catch {
+      /* fallback */
+    }
+  }
+  return mem().loanDebt.get(login) ?? 0;
+}
+
+async function setLoanDebt(login: string, debt: number) {
+  const value = Math.max(0, Math.floor(debt));
+  if (hasRedisStorage()) {
+    try {
+      if (value <= 0) {
+        await redisCommand(['HDEL', LOAN_DEBT_KEY, login]);
+      } else {
+        await redisCommand(['HSET', LOAN_DEBT_KEY, login, String(value)]);
+      }
+    } catch {
+      /* fallback */
+    }
+  }
+  if (value <= 0) mem().loanDebt.delete(login);
+  else mem().loanDebt.set(login, value);
+}
+
+async function getLastDareAt(login: string): Promise<number> {
+  if (hasRedisStorage()) {
+    try {
+      const raw = await redisCommand(['HGET', DARE_LAST_KEY, login]);
+      if (raw !== null && raw !== undefined) {
+        const at = Number.parseInt(String(raw), 10);
+        if (Number.isFinite(at) && at > 0) return at;
+      }
+    } catch {
+      /* fallback */
+    }
+  }
+  return mem().dareLastAt.get(login) ?? 0;
+}
+
+async function setLastDareAt(login: string, at: number) {
+  const value = Math.max(0, Math.floor(at));
+  if (hasRedisStorage()) {
+    try {
+      await redisCommand(['HSET', DARE_LAST_KEY, login, String(value)]);
+    } catch {
+      /* fallback */
+    }
+  }
+  mem().dareLastAt.set(login, value);
+}
+
 async function playerHasPlayed(login: string): Promise<boolean> {
   if (hasRedisStorage()) {
     try {
@@ -452,6 +524,14 @@ export function formatBlackjackLeaderboard(leaders: BjLeader[]): string {
   const parts = leaders.map((entry, index) => `${index + 1}. ${entry.username} (${entry.chips})`);
   return `🃏 Blackjack high rollers: ${parts.join(' | ')}`;
 }
+
+const DARES = [
+  'type exactly: "I folded pocket aces in my dreams."',
+  'type exactly: "I asked Elroy for bankroll mercy and got audited."',
+  'type exactly: "My blackjack strategy is vibes and panic."',
+  'type exactly: "I blame the dealer, the cards, and my life choices."',
+  'type exactly: "I chased losses and found character development."',
+];
 
 function seatSummary(seat: BjSeat) {
   const total = handValue(seat.hand);
@@ -708,6 +788,16 @@ async function settleRound(table: BjTable): Promise<{ table: BjTable; messages: 
     }
 
     await setPlayerChips(seat.login, chips, seat.displayName);
+    const debt = await getLoanDebt(seat.login);
+    if (debt > 0) {
+      const collected = Math.min(debt, chips);
+      if (collected > 0) {
+        chips -= collected;
+        await setPlayerChips(seat.login, chips, seat.displayName);
+        await setLoanDebt(seat.login, debt - collected);
+        messages.push(`💸 @${seat.displayName}: house collected ${collected} toward loan (${Math.max(0, debt - collected)} debt left).`);
+      }
+    }
     await syncLeaderboard(seat.login, chips);
     messages.push(`@${seat.displayName}: ${outcome} — ${chips} chips`);
   }
@@ -933,6 +1023,70 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
   if (req.action === 'chips') {
     const chips = await getPlayerChips(login);
     return { ok: true, messages: [`@${displayName} you have ${chips} OG chips.`] };
+  }
+
+  if (req.action === 'debt') {
+    const debt = await getLoanDebt(login);
+    if (debt <= 0) {
+      return { ok: true, messages: [`@${displayName} you have no casino debt.`] };
+    }
+    return { ok: true, messages: [`@${displayName} loan debt remaining: ${debt} chips.`] };
+  }
+
+  if (req.action === 'dare') {
+    const now = Date.now();
+    const lastAt = await getLastDareAt(login);
+    const waitMs = DARE_COOLDOWN_MS - (now - lastAt);
+    if (waitMs > 0) {
+      const mins = Math.max(1, Math.ceil(waitMs / 60_000));
+      return {
+        ok: false,
+        messages: [`@${displayName} you already did your shame ritual. Try again in ~${mins}m.`],
+        error: 'dare cooldown',
+      };
+    }
+
+    const challenge = DARES[Math.floor(Math.random() * DARES.length)];
+    const chips = await getPlayerChips(login);
+    const nextChips = chips + DARE_REWARD_CHIPS;
+    await setPlayerChips(login, nextChips, displayName);
+    await markPlayerPlayed(login, displayName, nextChips);
+    await syncLeaderboard(login, nextChips);
+    await setLastDareAt(login, now);
+
+    return {
+      ok: true,
+      messages: [
+        `🃏 @${displayName} begging for bailout is NASTY work. Your ritual: ${challenge}`,
+        `🃏 Dignity tax approved: +${DARE_REWARD_CHIPS} chips. New stack: ${nextChips}.`,
+      ],
+    };
+  }
+
+  if (req.action === 'loan') {
+    const debt = await getLoanDebt(login);
+    if (debt > 0) {
+      return {
+        ok: false,
+        messages: [`@${displayName} you already owe ${debt} chips. No new loan till that's repaid.`],
+        error: 'existing debt',
+      };
+    }
+
+    const chips = await getPlayerChips(login);
+    const nextChips = chips + LOAN_AMOUNT;
+    await setPlayerChips(login, nextChips, displayName);
+    await setLoanDebt(login, LOAN_REPAY_AMOUNT);
+    await markPlayerPlayed(login, displayName, nextChips);
+    await syncLeaderboard(login, nextChips);
+
+    return {
+      ok: true,
+      messages: [
+        `🃏 @${displayName} LOAN SHARK SPECIAL: +${LOAN_AMOUNT} chips now.`,
+        `🃏 Debt set to ${LOAN_REPAY_AMOUNT}. House auto-collects from future round results until paid. Stack: ${nextChips}.`,
+      ],
+    };
   }
 
   if (req.action === 'leaders') {

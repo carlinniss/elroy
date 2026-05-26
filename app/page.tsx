@@ -1482,6 +1482,18 @@ function BongContent() {
       void postBlackjackAction({ action: 'chips', username, displayName });
       return;
     }
+    if (cmd === 'dare') {
+      void postBlackjackAction({ action: 'dare', username, displayName });
+      return;
+    }
+    if (cmd === 'loan') {
+      void postBlackjackAction({ action: 'loan', username, displayName });
+      return;
+    }
+    if (cmd === 'debt') {
+      void postBlackjackAction({ action: 'debt', username, displayName });
+      return;
+    }
     if (cmd === 'bjtop' || cmd === 'bjlb') {
       void postBlackjackAction({ action: 'leaders', username, displayName });
       return;
@@ -1840,6 +1852,15 @@ function BongContent() {
       }
       if (lowerCmd === '!chips') {
         return handleBlackjackCommand('chips', username, displayName, normalizedChannel, false, m);
+      }
+      if (lowerCmd === '!dare') {
+        return handleBlackjackCommand('dare', username, displayName, normalizedChannel, false, m);
+      }
+      if (lowerCmd === '!loan') {
+        return handleBlackjackCommand('loan', username, displayName, normalizedChannel, false, m);
+      }
+      if (lowerCmd === '!debt') {
+        return handleBlackjackCommand('debt', username, displayName, normalizedChannel, false, m);
       }
       if (lowerCmd === '!bjtop' || lowerCmd === '!bjlb') {
         return handleBlackjackCommand('bjtop', username, displayName, normalizedChannel, false, m);
