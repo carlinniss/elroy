@@ -10,6 +10,9 @@ import { buildTriviaLeaderRoastPrompt, formatTriviaLeaderboardChatMessage } from
 import { buildTriviaProgressHint } from '@/lib/trivia-hints';
 import { buildSpotifyTrackPrompt } from '@/lib/spotify-prompt';
 import type { SpotifyTrackSnapshot } from '@/lib/spotify';
+import { buildYouTubeVideoPrompt } from '@/lib/youtube-prompt';
+import type { YouTubeVideoSnapshot } from '@/lib/youtube';
+import { setYouTubeWatchingFromBot, clearYouTubeWatchingFromBot } from '@/app/actions/youtube';
 import { getBotInstanceId } from '@/lib/bot-instance';
 import { getBuildLabel } from '@/lib/build-version';
 import { formatDirectiveInjection } from '@/lib/live-directives';
@@ -89,6 +92,7 @@ function BongContent() {
   const VERSION_POLL_MS = 90_000;
   const DIRECTIVE_POLL_MS = 12_000;
   const SPOTIFY_POLL_MS = 5_000;
+  const YOUTUBE_POLL_MS = 5_000;
 
   const CANNABIS_FACTS = [
     'The word "canvas" comes from cannabis — sailcloth was historically made from hemp.',
@@ -122,7 +126,9 @@ function BongContent() {
   const triviaPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const blackjackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const spotifyPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const youtubePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSpotifyTrackIdRef = useRef<string | null>(null);
+  const lastYouTubeVideoIdRef = useRef<string | null>(null);
   const streamLiveRef = useRef(false);
   const lastTriviaAtRef = useRef(0);
   const recentTriviaHistoryRef = useRef<Array<{ category: TriviaCategory; question: string; id: string }>>([]);
@@ -1285,6 +1291,88 @@ function BongContent() {
     }
   }, [commentOnSpotifyTrack]);
 
+  const commentOnYouTubeVideo = useCallback((
+    video: YouTubeVideoSnapshot,
+    requestedBy?: string,
+  ) => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+
+    lastYouTubeVideoIdRef.current = video.videoId;
+    void queueBongLogic(buildYouTubeVideoPrompt(video), requestedBy, { chatOnly: true });
+  }, [queueBongLogic]);
+
+  const pollYouTubeNowWatching = useCallback(async () => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+
+    try {
+      const res = await fetch(`/api/youtube/now-watching?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json() as {
+        configured?: boolean;
+        watching?: boolean;
+        video?: YouTubeVideoSnapshot | null;
+      };
+      if (!data.configured || !data.watching || !data.video) return;
+      if (data.video.videoId === lastYouTubeVideoIdRef.current) return;
+      commentOnYouTubeVideo(data.video);
+    } catch (error) {
+      console.warn('YouTube poll failed', error);
+    }
+  }, [commentOnYouTubeVideo]);
+
+  const requestYouTubeComment = useCallback(async (username: string) => {
+    if (isFullyMuted()) return;
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+
+    try {
+      const res = await fetch(`/api/youtube/now-watching?t=${Date.now()}`, { cache: 'no-store' });
+      const data = await res.json() as {
+        configured?: boolean;
+        watching?: boolean;
+        video?: YouTubeVideoSnapshot | null;
+      };
+
+      if (!data.configured) {
+        clientRef.current?.say(channel, `@${username} YouTube ain't set up — add YOUTUBE_API_KEY in Vercel.`);
+        return;
+      }
+      if (!data.video) {
+        clientRef.current?.say(channel, `@${username} No YouTube video set — paste one in /control → YouTube or !ytset URL (mod).`);
+        return;
+      }
+
+      commentOnYouTubeVideo(data.video, username);
+    } catch {
+      clientRef.current?.say(channel, `@${username} Couldn't read YouTube — try again in a sec.`);
+    }
+  }, [commentOnYouTubeVideo]);
+
+  const handleYouTubeSetCommand = useCallback(async (
+    username: string,
+    rawUrl: string,
+    isMod: boolean,
+  ) => {
+    if (isFullyMuted() || !isMod) return;
+    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+    const trimmed = rawUrl.trim();
+    if (!trimmed) {
+      clientRef.current?.say(channel, `@${username} use !ytset then a YouTube link.`);
+      return;
+    }
+
+    try {
+      const video = await setYouTubeWatchingFromBot(trimmed);
+      lastYouTubeVideoIdRef.current = null;
+      clientRef.current?.say(channel, `@${username} YouTube set: ${video.title}`);
+      if (streamLiveRef.current) {
+        commentOnYouTubeVideo(video, username);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid link';
+      clientRef.current?.say(channel, `@${username} ${message}`);
+    }
+  }, [commentOnYouTubeVideo]);
+
   const awardTriviaWinner = useCallback(async (username: string) => {
     const active = activeTriviaRef.current;
     if (!active || active.answered) return;
@@ -1496,7 +1584,13 @@ function BongContent() {
         void pollSpotifyNowPlaying();
       }, SPOTIFY_POLL_MS);
     }
-  }, [pollStreamLive, pollSpotifyNowPlaying, runStreamCheckin, runTriviaCycle, tickBlackjackTable]);
+    if (!youtubePollRef.current) {
+      void pollYouTubeNowWatching();
+      youtubePollRef.current = setInterval(() => {
+        void pollYouTubeNowWatching();
+      }, YOUTUBE_POLL_MS);
+    }
+  }, [pollStreamLive, pollSpotifyNowPlaying, pollYouTubeNowWatching, runStreamCheckin, runTriviaCycle, tickBlackjackTable]);
 
   const stopStreamMonitoring = useCallback(() => {
     if (streamPollRef.current) {
@@ -1519,7 +1613,12 @@ function BongContent() {
       clearInterval(spotifyPollRef.current);
       spotifyPollRef.current = null;
     }
+    if (youtubePollRef.current) {
+      clearInterval(youtubePollRef.current);
+      youtubePollRef.current = null;
+    }
     lastSpotifyTrackIdRef.current = null;
+    lastYouTubeVideoIdRef.current = null;
     activeTriviaRef.current = null;
     triviaAskInFlightRef.current = false;
     streamLiveRef.current = false;
@@ -1788,6 +1887,25 @@ function BongContent() {
       if (lowerCmd === '!np' || lowerCmd === '!nowplaying' || lowerCmd === '!song') {
         if (isFullyMuted()) return;
         return void requestSpotifyComment(username);
+      }
+      if (lowerCmd === '!yt' || lowerCmd === '!ytnow' || lowerCmd === '!video') {
+        if (isFullyMuted()) return;
+        return void requestYouTubeComment(username);
+      }
+      if (lowerCmd.startsWith('!ytset ') || lowerCmd.startsWith('!yt set ')) {
+        if (isFullyMuted()) return;
+        const url = m.trim().replace(/^!yt\s+set\s+/i, '').replace(/^!ytset\s+/i, '').trim();
+        return void handleYouTubeSetCommand(username, url, t.mod === true || isBroadcaster);
+      }
+      if (lowerCmd === '!ytclear' && (t.mod === true || isBroadcaster)) {
+        if (isFullyMuted()) return;
+        void clearYouTubeWatchingFromBot().then(() => {
+          lastYouTubeVideoIdRef.current = null;
+          clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${username} YouTube cleared.`);
+        }).catch(() => {
+          clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${username} Couldn't clear YouTube.`);
+        });
+        return;
       }
       if (lowerCmd === '!bj' || lowerCmd === '!blackjack') {
         return handleBlackjackCommand('bj', username, displayName, normalizedChannel, t.mod === true || isBroadcaster, m);

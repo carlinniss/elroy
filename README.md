@@ -73,6 +73,7 @@ Ensure your file structure is exact for Next.js routing:
 * **Blackjack (single table, play-money):** `!bj` open/sit → `!bet 10+` or `!bet all` → `!hit` / `!stand` / `!double` on your turn (double on first two cards only). You can still `!bj` during the betting window if you missed seating. Everyone starts with **1000 OG chips**. `!chips` balance, `!table` status, `!bjtop` high rollers (only players who have bet at least once). Mods: `!bjstop`.
 * `!leaderboard` (alias: `!lb`): Show current trivia leaders in chat.
 * `!np` / `!nowplaying` / `!song`: Elroy reacts to the current Spotify track (when connected).
+* `!yt` / `!ytnow`: Elroy reacts to the YouTube video set in control (`!ytset` for mods).
 * `!quota`: Show remaining ElevenLabs character quota.
 * `!ding` (alias: `!gong`): Toggle bong rip sound before voice (broadcaster/mod only).
 * `!voiceoff`: Disable voice playback but keep chat replies on (broadcaster/mod only).
@@ -109,6 +110,21 @@ Elroy can read what is playing on the broadcaster's Spotify account and react in
 4. Play music from that Spotify account while live. Elroy polls every ~5s and comments when the track changes (no chat cooldown — voice lines still respect quota/cooldowns).
 
 Chat: `!np`, `!nowplaying`, or `!song` — force a take on the current track (if something is playing).
+
+## 📺 YouTube (now watching)
+
+YouTube does **not** expose what you are playing the way Spotify does. You tell Elroy which video you are on; he pulls title/description from the YouTube Data API and comments when it changes (while live).
+
+1. [Google Cloud Console](https://console.cloud.google.com/) → enable **YouTube Data API v3** → create an API key.
+2. In Vercel, set `YOUTUBE_API_KEY`.
+3. Open **`/control/your-secret`** → **YouTube** tab → paste the video URL when you start watching.
+4. While live, Elroy reacts when the set video changes (~5s poll). Chat: `!yt` for a take on the current video.
+
+| Command | Who | What |
+| --- | --- | --- |
+| `!yt` / `!ytnow` / `!video` | Anyone | Comment on the video set in control (live only) |
+| `!ytset <url>` | Mod / broadcaster | Set current video (+ Elroy reacts if live) |
+| `!ytclear` | Mod / broadcaster | Clear the current video |
 
 ## 🔊 Sound Effects
 

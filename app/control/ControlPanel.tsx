@@ -5,7 +5,7 @@ import type { DirectiveKind, LiveDirective } from '@/lib/live-directives';
 
 const SECRET_STORAGE_KEY = 'elroy-control-secret';
 
-type TabId = 'prompts' | 'spotify' | 'setup';
+type TabId = 'prompts' | 'spotify' | 'youtube' | 'setup';
 
 type DirectiveSnapshot = {
   sticky: LiveDirective[];
@@ -42,6 +42,12 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     connected?: boolean;
     playing?: boolean;
     track?: { name: string; artists: string[] } | null;
+  } | null>(null);
+  const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [youtubeStatus, setYoutubeStatus] = useState<{
+    configured?: boolean;
+    watching?: boolean;
+    video?: { title: string; channelTitle: string; videoUrl: string } | null;
   } | null>(null);
 
   useEffect(() => {
@@ -97,6 +103,70 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     const timer = setInterval(() => { void refreshSpotify(); }, 15_000);
     return () => clearInterval(timer);
   }, [refreshSpotify]);
+
+  const refreshYouTube = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/youtube/status?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      setYoutubeStatus(await res.json());
+    } catch {
+      setYoutubeStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshYouTube();
+    const timer = setInterval(() => { void refreshYouTube(); }, 15_000);
+    return () => clearInterval(timer);
+  }, [refreshYouTube]);
+
+  const setYouTubeWatching = async () => {
+    if (!savedSecret) {
+      setTab('setup');
+      return;
+    }
+    const trimmed = youtubeUrl.trim();
+    if (!trimmed) return;
+
+    setBusy(true);
+    try {
+      const res = await fetch('/api/youtube/set', {
+        method: 'POST',
+        headers: authHeaders(savedSecret),
+        body: JSON.stringify({ url: trimmed }),
+      });
+      const data = await res.json() as { error?: string };
+      if (!res.ok) {
+        setStatus(data.error || 'YouTube set failed');
+        return;
+      }
+      setYoutubeUrl('');
+      setStatus('YouTube video set — Elroy will react when live.');
+      await refreshYouTube();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearYouTubeWatching = async () => {
+    if (!savedSecret) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/youtube/clear', {
+        method: 'POST',
+        headers: authHeaders(savedSecret),
+      });
+      if (!res.ok) {
+        const data = await res.json() as { error?: string };
+        setStatus(data.error || 'YouTube clear failed');
+        return;
+      }
+      setStatus('YouTube cleared.');
+      await refreshYouTube();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const disconnectSpotify = async () => {
     if (!savedSecret) return;
@@ -224,7 +294,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
 
       {!savedSecret && (
         <div style={bannerStyle}>
-          Save your control secret under <strong>Setup</strong> before adding prompts or Spotify.
+          Save your control secret under <strong>Setup</strong> before prompts, Spotify, or YouTube.
         </div>
       )}
 
@@ -232,6 +302,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
         {([
           { id: 'prompts' as const, label: 'Prompts', badge: queueCount || undefined },
           { id: 'spotify' as const, label: 'Spotify', badge: spotifyStatus?.connected ? '●' : undefined },
+          { id: 'youtube' as const, label: 'YouTube', badge: youtubeStatus?.watching ? '●' : undefined },
           { id: 'setup' as const, label: 'Setup' },
         ]).map((item) => (
           <button
@@ -274,14 +345,13 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
           <ul style={checklistStyle}>
             <li>OBS overlay open with bot <strong>ignited</strong></li>
             <li>Push / next directives land within ~12s</li>
-            <li>Spotify reactions need you <strong>live on Twitch</strong></li>
+            <li>Spotify / YouTube chat lines need you <strong>live on Twitch</strong></li>
           </ul>
 
-          <h3 style={subheadingStyle}>Spotify env (Vercel)</h3>
+          <h3 style={subheadingStyle}>Media env (Vercel)</h3>
           <ul style={checklistStyle}>
-            <li><code style={codeStyle}>SPOTIFY_CLIENT_ID</code></li>
-            <li><code style={codeStyle}>SPOTIFY_CLIENT_SECRET</code></li>
-            <li>Redirect: <code style={codeStyle}>/api/spotify/callback</code></li>
+            <li>Spotify: <code style={codeStyle}>SPOTIFY_CLIENT_ID</code>, <code style={codeStyle}>SPOTIFY_CLIENT_SECRET</code></li>
+            <li>YouTube: <code style={codeStyle}>YOUTUBE_API_KEY</code> (Google Cloud, YouTube Data API v3)</li>
           </ul>
         </section>
       )}
@@ -465,8 +535,65 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
         </section>
       )}
 
+      {tab === 'youtube' && (
+        <section style={panelStyle}>
+          <h2 style={headingStyle}>Now watching</h2>
+          <p style={hintStyle}>
+            YouTube has no auto &quot;now playing&quot; API — paste the video when you start it. Elroy reacts on change while live. Chat: <code style={codeStyle}>!yt</code> · mods: <code style={codeStyle}>!ytset URL</code>
+          </p>
+
+          {youtubeStatus?.configured === false && (
+            <p style={warnStyle}>Set <code style={codeStyle}>YOUTUBE_API_KEY</code> in Vercel and enable YouTube Data API v3.</p>
+          )}
+
+          <input
+            type="url"
+            value={youtubeUrl}
+            onChange={(e) => setYoutubeUrl(e.target.value)}
+            placeholder="https://youtube.com/watch?v=…"
+            style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', marginBottom: '10px' }}
+          />
+          <button
+            type="button"
+            onClick={() => { void setYouTubeWatching(); }}
+            disabled={busy || !savedSecret || !youtubeUrl.trim() || youtubeStatus?.configured === false}
+            style={{ ...primaryButtonStyle, width: '100%', marginBottom: '12px' }}
+          >
+            Set as now watching
+          </button>
+
+          {youtubeStatus?.watching && youtubeStatus.video ? (
+            <div style={spotifyCardStyle}>
+              <p style={{ margin: 0, color: '#86efac', fontWeight: 600 }}>Queued for Elroy</p>
+              <p style={{ margin: '10px 0 0', lineHeight: 1.45 }}>
+                <strong>{youtubeStatus.video.title}</strong>
+                <br />
+                <span style={{ color: '#c4b5fd' }}>{youtubeStatus.video.channelTitle}</span>
+              </p>
+              <div style={{ ...rowStyle, marginTop: '14px' }}>
+                <a href={youtubeStatus.video.videoUrl} target="_blank" rel="noreferrer" style={{ color: '#b794f6', fontSize: '14px' }}>
+                  Open video
+                </a>
+                <button type="button" onClick={() => { void refreshYouTube(); }} disabled={busy} style={ghostButtonStyle}>
+                  Refresh
+                </button>
+                <button type="button" onClick={() => { void clearYouTubeWatching(); }} disabled={busy || !savedSecret} style={ghostButtonStyle}>
+                  Clear
+                </button>
+              </div>
+            </div>
+          ) : youtubeStatus?.configured !== false ? (
+            <p style={hintStyle}>No video set yet.</p>
+          ) : null}
+
+          {!savedSecret && (
+            <p style={{ ...hintStyle, marginTop: '12px' }}>Save your secret on the Setup tab first.</p>
+          )}
+        </section>
+      )}
+
       <footer style={footerStyle}>
-        Overlay must be running for push, next, and Spotify chat lines.
+        Overlay must be running for push, next, Spotify, and YouTube chat lines.
       </footer>
     </div>
   );
