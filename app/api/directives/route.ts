@@ -11,7 +11,11 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: Request) {
+  if (!isControlAuthorized(request)) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const directives = await listDirectives();
     return Response.json(directives, {
@@ -34,6 +38,10 @@ export async function POST(request: Request) {
       forceVoice?: boolean;
     };
 
+    if (!isControlAuthorized(request)) {
+      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     if (body.action === 'consume-next') {
       const consumed = await consumeNextDirectives();
       return Response.json({ ok: true, consumed });
@@ -42,10 +50,6 @@ export async function POST(request: Request) {
     if (body.action === 'ack-push' && body.id) {
       await ackPushDirective(body.id);
       return Response.json({ ok: true });
-    }
-
-    if (!isControlAuthorized(request)) {
-      return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     if (body.action === 'add') {

@@ -87,6 +87,7 @@ Steer Elroy's spontaneous content during a stream without redeploying:
 1. Set `ELROY_CONTROL_SECRET` in Vercel (any long random string).
 2. Open **`/control/your-secret`** on your Elroy site (e.g. `https://elroy-zeta.vercel.app/control/dtl` if your secret is `dtl`) on your phone or a second monitor.
 3. The secret in the URL must match `ELROY_CONTROL_SECRET` in Vercel — the page auto-loads it.
+4. Add the same secret to the OBS browser source URL as `?controlKey=your-secret` so only the overlay can read and consume queued prompts.
 
 | Mode | What it does |
 | --- | --- |
