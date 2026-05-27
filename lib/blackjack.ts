@@ -1034,59 +1034,75 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
   }
 
   if (req.action === 'dare') {
-    const now = Date.now();
-    const lastAt = await getLastDareAt(login);
-    const waitMs = DARE_COOLDOWN_MS - (now - lastAt);
-    if (waitMs > 0) {
-      const mins = Math.max(1, Math.ceil(waitMs / 60_000));
+    return withTableMutation(async (table) => {
+      const now = Date.now();
+      const lastAt = await getLastDareAt(login);
+      const waitMs = DARE_COOLDOWN_MS - (now - lastAt);
+      if (waitMs > 0) {
+        const mins = Math.max(1, Math.ceil(waitMs / 60_000));
+        return {
+          table,
+          result: {
+            ok: false,
+            messages: [`@${displayName} you already did your shame ritual. Try again in ~${mins}m.`],
+            error: 'dare cooldown',
+          },
+        };
+      }
+
+      const challenge = DARES[Math.floor(Math.random() * DARES.length)];
+      const chips = await getPlayerChips(login);
+      const nextChips = chips + DARE_REWARD_CHIPS;
+      await setPlayerChips(login, nextChips, displayName);
+      await markPlayerPlayed(login, displayName, nextChips);
+      await syncLeaderboard(login, nextChips);
+      await setLastDareAt(login, now);
+
       return {
-        ok: false,
-        messages: [`@${displayName} you already did your shame ritual. Try again in ~${mins}m.`],
-        error: 'dare cooldown',
+        table,
+        result: {
+          ok: true,
+          messages: [
+            `🃏 @${displayName} begging for bailout is NASTY work. Your ritual: ${challenge}`,
+            `🃏 Dignity tax approved: +${DARE_REWARD_CHIPS} chips. New stack: ${nextChips}.`,
+          ],
+        },
       };
-    }
-
-    const challenge = DARES[Math.floor(Math.random() * DARES.length)];
-    const chips = await getPlayerChips(login);
-    const nextChips = chips + DARE_REWARD_CHIPS;
-    await setPlayerChips(login, nextChips, displayName);
-    await markPlayerPlayed(login, displayName, nextChips);
-    await syncLeaderboard(login, nextChips);
-    await setLastDareAt(login, now);
-
-    return {
-      ok: true,
-      messages: [
-        `🃏 @${displayName} begging for bailout is NASTY work. Your ritual: ${challenge}`,
-        `🃏 Dignity tax approved: +${DARE_REWARD_CHIPS} chips. New stack: ${nextChips}.`,
-      ],
-    };
+    });
   }
 
   if (req.action === 'loan') {
-    const debt = await getLoanDebt(login);
-    if (debt > 0) {
+    return withTableMutation(async (table) => {
+      const debt = await getLoanDebt(login);
+      if (debt > 0) {
+        return {
+          table,
+          result: {
+            ok: false,
+            messages: [`@${displayName} you already owe ${debt} chips. No new loan till that's repaid.`],
+            error: 'existing debt',
+          },
+        };
+      }
+
+      const chips = await getPlayerChips(login);
+      const nextChips = chips + LOAN_AMOUNT;
+      await setPlayerChips(login, nextChips, displayName);
+      await setLoanDebt(login, LOAN_REPAY_AMOUNT);
+      await markPlayerPlayed(login, displayName, nextChips);
+      await syncLeaderboard(login, nextChips);
+
       return {
-        ok: false,
-        messages: [`@${displayName} you already owe ${debt} chips. No new loan till that's repaid.`],
-        error: 'existing debt',
+        table,
+        result: {
+          ok: true,
+          messages: [
+            `🃏 @${displayName} LOAN SHARK SPECIAL: +${LOAN_AMOUNT} chips now.`,
+            `🃏 Debt set to ${LOAN_REPAY_AMOUNT}. House auto-collects from future round results until paid. Stack: ${nextChips}.`,
+          ],
+        },
       };
-    }
-
-    const chips = await getPlayerChips(login);
-    const nextChips = chips + LOAN_AMOUNT;
-    await setPlayerChips(login, nextChips, displayName);
-    await setLoanDebt(login, LOAN_REPAY_AMOUNT);
-    await markPlayerPlayed(login, displayName, nextChips);
-    await syncLeaderboard(login, nextChips);
-
-    return {
-      ok: true,
-      messages: [
-        `🃏 @${displayName} LOAN SHARK SPECIAL: +${LOAN_AMOUNT} chips now.`,
-        `🃏 Debt set to ${LOAN_REPAY_AMOUNT}. House auto-collects from future round results until paid. Stack: ${nextChips}.`,
-      ],
-    };
+    });
   }
 
   if (req.action === 'leaders') {

@@ -278,18 +278,32 @@ export async function fetchSpotifyNowPlaying(): Promise<{
     return { connected: true, playing: false, track: null };
   }
 
-  const res = await fetch(`${SPOTIFY_API}/me/player/currently-playing`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+  const fetchNowPlaying = (token: string) => fetch(`${SPOTIFY_API}/me/player/currently-playing`, {
+    headers: { Authorization: `Bearer ${token}` },
     cache: 'no-store',
   });
+
+  let res = await fetchNowPlaying(accessToken);
+
+  if (res.status === 401) {
+    try {
+      const latestTokens = await readTokens();
+      if (latestTokens?.refreshToken) {
+        const refreshedAccessToken = await refreshSpotifyAccessToken(latestTokens.refreshToken);
+        res = await fetchNowPlaying(refreshedAccessToken);
+      }
+    } catch (error) {
+      console.warn('Spotify now playing token refresh failed', error);
+    }
+  }
 
   if (res.status === 204) {
     return { connected: true, playing: false, track: null };
   }
 
   if (res.status === 401) {
-    await writeTokens(null);
-    return { connected: false, playing: false, track: null };
+    console.warn('Spotify now playing unauthorized after refresh');
+    return { connected: true, playing: false, track: null };
   }
 
   if (!res.ok) {
