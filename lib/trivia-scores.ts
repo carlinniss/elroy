@@ -23,8 +23,9 @@ const SCORE_KEY: Record<TriviaCategory, string> = {
 };
 
 const DISPLAY_NAMES_KEY = 'elroy:trivia:display-names';
+const MAX_TRIVIA_POINTS = 2;
 
-/** Leftover from deploy smoke tests — excluded from leaderboards and cleaned from Redis. */
+/** Leftover from deploy smoke tests — excluded from leaderboards without deleting real users. */
 const SANDBOX_LOGINS = new Set(['testuser']);
 
 type MemoryScores = Record<TriviaCategory, Map<string, { score: number; username: string }>>;
@@ -118,10 +119,6 @@ export async function removeTriviaPlayer(username: string): Promise<boolean> {
   return true;
 }
 
-async function cleanupSandboxScores() {
-  await Promise.all([...SANDBOX_LOGINS].map((login) => removeTriviaPlayer(login)));
-}
-
 export function getTriviaScoreStorageMode(): 'redis' | 'memory' {
   return hasRedisStorage() ? 'redis' : 'memory';
 }
@@ -133,7 +130,11 @@ export async function incrementTriviaWin(
 ): Promise<number> {
   const login = normalizeLogin(username);
   if (!login) return 0;
-  const safePoints = Math.max(1, Math.floor(points));
+  const requestedPoints = Math.floor(Number(points));
+  const safePoints = Math.min(
+    MAX_TRIVIA_POINTS,
+    Math.max(1, Number.isFinite(requestedPoints) ? requestedPoints : 1),
+  );
 
   if (hasRedisStorage()) {
     try {
@@ -157,7 +158,6 @@ export async function getTriviaLeaders(): Promise<TriviaLeaders> {
 
   if (hasRedisStorage()) {
     try {
-      await cleanupSandboxScores();
       const [cannabis, freaky, music90s] = await Promise.all([
         getRedisLeaders('cannabis'),
         getRedisLeaders('freaky'),
