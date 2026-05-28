@@ -86,7 +86,7 @@ Steer Elroy's spontaneous content during a stream without redeploying:
 
 1. Set `ELROY_CONTROL_SECRET` in Vercel (any long random string).
 2. Open **`/control/your-secret`** on your Elroy site (e.g. `https://elroy-zeta.vercel.app/control/dtl` if your secret is `dtl`) on your phone or a second monitor.
-3. The secret in the URL must match `ELROY_CONTROL_SECRET` in Vercel — the page auto-loads it.
+3. Add the same secret to your OBS overlay URL as `?controlKey=your-secret` so the overlay can securely poll and acknowledge live directives.
 
 | Mode | What it does |
 | --- | --- |
@@ -94,7 +94,7 @@ Steer Elroy's spontaneous content during a stream without redeploying:
 | **Next response** | Injected once on Elroy's very next AI line, then cleared. |
 | **Push now** | Elroy responds immediately (within ~12s). Optional chat-only or force-voice. |
 
-The overlay polls Redis every ~12 seconds. Keep the OBS browser source running so push/next directives take effect.
+The overlay polls Redis every ~12 seconds. Keep the OBS browser source running with the `controlKey` parameter so push/next directives take effect.
 
 ## 🎵 Spotify (now playing)
 
@@ -160,7 +160,7 @@ To test in-stream, run the overlay and trigger the matching event (sub, bits, fo
 ## 🖥️ OBS Setup
 
 1.  Add a new **Browser Source** in OBS.
-2.  Set URL to `http://localhost:3000`.
+2.  Set URL to `http://localhost:3000?controlKey=your-secret` (use your `ELROY_CONTROL_SECRET` value).
 3.  Set Width/Height to your canvas size (e.g., 1920x1080).
 4.  Check **Control Audio via OBS** if you want to mix the bot's voice separately.
 

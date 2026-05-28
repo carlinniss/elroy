@@ -40,6 +40,12 @@ function BongContent() {
   const [isDingOn, setIsDingOn] = useState(true);
   const [isVoiceOn, setIsVoiceOn] = useState(true);
   const searchParams = useSearchParams();
+  const controlSecret = (
+    searchParams.get('controlKey')
+    || searchParams.get('key')
+    || searchParams.get('controlSecret')
+    || ''
+  ).trim();
   const [diagnostics, setDiagnostics] = useState({
     chat: '...',
     speech: '...',
@@ -115,6 +121,13 @@ function BongContent() {
 
   const randomCannabisFact = () =>
     CANNABIS_FACTS[Math.floor(Math.random() * CANNABIS_FACTS.length)];
+
+  const directiveHeaders = useCallback((json = false) => {
+    const headers: Record<string, string> = {};
+    if (json) headers['Content-Type'] = 'application/json';
+    if (controlSecret) headers.Authorization = `Bearer ${controlSecret}`;
+    return headers;
+  }, [controlSecret]);
 
   const lastCelebrationRef = useRef(0);
   const knownFollowerIdsRef = useRef<Set<string>>(new Set());
@@ -870,7 +883,7 @@ function BongContent() {
         liveDirectivesRef.current = { ...liveDirectivesRef.current, next: [] };
         void fetch('/api/directives', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: directiveHeaders(true),
           body: JSON.stringify({ action: 'consume-next' }),
         }).catch((error) => {
           console.warn('Directive consume failed', error);
@@ -896,7 +909,7 @@ function BongContent() {
         await speak(clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS));
       }
     } catch (e) { console.error(e); }
-  }, [playBongRip, speak]);
+  }, [directiveHeaders, playBongRip, speak]);
 
   const queueBongLogic = useCallback((
     input: string,
@@ -917,8 +930,13 @@ function BongContent() {
   }, [processBongLogic]);
 
   const pollLiveDirectives = useCallback(async () => {
+    if (!controlSecret) return;
+
     try {
-      const res = await fetch(`/api/directives?t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/directives?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: directiveHeaders(),
+      });
       if (!res.ok) return;
       const data = await res.json() as {
         sticky?: Array<{ id: string; text: string }>;
@@ -947,7 +965,7 @@ function BongContent() {
 
         void fetch('/api/directives', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: directiveHeaders(true),
           body: JSON.stringify({ action: 'ack-push', id: item.id }),
         }).catch((error) => {
           console.warn('Push ack failed', error);
@@ -956,7 +974,7 @@ function BongContent() {
     } catch (error) {
       console.warn('Directive poll failed', error);
     }
-  }, [queueBongLogic]);
+  }, [controlSecret, directiveHeaders, queueBongLogic]);
 
   useEffect(() => {
     void pollLiveDirectives();
