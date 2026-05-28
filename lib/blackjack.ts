@@ -11,8 +11,9 @@ export const TURN_MS = 25_000;
 /** Warn the active player once when this much time is left on their turn. */
 export const TURN_NUDGE_REMAINING_MS = 12_000;
 export const LEADERBOARD_SIZE = 3;
-const DARE_REWARD_CHIPS = 120;
-const DARE_COOLDOWN_MS = 20 * 60 * 1000;
+export const DARE_REWARD_CHIPS = 120;
+export const DARE_COOLDOWN_MS = 20 * 60 * 1000;
+const DARE_COMPLETE_MS = 2 * 60 * 1000;
 const LOAN_AMOUNT = 400;
 const LOAN_REPAY_AMOUNT = 600;
 
@@ -22,6 +23,7 @@ const PLAYED_KEY = 'elroy:bj:played';
 const LEADERBOARD_KEY = 'elroy:bj:leaderboard';
 const DISPLAY_NAMES_KEY = 'elroy:bj:display-names';
 const DARE_LAST_KEY = 'elroy:bj:dare:last';
+const DARE_PENDING_KEY = 'elroy:bj:dare:pending';
 const LOAN_DEBT_KEY = 'elroy:bj:loan:debt';
 
 const SANDBOX_LOGINS = new Set(['testuser']);
@@ -83,6 +85,7 @@ export type BjActionRequest = {
     | 'table'
     | 'chips'
     | 'dare'
+    | 'dareComplete'
     | 'loan'
     | 'debt'
     | 'leaders'
@@ -93,7 +96,15 @@ export type BjActionRequest = {
   amount?: number;
   /** Raw !bet argument (e.g. "100", "all") — preferred over amount. */
   betInput?: string;
+  /** Chat line for dareComplete ritual verification. */
+  message?: string;
   isMod?: boolean;
+};
+
+export type BjPendingDare = {
+  phrase: string;
+  emotes: string[];
+  expiresAt: number;
 };
 
 export type BjActionResult = {
@@ -108,6 +119,7 @@ type MemoryStore = {
   played: Set<string>;
   displayNames: Map<string, string>;
   dareLastAt: Map<string, number>;
+  darePending: Map<string, BjPendingDare>;
   loanDebt: Map<string, number>;
 };
 
@@ -121,6 +133,7 @@ function mem(): MemoryStore {
       played: new Set(),
       displayNames: new Map(),
       dareLastAt: new Map(),
+      darePending: new Map(),
       loanDebt: new Map(),
     };
   }
@@ -525,13 +538,113 @@ export function formatBlackjackLeaderboard(leaders: BjLeader[]): string {
   return `🃏 Blackjack high rollers: ${parts.join(' | ')}`;
 }
 
-const DARES = [
-  'type exactly: "I folded pocket aces in my dreams."',
-  'type exactly: "I asked Elroy for bankroll mercy and got audited."',
-  'type exactly: "My blackjack strategy is vibes and panic."',
-  'type exactly: "I blame the dealer, the cards, and my life choices."',
-  'type exactly: "I chased losses and found character development."',
+/** Twitch-style emotes used in dare rituals (typed in chat, case-insensitive). */
+export const EMBARRASSING_EMOTES = [
+  'LUL', 'KEKW', 'OMEGALUL', 'monkaS', 'monkaW', 'PepeLaugh', 'Sadge', 'Copium',
+  'EZ', 'Clown', 'WeirdChamp', 'FailFish', 'catSigh', 'PepeHands', 'FeelsBadMan',
+  'Pepega', 'PogChamp', 'BibleThump', 'DansGame', 'ResidentSleeper', 'haHAA',
 ];
+
+type DareTemplate = {
+  phrase: string;
+  emoteCount: number;
+};
+
+const DARE_TEMPLATES: DareTemplate[] = [
+  { phrase: 'i folded pocket aces in chat and blamed the dealer', emoteCount: 2 },
+  { phrase: 'i asked elroy for bailout money and got roasted live', emoteCount: 2 },
+  { phrase: 'my blackjack strategy is vibes panic and bad math', emoteCount: 2 },
+  { phrase: 'i chased losses and called it character development', emoteCount: 2 },
+  { phrase: 'i tilted off a pair of threes like it was personal', emoteCount: 2 },
+  { phrase: 'i need chip welfare and i am not ashamed enough yet', emoteCount: 2 },
+];
+
+function normalizeDareText(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function pickDareTemplate(): { phrase: string; emotes: string[] } {
+  const template = DARE_TEMPLATES[Math.floor(Math.random() * DARE_TEMPLATES.length)];
+  const pool = [...EMBARRASSING_EMOTES];
+  const emotes: string[] = [];
+  while (emotes.length < template.emoteCount && pool.length) {
+    const idx = Math.floor(Math.random() * pool.length);
+    emotes.push(pool.splice(idx, 1)[0]);
+  }
+  return { phrase: template.phrase, emotes };
+}
+
+function dareMatchesMessage(pending: BjPendingDare, message: string): { ok: boolean; missingEmotes: string[] } {
+  const normalized = normalizeDareText(message);
+  const targetPhrase = normalizeDareText(pending.phrase);
+  if (!normalized.includes(targetPhrase)) {
+    return { ok: false, missingEmotes: pending.emotes };
+  }
+
+  const lower = message.toLowerCase();
+  const missingEmotes = pending.emotes.filter((emote) => !lower.includes(emote.toLowerCase()));
+  if (missingEmotes.length) {
+    return { ok: false, missingEmotes };
+  }
+  return { ok: true, missingEmotes: [] };
+}
+
+async function getPendingDare(login: string): Promise<BjPendingDare | null> {
+  if (hasRedisStorage()) {
+    try {
+      const raw = await redisCommand(['HGET', DARE_PENDING_KEY, login]);
+      if (typeof raw === 'string' && raw) {
+        const parsed = JSON.parse(raw) as BjPendingDare;
+        if (parsed?.phrase && Array.isArray(parsed.emotes)) {
+          if (parsed.expiresAt <= Date.now()) {
+            await clearPendingDare(login);
+            return null;
+          }
+          return parsed;
+        }
+      }
+    } catch {
+      /* fallback */
+    }
+  }
+
+  const pending = mem().darePending.get(login);
+  if (!pending) return null;
+  if (pending.expiresAt <= Date.now()) {
+    mem().darePending.delete(login);
+    return null;
+  }
+  return pending;
+}
+
+async function setPendingDare(login: string, dare: BjPendingDare) {
+  if (hasRedisStorage()) {
+    try {
+      await redisCommand(['HSET', DARE_PENDING_KEY, login, JSON.stringify(dare)]);
+      return;
+    } catch {
+      /* fallback */
+    }
+  }
+  mem().darePending.set(login, dare);
+}
+
+async function clearPendingDare(login: string) {
+  if (hasRedisStorage()) {
+    try {
+      await redisCommand(['HDEL', DARE_PENDING_KEY, login]);
+    } catch {
+      /* fallback */
+    }
+  }
+  mem().darePending.delete(login);
+}
 
 function seatSummary(seat: BjSeat) {
   const total = handValue(seat.hand);
@@ -1033,8 +1146,63 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
     return { ok: true, messages: [`@${displayName} loan debt remaining: ${debt} chips.`] };
   }
 
+  if (req.action === 'dareComplete') {
+    const message = req.message?.trim() ?? '';
+    if (!message) {
+      return { ok: false, messages: [], error: 'message required' };
+    }
+
+    const pending = await getPendingDare(login);
+    if (!pending) {
+      return { ok: false, messages: [], error: 'no pending dare' };
+    }
+
+    const match = dareMatchesMessage(pending, message);
+    if (!match.ok) {
+      const emoteHint =
+        match.missingEmotes.length > 0
+          ? ` Still need: ${match.missingEmotes.join(' ')}.`
+          : ' Include the exact shame line from !dare.';
+      return {
+        ok: false,
+        messages: [`🃏 @${displayName} ritual rejected.${emoteHint} No chips until you comply.`],
+        error: 'dare incomplete',
+      };
+    }
+
+    const now = Date.now();
+    const chips = await getPlayerChips(login);
+    const nextChips = chips + DARE_REWARD_CHIPS;
+    await setPlayerChips(login, nextChips, displayName);
+    await markPlayerPlayed(login, displayName, nextChips);
+    await syncLeaderboard(login, nextChips);
+    await setLastDareAt(login, now);
+    await clearPendingDare(login);
+
+    return {
+      ok: true,
+      messages: [
+        `🃏 @${displayName} shame ritual ACCEPTED. Dignity forfeited.`,
+        `🃏 +${DARE_REWARD_CHIPS} chips. Stack: ${nextChips}. Don't spend it on hope.`,
+      ],
+    };
+  }
+
   if (req.action === 'dare') {
     const now = Date.now();
+    const pending = await getPendingDare(login);
+    if (pending) {
+      const emoteList = pending.emotes.join(' ');
+      const secs = Math.max(1, Math.ceil((pending.expiresAt - now) / 1000));
+      return {
+        ok: false,
+        messages: [
+          `🃏 @${displayName} finish your ritual first (${secs}s left): "${pending.phrase}" + emotes: ${emoteList}`,
+        ],
+        error: 'dare pending',
+      };
+    }
+
     const lastAt = await getLastDareAt(login);
     const waitMs = DARE_COOLDOWN_MS - (now - lastAt);
     if (waitMs > 0) {
@@ -1046,19 +1214,17 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
       };
     }
 
-    const challenge = DARES[Math.floor(Math.random() * DARES.length)];
-    const chips = await getPlayerChips(login);
-    const nextChips = chips + DARE_REWARD_CHIPS;
-    await setPlayerChips(login, nextChips, displayName);
-    await markPlayerPlayed(login, displayName, nextChips);
-    await syncLeaderboard(login, nextChips);
-    await setLastDareAt(login, now);
+    const { phrase, emotes } = pickDareTemplate();
+    const expiresAt = now + DARE_COMPLETE_MS;
+    await setPendingDare(login, { phrase, emotes, expiresAt });
+    const emoteList = emotes.join(' ');
+    const mins = Math.ceil(DARE_COMPLETE_MS / 60_000);
 
     return {
       ok: true,
       messages: [
-        `🃏 @${displayName} begging for bailout is NASTY work. Your ritual: ${challenge}`,
-        `🃏 Dignity tax approved: +${DARE_REWARD_CHIPS} chips. New stack: ${nextChips}.`,
+        `🃏 @${displayName} NO BAILOUT YET. Begging is nasty work — complete the ritual for +${DARE_REWARD_CHIPS} chips:`,
+        `🃏 Type in ONE message: "${phrase}" AND spam: ${emoteList} (${mins} min)`,
       ],
     };
   }

@@ -1398,12 +1398,15 @@ function BongContent() {
     }
   }, []);
 
+  const blackjackPendingDareRef = useRef<Set<string>>(new Set());
+
   const postBlackjackAction = useCallback(async (payload: {
     action: string;
     username: string;
     displayName?: string;
     amount?: number;
     betInput?: string;
+    message?: string;
     isMod?: boolean;
   }) => {
     try {
@@ -1422,6 +1425,26 @@ function BongContent() {
       return null;
     }
   }, [sayBlackjackLines]);
+
+  const tryCompleteDareRitual = useCallback((
+    username: string,
+    displayName: string,
+    message: string,
+  ) => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+    const login = username.toLowerCase();
+    if (!blackjackPendingDareRef.current.has(login)) return;
+    void postBlackjackAction({
+      action: 'dareComplete',
+      username,
+      displayName,
+      message,
+    }).then((data) => {
+      if (data?.ok || data?.error === 'no pending dare') {
+        blackjackPendingDareRef.current.delete(login);
+      }
+    });
+  }, [postBlackjackAction]);
 
   const tickBlackjackTable = useCallback(() => {
     if (!streamLiveRef.current || isFullyMuted()) return;
@@ -1483,7 +1506,9 @@ function BongContent() {
       return;
     }
     if (cmd === 'dare') {
-      void postBlackjackAction({ action: 'dare', username, displayName });
+      void postBlackjackAction({ action: 'dare', username, displayName }).then((data) => {
+        if (data?.ok) blackjackPendingDareRef.current.add(login);
+      });
       return;
     }
     if (cmd === 'loan') {
@@ -1779,6 +1804,10 @@ function BongContent() {
       const isBotAccount = normalizedUser === normalizedChannel;
 
       if (!m.startsWith('!')) {
+        if (!isBotAccount && !isWizebot) {
+          tryCompleteDareRitual(username, displayName, m);
+        }
+
         if (!isBotAccount && !isWizebot && tryRoastTriviaCheat(username, displayName, m)) {
           rememberChatLine(username, m);
           return;
