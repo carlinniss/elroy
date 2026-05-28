@@ -13,6 +13,8 @@ type DirectiveSnapshot = {
   push: LiveDirective[];
 };
 
+type AuthState = 'checking' | 'authorized' | 'missing' | 'unauthorized';
+
 function authHeaders(secret: string) {
   return {
     'Content-Type': 'application/json',
@@ -30,6 +32,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
   const [tab, setTab] = useState<TabId>('prompts');
   const [secret, setSecret] = useState('');
   const [savedSecret, setSavedSecret] = useState('');
+  const [authState, setAuthState] = useState<AuthState>('checking');
   const [text, setText] = useState('');
   const [kind, setKind] = useState<DirectiveKind>('sticky');
   const [chatOnly, setChatOnly] = useState(false);
@@ -43,18 +46,58 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     playing?: boolean;
     track?: { name: string; artists: string[] } | null;
   } | null>(null);
-  useEffect(() => {
-    const fromUrl = initialSecret?.trim();
-    const stored = sessionStorage.getItem(SECRET_STORAGE_KEY)?.trim();
-    const resolved = fromUrl || stored || '';
-    if (!resolved) return;
-    setSecret(resolved);
-    setSavedSecret(resolved);
-    sessionStorage.setItem(SECRET_STORAGE_KEY, resolved);
-    if (fromUrl) {
-      setStatus('Secret loaded from URL — ready.');
+
+  const verifySecret = useCallback(async (candidate: string) => {
+    const trimmed = candidate.trim();
+    if (!trimmed) return false;
+    try {
+      const res = await fetch('/api/control/verify', {
+        headers: authHeaders(trimmed),
+        cache: 'no-store',
+      });
+      return res.ok;
+    } catch {
+      return false;
     }
-  }, [initialSecret]);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const fromUrl = initialSecret?.trim();
+      const stored = sessionStorage.getItem(SECRET_STORAGE_KEY)?.trim();
+      const resolved = fromUrl || stored || '';
+      if (!resolved) {
+        if (!cancelled) setAuthState('missing');
+        return;
+      }
+
+      if (!cancelled) {
+        setSecret(resolved);
+        setStatus(fromUrl ? 'Verifying secret from URL…' : 'Verifying saved secret…');
+      }
+
+      const ok = await verifySecret(resolved);
+      if (cancelled) return;
+
+      if (!ok) {
+        sessionStorage.removeItem(SECRET_STORAGE_KEY);
+        setSavedSecret('');
+        setAuthState('unauthorized');
+        setStatus('Wrong control secret.');
+        return;
+      }
+
+      sessionStorage.setItem(SECRET_STORAGE_KEY, resolved);
+      setSavedSecret(resolved);
+      setAuthState('authorized');
+      setStatus(fromUrl ? 'Secret verified from URL.' : 'Secret verified.');
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialSecret, verifySecret]);
 
   const refresh = useCallback(async () => {
     try {
@@ -76,10 +119,11 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
   }, []);
 
   useEffect(() => {
+    if (authState !== 'authorized') return;
     void refresh();
     const timer = setInterval(() => { void refresh(); }, 12_000);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [authState, refresh]);
 
   const refreshSpotify = useCallback(async () => {
     try {
@@ -92,10 +136,11 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
   }, []);
 
   useEffect(() => {
+    if (authState !== 'authorized') return;
     void refreshSpotify();
     const timer = setInterval(() => { void refreshSpotify(); }, 15_000);
     return () => clearInterval(timer);
-  }, [refreshSpotify]);
+  }, [authState, refreshSpotify]);
 
   const disconnectSpotify = async () => {
     if (!savedSecret) return;
@@ -117,12 +162,25 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     }
   };
 
-  const saveSecret = () => {
+  const saveSecret = async () => {
     const trimmed = secret.trim();
     if (!trimmed) return;
+    setBusy(true);
+    setStatus('Verifying control secret…');
+    const ok = await verifySecret(trimmed);
+    if (!ok) {
+      sessionStorage.removeItem(SECRET_STORAGE_KEY);
+      setSavedSecret('');
+      setAuthState('unauthorized');
+      setStatus('Wrong control secret.');
+      setBusy(false);
+      return;
+    }
     sessionStorage.setItem(SECRET_STORAGE_KEY, trimmed);
     setSavedSecret(trimmed);
-    setStatus('Secret saved for this browser session.');
+    setAuthState('authorized');
+    setStatus('Secret verified and saved for this browser session.');
+    setBusy(false);
   };
 
   const addDirective = async () => {
@@ -211,6 +269,46 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     ...directives.push.map((item) => ({ ...item, kind: 'push' as const })),
   ].sort((a, b) => b.createdAt - a.createdAt);
 
+  if (authState !== 'authorized') {
+    return (
+      <div style={pageStyle}>
+        <header style={topBarStyle}>
+          <div>
+            <p style={eyebrowStyle}>Elroy broadcaster</p>
+            <h1 style={titleStyle}>Control</h1>
+          </div>
+          <p style={statusPillStyle}>
+            {authState === 'checking' ? 'Checking access…' : authState === 'missing' ? 'Secret required' : 'Access denied'}
+          </p>
+        </header>
+
+        <section style={panelStyle}>
+          <h2 style={headingStyle}>Admin access</h2>
+          <p style={hintStyle}>
+            Enter the control secret to unlock this page.
+          </p>
+          <div style={rowStyle}>
+            <input
+              type="password"
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+              placeholder="Control secret"
+              style={inputStyle}
+            />
+            <button
+              type="button"
+              onClick={() => { void saveSecret(); }}
+              disabled={busy || !secret.trim()}
+              style={buttonStyle}
+            >
+              Unlock
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div style={pageStyle}>
       <header style={topBarStyle}>
@@ -266,7 +364,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
               placeholder="Control secret"
               style={inputStyle}
             />
-            <button type="button" onClick={saveSecret} style={buttonStyle}>Save</button>
+            <button type="button" onClick={() => { void saveSecret(); }} style={buttonStyle}>Save</button>
           </div>
 
           <h3 style={subheadingStyle}>While streaming</h3>
