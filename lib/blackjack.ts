@@ -1147,45 +1147,53 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
   }
 
   if (req.action === 'dareComplete') {
-    const message = req.message?.trim() ?? '';
-    if (!message) {
-      return { ok: false, messages: [], error: 'message required' };
-    }
+    return withTableMutation(async (table) => {
+      const message = req.message?.trim() ?? '';
+      if (!message) {
+        return { table, result: { ok: false, messages: [], error: 'message required' } };
+      }
 
-    const pending = await getPendingDare(login);
-    if (!pending) {
-      return { ok: false, messages: [], error: 'no pending dare' };
-    }
+      const pending = await getPendingDare(login);
+      if (!pending) {
+        return { table, result: { ok: false, messages: [], error: 'no pending dare' } };
+      }
 
-    const match = dareMatchesMessage(pending, message);
-    if (!match.ok) {
-      const emoteHint =
-        match.missingEmotes.length > 0
-          ? ` Still need: ${match.missingEmotes.join(' ')}.`
-          : ' Include the exact shame line from !dare.';
+      const match = dareMatchesMessage(pending, message);
+      if (!match.ok) {
+        const emoteHint =
+          match.missingEmotes.length > 0
+            ? ` Still need: ${match.missingEmotes.join(' ')}.`
+            : ' Include the exact shame line from !dare.';
+        return {
+          table,
+          result: {
+            ok: false,
+            messages: [`🃏 @${displayName} ritual rejected.${emoteHint} No chips until you comply.`],
+            error: 'dare incomplete',
+          },
+        };
+      }
+
+      const now = Date.now();
+      const chips = await getPlayerChips(login);
+      const nextChips = chips + DARE_REWARD_CHIPS;
+      await setPlayerChips(login, nextChips, displayName);
+      await markPlayerPlayed(login, displayName, nextChips);
+      await syncLeaderboard(login, nextChips);
+      await setLastDareAt(login, now);
+      await clearPendingDare(login);
+
       return {
-        ok: false,
-        messages: [`🃏 @${displayName} ritual rejected.${emoteHint} No chips until you comply.`],
-        error: 'dare incomplete',
+        table,
+        result: {
+          ok: true,
+          messages: [
+            `🃏 @${displayName} shame ritual ACCEPTED. Dignity forfeited.`,
+            `🃏 +${DARE_REWARD_CHIPS} chips. Stack: ${nextChips}. Don't spend it on hope.`,
+          ],
+        },
       };
-    }
-
-    const now = Date.now();
-    const chips = await getPlayerChips(login);
-    const nextChips = chips + DARE_REWARD_CHIPS;
-    await setPlayerChips(login, nextChips, displayName);
-    await markPlayerPlayed(login, displayName, nextChips);
-    await syncLeaderboard(login, nextChips);
-    await setLastDareAt(login, now);
-    await clearPendingDare(login);
-
-    return {
-      ok: true,
-      messages: [
-        `🃏 @${displayName} shame ritual ACCEPTED. Dignity forfeited.`,
-        `🃏 +${DARE_REWARD_CHIPS} chips. Stack: ${nextChips}. Don't spend it on hope.`,
-      ],
-    };
+    });
   }
 
   if (req.action === 'dare') {
@@ -1230,29 +1238,37 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
   }
 
   if (req.action === 'loan') {
-    const debt = await getLoanDebt(login);
-    if (debt > 0) {
+    return withTableMutation(async (table) => {
+      const debt = await getLoanDebt(login);
+      if (debt > 0) {
+        return {
+          table,
+          result: {
+            ok: false,
+            messages: [`@${displayName} you already owe ${debt} chips. No new loan till that's repaid.`],
+            error: 'existing debt',
+          },
+        };
+      }
+
+      const chips = await getPlayerChips(login);
+      const nextChips = chips + LOAN_AMOUNT;
+      await setPlayerChips(login, nextChips, displayName);
+      await setLoanDebt(login, LOAN_REPAY_AMOUNT);
+      await markPlayerPlayed(login, displayName, nextChips);
+      await syncLeaderboard(login, nextChips);
+
       return {
-        ok: false,
-        messages: [`@${displayName} you already owe ${debt} chips. No new loan till that's repaid.`],
-        error: 'existing debt',
+        table,
+        result: {
+          ok: true,
+          messages: [
+            `🃏 @${displayName} LOAN SHARK SPECIAL: +${LOAN_AMOUNT} chips now.`,
+            `🃏 Debt set to ${LOAN_REPAY_AMOUNT}. House auto-collects from future round results until paid. Stack: ${nextChips}.`,
+          ],
+        },
       };
-    }
-
-    const chips = await getPlayerChips(login);
-    const nextChips = chips + LOAN_AMOUNT;
-    await setPlayerChips(login, nextChips, displayName);
-    await setLoanDebt(login, LOAN_REPAY_AMOUNT);
-    await markPlayerPlayed(login, displayName, nextChips);
-    await syncLeaderboard(login, nextChips);
-
-    return {
-      ok: true,
-      messages: [
-        `🃏 @${displayName} LOAN SHARK SPECIAL: +${LOAN_AMOUNT} chips now.`,
-        `🃏 Debt set to ${LOAN_REPAY_AMOUNT}. House auto-collects from future round results until paid. Stack: ${nextChips}.`,
-      ],
-    };
+    });
   }
 
   if (req.action === 'leaders') {

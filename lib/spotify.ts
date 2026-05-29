@@ -223,6 +223,13 @@ async function getAccessToken(): Promise<string | null> {
   }
 }
 
+function fetchSpotifyPlayback(accessToken: string) {
+  return fetch(`${SPOTIFY_API}/me/player/currently-playing`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: 'no-store',
+  });
+}
+
 function parseTrack(item: SpotifyTrack, playback: SpotifyPlayback): SpotifyTrackSnapshot | null {
   if (!item.id || !item.name) return null;
 
@@ -278,18 +285,24 @@ export async function fetchSpotifyNowPlaying(): Promise<{
     return { connected: true, playing: false, track: null };
   }
 
-  const res = await fetch(`${SPOTIFY_API}/me/player/currently-playing`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-    cache: 'no-store',
-  });
+  let res = await fetchSpotifyPlayback(accessToken);
 
   if (res.status === 204) {
     return { connected: true, playing: false, track: null };
   }
 
   if (res.status === 401) {
-    await writeTokens(null);
-    return { connected: false, playing: false, track: null };
+    try {
+      const refreshedAccessToken = await refreshSpotifyAccessToken(tokens.refreshToken);
+      res = await fetchSpotifyPlayback(refreshedAccessToken);
+      if (res.status === 204) {
+        return { connected: true, playing: false, track: null };
+      }
+    } catch (error) {
+      console.error('Spotify token refresh after playback 401 failed', error);
+      await writeTokens(null);
+      return { connected: false, playing: false, track: null };
+    }
   }
 
   if (!res.ok) {

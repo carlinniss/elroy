@@ -1,4 +1,5 @@
 import { isControlAuthorized } from '@/lib/control-auth';
+import { isActiveBotSession } from '@/lib/bot-session';
 import {
   ackPushDirective,
   addDirective,
@@ -11,7 +12,16 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+async function isOverlayAuthorized(instanceId: string | undefined) {
+  return isActiveBotSession(instanceId?.trim() ?? '');
+}
+
+export async function GET(request: Request) {
+  const url = new URL(request.url);
+  if (!isControlAuthorized(request) && !(await isOverlayAuthorized(url.searchParams.get('instanceId') ?? undefined))) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const directives = await listDirectives();
     return Response.json(directives, {
@@ -32,14 +42,21 @@ export async function POST(request: Request) {
       id?: string;
       chatOnly?: boolean;
       forceVoice?: boolean;
+      instanceId?: string;
     };
 
     if (body.action === 'consume-next') {
+      if (!isControlAuthorized(request) && !(await isOverlayAuthorized(body.instanceId))) {
+        return Response.json({ error: 'Unauthorized' }, { status: 401 });
+      }
       const consumed = await consumeNextDirectives();
       return Response.json({ ok: true, consumed });
     }
 
     if (body.action === 'ack-push' && body.id) {
+      if (!isControlAuthorized(request) && !(await isOverlayAuthorized(body.instanceId))) {
+        return Response.json({ error: 'Unauthorized' }, { status: 401 });
+      }
       await ackPushDirective(body.id);
       return Response.json({ ok: true });
     }
