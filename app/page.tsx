@@ -33,6 +33,35 @@ function rememberUser(username: string, displayName: string | undefined, event: 
   });
 }
 
+const BLACKJACK_PENDING_DARE_STORAGE_PREFIX = 'elroy-blackjack-pending-dare:';
+
+function setStoredPendingDare(login: string) {
+  if (typeof window === 'undefined' || !login) return;
+  try {
+    sessionStorage.setItem(`${BLACKJACK_PENDING_DARE_STORAGE_PREFIX}${login}`, '1');
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
+function hasStoredPendingDare(login: string) {
+  if (typeof window === 'undefined' || !login) return false;
+  try {
+    return sessionStorage.getItem(`${BLACKJACK_PENDING_DARE_STORAGE_PREFIX}${login}`) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function clearStoredPendingDare(login: string) {
+  if (typeof window === 'undefined' || !login) return;
+  try {
+    sessionStorage.removeItem(`${BLACKJACK_PENDING_DARE_STORAGE_PREFIX}${login}`);
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
 function BongContent() {
   const [isActive, setIsActive] = useState(false);
   const [botBlockReason, setBotBlockReason] = useState<string | null>(null);
@@ -867,11 +896,12 @@ function BongContent() {
         return;
       }
       if (hadNextDirectives && !opts.isQuota) {
+        const instanceId = botInstanceIdRef.current || getBotInstanceId();
         liveDirectivesRef.current = { ...liveDirectivesRef.current, next: [] };
         void fetch('/api/directives', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'consume-next' }),
+          body: JSON.stringify({ action: 'consume-next', instanceId }),
         }).catch((error) => {
           console.warn('Directive consume failed', error);
         });
@@ -918,7 +948,10 @@ function BongContent() {
 
   const pollLiveDirectives = useCallback(async () => {
     try {
-      const res = await fetch(`/api/directives?t=${Date.now()}`, { cache: 'no-store' });
+      const instanceId = botInstanceIdRef.current || getBotInstanceId();
+      if (!instanceId || !isActiveRef.current) return;
+      const params = new URLSearchParams({ t: String(Date.now()), instanceId });
+      const res = await fetch(`/api/directives?${params.toString()}`, { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json() as {
         sticky?: Array<{ id: string; text: string }>;
@@ -948,7 +981,7 @@ function BongContent() {
         void fetch('/api/directives', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'ack-push', id: item.id }),
+          body: JSON.stringify({ action: 'ack-push', id: item.id, instanceId }),
         }).catch((error) => {
           console.warn('Push ack failed', error);
         });
@@ -1433,7 +1466,7 @@ function BongContent() {
   ) => {
     if (!streamLiveRef.current || isFullyMuted()) return;
     const login = username.toLowerCase();
-    if (!blackjackPendingDareRef.current.has(login)) return;
+    if (!blackjackPendingDareRef.current.has(login) && !hasStoredPendingDare(login)) return;
     void postBlackjackAction({
       action: 'dareComplete',
       username,
@@ -1442,6 +1475,7 @@ function BongContent() {
     }).then((data) => {
       if (data?.ok || data?.error === 'no pending dare') {
         blackjackPendingDareRef.current.delete(login);
+        clearStoredPendingDare(login);
       }
     });
   }, [postBlackjackAction]);
@@ -1507,7 +1541,10 @@ function BongContent() {
     }
     if (cmd === 'dare') {
       void postBlackjackAction({ action: 'dare', username, displayName }).then((data) => {
-        if (data?.ok) blackjackPendingDareRef.current.add(login);
+        if (data?.ok || data?.error === 'dare pending') {
+          blackjackPendingDareRef.current.add(login);
+          setStoredPendingDare(login);
+        }
       });
       return;
     }

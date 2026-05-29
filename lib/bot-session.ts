@@ -64,6 +64,19 @@ export async function heartbeatBotSession(instanceId: string): Promise<'ok' | 'l
   }
 }
 
+export async function isActiveBotSession(instanceId: string): Promise<boolean> {
+  if (!instanceId) return false;
+  if (!hasRedisStorage()) return true;
+
+  try {
+    const existing = parseBotSessionRecord(await redisCommand(['GET', SESSION_KEY]));
+    return existing?.instanceId === instanceId;
+  } catch (error) {
+    console.error('Bot session verification failed', error);
+    return false;
+  }
+}
+
 export async function releaseBotSession(instanceId: string): Promise<void> {
   if (!instanceId || !hasRedisStorage()) return;
 
