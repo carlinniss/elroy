@@ -111,6 +111,8 @@ export type BjActionResult = {
   ok: boolean;
   messages: string[];
   error?: string;
+  /** True when this action transitioned the table from idle to seating. */
+  tableOpened?: boolean;
 };
 
 type MemoryStore = {
@@ -971,10 +973,12 @@ async function advancePhase(table: BjTable): Promise<{ table: BjTable; messages:
       return { table: idleTable(), messages: ['🃏 Nobody sat — table closed.'] };
     }
     const betting = startBetting(table);
+    const betSecs = Math.ceil(BETTING_MS / 1000);
+    const seated = betting.seats.map((s) => `@${s.displayName}`).join(' ');
     return {
       table: betting,
       messages: [
-        `🃏 Seats locked: ${betting.seats.map((s) => `@${s.displayName}`).join(' ')} — ${betHelpText()} (${BETTING_MS / 1000}s)`,
+        `🃏 BLACKJACK BETTING OPEN — ${seated} — ${betHelpText()} (${betSecs}s)`,
       ],
     };
   }
@@ -1290,8 +1294,10 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
   if (req.action === 'open' || req.action === 'join') {
     return withTableMutation(async (table) => {
       const messages: string[] = [];
+      let tableOpened = false;
 
       if (table.state === 'idle') {
+        tableOpened = true;
         table = {
           state: 'seating',
           roundId: newRoundId(),
@@ -1301,7 +1307,10 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
           currentSeatIndex: 0,
           phaseEndsAt: Date.now() + SEATING_MS,
         };
-        messages.push(`🃏 Table open — !bj to sit (${SEATING_MS / 1000}s).`);
+        const seatingSecs = Math.ceil(SEATING_MS / 1000);
+        messages.push(
+          `🃏 BLACKJACK TABLE OPEN! Type !bj to sit — ${seatingSecs}s, up to ${MAX_SEATS} seats.`,
+        );
       }
 
       if (table.state !== 'seating' && table.state !== 'betting') {
@@ -1356,7 +1365,7 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
         messages.push(`🃏 @${displayName} took a seat (${table.seats.length}/${MAX_SEATS}).`);
       }
 
-      return { table, result: { ok: true, messages } };
+      return { table, result: { ok: true, messages, tableOpened } };
     });
   }
 

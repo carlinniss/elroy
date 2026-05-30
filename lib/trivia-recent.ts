@@ -142,6 +142,45 @@ export async function hasSeenTriviaQuestion(question: string, category: TriviaCa
   return isNearDuplicateTriviaQuestion(question, getMemoryRecent(category));
 }
 
+/** Record that a question was asked (recent list only — allows bank recycling). */
+export async function noteTriviaQuestionAsked(
+  question: string,
+  category: TriviaCategory,
+  answers: string[] = [],
+): Promise<void> {
+  const trimmed = question.trim();
+  if (!trimmed) return;
+
+  const fingerprint = normalizeTriviaQuestionText(trimmed);
+  const answerFingerprints = normalizedAnswers(answers);
+
+  if (hasRedisStorage()) {
+    try {
+      const commands: unknown[][] = [
+        ['LREM', recentKey(category), '0', trimmed],
+        ['LPUSH', recentKey(category), trimmed],
+        ['LTRIM', recentKey(category), '0', MAX_RECENT - 1],
+        ['SADD', seenKey(category), fingerprint],
+      ];
+      for (const answer of answerFingerprints) {
+        commands.push(['SADD', answerKey(category), answer]);
+      }
+      await redisPipeline(commands);
+      return;
+    } catch (error) {
+      console.error('Redis trivia note failed', error);
+    }
+  }
+
+  const recent = getMemoryRecent(category);
+  const filtered = recent.filter((existing) => normalizeTriviaQuestionText(existing) !== fingerprint);
+  filtered.unshift(trimmed);
+  globalStore.__elroyRecentTrivia![category] = filtered.slice(0, MAX_RECENT);
+  for (const answer of answerFingerprints) {
+    getMemoryAnswers(category).add(answer);
+  }
+}
+
 /** Atomically claim a question + answers. Returns false if already used. */
 export async function claimTriviaQuestion(
   question: string,

@@ -1,5 +1,5 @@
-import { google } from '@ai-sdk/google';
 import { generateText } from 'ai';
+import { getGeminiModel } from '@/lib/gemini-model';
 import {
   buildAboutMePrompt,
   buildAboutMeUnknownPrompt,
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
       : buildAboutMeUnknownPrompt(username);
 
     const { text } = await generateText({
-      model: google('gemini-2.5-flash'),
+      model: getGeminiModel(),
       system,
       prompt,
     });

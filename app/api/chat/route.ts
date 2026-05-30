@@ -1,6 +1,6 @@
-import { google } from '@ai-sdk/google';
 import { generateText } from 'ai';
 import { clampReplyLength, mapBrainErrorMessage, MAX_TWITCH_CHAT_CHARS } from '@/lib/chat-reply';
+import { getGeminiModel } from '@/lib/gemini-model';
 
 export async function POST(req: Request) {
   try {
@@ -12,7 +12,7 @@ export async function POST(req: Request) {
     }
 
     const { text } = await generateText({
-      model: google('gemini-2.5-flash'),
+      model: getGeminiModel(),
       system: process.env.SYSTEM_PROMPT || 'You are Bong, a wise, rhyming OG. Always rhyme.',
       prompt: prompt || 'Say hello.',
     });

@@ -45,7 +45,13 @@ Bong Bot is a high-performance, AI-driven Twitch overlay and chat assistant. Elr
 ## ⚙️ Configuration Notes
 
 ### API Billing (Critical)
-To avoid `429 Quota Exceeded` errors, ensure your Google AI Studio account is moved from "Unknown Tier" to **Tier 1** by adding a $10 prepaid balance at [aistudio.google.com](https://aistudio.google.com/).
+Elroy uses **Google Gemini** for chat and `!aboutme` only. **Trivia is 100% curated static questions** (no Gemini) — see `lib/trivia-bank.ts`. Voice uses a separate **ElevenLabs** quota (`!quota`).
+
+**Google AI Pro ($20/mo) does not refill API credits.** Chat uses `GOOGLE_GENERATIVE_AI_API_KEY` from [AI Studio](https://aistudio.google.com/).
+
+Default model is **`gemini-2.5-flash-lite`**. Override in Vercel: `GOOGLE_GENERATIVE_AI_MODEL=gemini-2.5-flash-lite`
+
+To avoid `429 Quota Exceeded` on the free tier, stay under ~15 requests/minute. On prepaid, add credits at AI Studio → Billing.
 
 ### Audio Files
 Bundled sound effects live in `public/sounds/elroy/` (e.g. `bong_rip.mp3`, `sub_fanfare.mp3`). Optional fallback: `public/sounds/bong.mp3`.
@@ -68,7 +74,7 @@ Ensure your file structure is exact for Next.js routing:
 ### Useful Chat Commands
 
 * Mention **Elroy** in chat: get a chat reply (voice too, when enabled and quota allows).
-* **Trivia:** while live, fresh cannabis or freaky trivia every **10 minutes** (first round ~5 min after go-live). Questions never repeat — dedup is permanent in Redis. Leaderboard scores persist too; Elroy roasts leaders before each question.
+* **Trivia:** while live, curated cannabis / freaky / 90s music questions every **10 minutes** (first round ~5 min after go-live). **175+ hand-written questions** in `lib/trivia-bank.ts` + `lib/trivia-bank-extra.ts`; they shuffle and cycle so repeats are spaced out (recent-window dedup in Redis). Add more by editing those files. Leaderboard scores persist; Elroy roasts leaders before each round.
 * `!aboutme`: Elroy tells you what he remembers about you in chat (trivia wins, subs, mentions, etc.).
 * **Blackjack (single table, play-money):** `!bj` open/sit → `!bet 10+` or `!bet all` → `!hit` / `!stand` / `!double` on your turn (double on first two cards only). You can still `!bj` during the betting window if you missed seating. Everyone starts with **1000 OG chips**. `!chips` balance, `!table` status, `!bjtop` high rollers (only players who have bet at least once). Need help: `!dare` (assigns a shame ritual — type the line + embarrassing emotes in chat to earn +120 chips; 20m cooldown), `!loan` (big bailout with debt), `!debt` (what you owe). Mods: `!bjstop`.
 * `!leaderboard` (alias: `!lb`): Show current trivia leaders in chat.

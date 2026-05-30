@@ -48,6 +48,7 @@ function BongContent() {
     build: getBuildLabel(process.env.NEXT_PUBLIC_BUILD_ID || 'dev'),
     update: 'auto-update checking…',
   });
+  const [postUpdateCheck, setPostUpdateCheck] = useState(false);
 
   const DEFAULT_VOLUME = 0.85;
   const clientRef = useRef<tmi.Client | null>(null);
@@ -92,6 +93,7 @@ function BongContent() {
   const SESSION_CHAT_MAX = 600;
   const SESSION_STORAGE_KEY = 'elroy-stream-session';
   const AUTO_RESUME_STORAGE_KEY = 'elroy-auto-resume';
+  const POST_UPDATE_DIAGNOSTICS_KEY = 'elroy-post-update-diagnostics';
   const VERSION_POLL_MS = 90_000;
   const DIRECTIVE_POLL_MS = 12_000;
   const SPOTIFY_POLL_MS = 5_000;
@@ -516,6 +518,10 @@ function BongContent() {
     pendingDeployReloadRef.current = false;
     persistStreamSession();
 
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem(POST_UPDATE_DIAGNOSTICS_KEY, '1');
+    }
+
     if (isActiveRef.current) {
       localStorage.setItem(AUTO_RESUME_STORAGE_KEY, '1');
       const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
@@ -639,7 +645,17 @@ function BongContent() {
     return `Use the recent Twitch chat to make a topical comment with some depth (3-4 sentences). Reference the vibe from these messages:\n${lines}\nDo not force a rhyme.`;
   }, []);
 
-  const runDiagnostics = useCallback(async () => {
+  const runDiagnostics = useCallback(async (opts?: { afterDeploy?: boolean }) => {
+    const afterDeploy = opts?.afterDeploy === true;
+    setDiagnostics((prev) => ({
+      ...prev,
+      chat: '...',
+      speech: '...',
+      sound: '...',
+      ...(afterDeploy ? { quota: '...' } : {}),
+      update: afterDeploy ? 'checking systems after update…' : prev.update,
+    }));
+
     try {
       const chat = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: 'ping' }) });
       const speech = await fetch('/api/speech', { method: 'POST', body: JSON.stringify({ text: 'ping' }) });
@@ -651,17 +667,34 @@ function BongContent() {
         applyVoiceQuotaTier(Number(qData.remaining) || 0);
       }
 
+      const quotaLabel = quotaRes.ok && !qData.error
+        ? `${Number(qData.remaining || 0).toLocaleString()} left`
+        : '❌';
+
       setDiagnostics((prev) => ({
         ...prev,
         chat: chat.status === 200 ? '✅' : '❌',
         speech: speech.status === 200 ? '✅' : '❌',
         sound: sound.ok ? '✅' : '❌',
-        quota: prev.quota !== '...' ? prev.quota : `${Number(qData.remaining || 0).toLocaleString()} left`,
+        quota: afterDeploy ? quotaLabel : (prev.quota !== '...' ? prev.quota : quotaLabel),
+        update: afterDeploy ? 'updated · systems checked' : prev.update,
       }));
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      if (afterDeploy) {
+        setDiagnostics((prev) => ({
+          ...prev,
+          chat: '❌',
+          speech: '❌',
+          sound: '❌',
+          quota: '❌',
+          update: 'update check failed',
+        }));
+      }
+    }
   }, [applyVoiceQuotaTier]);
 
-  useEffect(() => { runDiagnostics(); }, [runDiagnostics]);
+  useEffect(() => { void runDiagnostics(); }, [runDiagnostics]);
   useEffect(() => { dingEnabledRef.current = isDingOn; }, [isDingOn]);
   useEffect(() => { voiceEnabledRef.current = isVoiceOn; }, [isVoiceOn]);
   useEffect(() => {
@@ -804,6 +837,11 @@ function BongContent() {
     return `You were trying to stay quiet, but chat kept talking about you. ${user} said: "${message}"\n\nRecent chat:\n${context}\n\nSnap back with a funny, crusty call-out — you're annoyed they couldn't let you chill. Roast ${user} by name; keep it playful, not cruel.`;
   }, []);
 
+  const isTriviaRoundLive = useCallback(() => {
+    const active = activeTriviaRef.current;
+    return Boolean(active && !active.answered);
+  }, []);
+
   const processBongLogic = useCallback(async (
     input: string,
     user?: string,
@@ -818,6 +856,15 @@ function BongContent() {
   ) => {
     try {
       if (isFullyMuted() && !opts.isQuota) return;
+      if (isTriviaRoundLive() && !opts.isQuota) {
+        opts = {
+          ...opts,
+          chatOnly: true,
+          skipDing: true,
+          forceVoice: false,
+          bypassVoiceCooldown: false,
+        };
+      }
       if (opts.isQuota) {
         const res = await fetch('/api/quota');
         const d = await res.json();
@@ -896,7 +943,7 @@ function BongContent() {
         await speak(clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS));
       }
     } catch (e) { console.error(e); }
-  }, [playBongRip, speak]);
+  }, [isTriviaRoundLive, playBongRip, speak]);
 
   const queueBongLogic = useCallback((
     input: string,
@@ -1140,10 +1187,12 @@ function BongContent() {
     const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
     const countdownPrefix = `⏳ ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} left! `;
     const hint = buildTriviaProgressHint(
-      active.question,
       active.answers,
       minuteBucket,
-      500 - countdownPrefix.length,
+      {
+        displayAnswer: active.displayAnswer,
+        maxLength: 500 - countdownPrefix.length,
+      },
     );
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     clientRef.current?.say(
@@ -1186,11 +1235,16 @@ function BongContent() {
           console.warn('Trivia generation unavailable', generateRes.status);
         }
       } catch (error) {
-        console.warn('Gemini trivia generation failed', error);
+        console.warn('Trivia pick failed', error);
       }
 
       if (!picked) {
         lastTriviaAtRef.current = Date.now() - TRIVIA_INTERVAL_MS + 2 * 60 * 1000;
+        const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+        clientRef.current?.say(
+          channel,
+          '🌿 Trivia round skipped — every curated question in the deck was asked recently. Elroy will reshuffle soon.',
+        );
         return;
       }
 
@@ -1203,7 +1257,7 @@ function BongContent() {
           const roastPrompt = buildTriviaLeaderRoastPrompt(leaders);
           if (roastPrompt) {
             await processBongLogic(roastPrompt, undefined, {
-              chatOnly: !ambientVoiceAllowedRef.current,
+              chatOnly: true,
               skipDing: true,
             });
           }
@@ -1340,8 +1394,8 @@ function BongContent() {
       `${username} just won trivia with the first correct answer. Hype them up in one short OG sentence — make them feel legendary.`,
       username,
       {
-        forceVoice: true,
-        voicePriority: 'celebration',
+        chatOnly: true,
+        skipDing: true,
       },
     );
     rememberUser(username, username, {
@@ -2037,10 +2091,24 @@ function BongContent() {
     const shouldAutoStart =
       searchParams.get('autostart') === 'true'
       || (typeof window !== 'undefined' && localStorage.getItem(AUTO_RESUME_STORAGE_KEY) === '1');
-    if (shouldAutoStart) {
-      void startBot();
+    if (!shouldAutoStart) return;
+
+    const needsPostUpdateCheck =
+      typeof window !== 'undefined'
+      && sessionStorage.getItem(POST_UPDATE_DIAGNOSTICS_KEY) === '1';
+
+    if (needsPostUpdateCheck) {
+      sessionStorage.removeItem(POST_UPDATE_DIAGNOSTICS_KEY);
+      setPostUpdateCheck(true);
+      void runDiagnostics({ afterDeploy: true }).finally(() => {
+        setPostUpdateCheck(false);
+        void startBot();
+      });
+      return;
     }
-  }, [searchParams]);
+
+    void startBot();
+  }, [searchParams, runDiagnostics]);
   return (
     <div style={{ height: '100vh', padding: '60px', color: 'white', backgroundColor: 'transparent', fontFamily: 'sans-serif' }}>
       <div
@@ -2058,13 +2126,18 @@ function BongContent() {
           zIndex: 1000,
         }}
       >
-        {!isActive && (
-          <>
-            <div>Brain: {diagnostics.chat} | Voice: {diagnostics.speech} | Sound: {diagnostics.sound}</div>
-            <div style={{ color: '#00FF00', marginTop: '5px' }}>Quota: {diagnostics.quota}</div>
-          </>
-        )}
-        <div style={{ color: '#B794F6', marginTop: isActive ? 0 : '8px' }}>
+        <div style={{ fontSize: isActive ? '13px' : '16px' }}>
+          Brain: {diagnostics.chat} | Voice: {diagnostics.speech} | Sound: {diagnostics.sound}
+        </div>
+        <div style={{ color: '#00FF00', marginTop: '5px', fontSize: isActive ? '13px' : '16px' }}>
+          Quota: {diagnostics.quota}
+        </div>
+        {postUpdateCheck ? (
+          <div style={{ color: '#FFE08A', marginTop: '6px', fontSize: isActive ? '12px' : '14px' }}>
+            Verifying Brain / Voice / Sound after auto-update…
+          </div>
+        ) : null}
+        <div style={{ color: '#B794F6', marginTop: isActive ? '6px' : '8px', fontSize: isActive ? '12px' : '14px' }}>
           Build {diagnostics.build} · {diagnostics.update}
         </div>
       </div>
