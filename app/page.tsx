@@ -118,6 +118,35 @@ function BongContent() {
   const randomCannabisFact = () =>
     CANNABIS_FACTS[Math.floor(Math.random() * CANNABIS_FACTS.length)];
 
+  const overlayControlSecret =
+    searchParams.get('controlKey')?.trim() || searchParams.get('key')?.trim() || '';
+  const overlayHeaders = useCallback((headers?: HeadersInit) => {
+    const next = new Headers(headers);
+    if (overlayControlSecret) {
+      next.set('x-elroy-control-secret', overlayControlSecret);
+    }
+    return next;
+  }, [overlayControlSecret]);
+
+  const sayToChannel = useCallback(async (message: string) => {
+    const text = message.trim();
+    if (!text) return;
+
+    try {
+      const res = await fetch('/api/twitch/say', {
+        method: 'POST',
+        headers: overlayHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ message: text }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        console.warn('Twitch chat send failed', body.error || res.status);
+      }
+    } catch (error) {
+      console.warn('Twitch chat send failed', error);
+    }
+  }, [overlayHeaders]);
+
   const lastCelebrationRef = useRef(0);
   const knownFollowerIdsRef = useRef<Set<string>>(new Set());
   const greetedThisSessionRef = useRef<Set<string>>(new Set());
@@ -363,21 +392,19 @@ function BongContent() {
   }, []);
 
   const postMuteCountdown = useCallback(() => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const msLeft = silencedUntilRef.current - Date.now();
     if (msLeft <= 0) {
       silencedUntilRef.current = 0;
       silenceModeRef.current = 'none';
       stopMuteCountdown();
-      clientRef.current?.say(channel, 'Elroy is back — you can talk to me again.');
+      void sayToChannel('Elroy is back — you can talk to me again.');
       return;
     }
     const minutesLeft = Math.ceil(msLeft / 60_000);
-    clientRef.current?.say(
-      channel,
+    void sayToChannel(
       `${minutesLeft} minute${minutesLeft === 1 ? '' : 's'} until Elroy can talk again.`,
     );
-  }, [stopMuteCountdown]);
+  }, [sayToChannel, stopMuteCountdown]);
 
   const enterFullMute = useCallback((redeemer?: string) => {
     stopMuteCountdown();
@@ -386,17 +413,16 @@ function BongContent() {
     voiceEnabledRef.current = false;
     setIsVoiceOn(false);
 
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const opener = redeemer
       ? `@${redeemer} shut Elroy up — no chat or voice for 10 minutes.`
       : 'Shut Elroy Up power-up activated — no chat or voice for 10 minutes.';
-    clientRef.current?.say(channel, opener);
+    void sayToChannel(opener);
     void playElroySfx('mute_zip');
     postMuteCountdown();
     muteCountdownRef.current = setInterval(() => {
       postMuteCountdown();
     }, 60_000);
-  }, [postMuteCountdown, stopMuteCountdown, playElroySfx]);
+  }, [postMuteCountdown, sayToChannel, stopMuteCountdown, playElroySfx]);
 
   const pollPowerupRedemptions = useCallback(async () => {
     const cachedId = shutElroyPowerUpIdRef.current;
@@ -524,20 +550,16 @@ function BongContent() {
 
     if (isActiveRef.current) {
       localStorage.setItem(AUTO_RESUME_STORAGE_KEY, '1');
-      const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-      const client = clientRef.current;
-      if (client) {
-        try {
-          await client.say(channel, '🔄 Elroy updating — back in a few seconds.');
-          await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-        } catch {
-          /* ignore */
-        }
+      try {
+        await sayToChannel('🔄 Elroy updating — back in a few seconds.');
+        await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+      } catch {
+        /* ignore */
       }
     }
 
     window.location.reload();
-  }, [canSafelyReloadForDeploy, persistStreamSession]);
+  }, [canSafelyReloadForDeploy, persistStreamSession, sayToChannel]);
 
   const pollDeployVersion = useCallback(async () => {
     try {
@@ -868,7 +890,7 @@ function BongContent() {
       if (opts.isQuota) {
         const res = await fetch('/api/quota');
         const d = await res.json();
-        clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate}.`);
+        void sayToChannel(`@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate}.`);
         return;
       }
 
@@ -909,7 +931,7 @@ function BongContent() {
             data.error || 'Brain stall — check Gemini billing in AI Studio.',
             MAX_TWITCH_CHAT_CHARS - (`@${user} `.length),
           );
-          clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${user} ${failLine}`);
+          void sayToChannel(`@${user} ${failLine}`);
         }
         return;
       }
@@ -925,10 +947,7 @@ function BongContent() {
       }
       const safeChatText = formatChatReplyBody(data.text, user);
       setLog(p => [{ text: safeChatText }, ...p].slice(0, 5));
-      clientRef.current?.say(
-        process.env.NEXT_PUBLIC_TWITCH_CHANNEL!,
-        user ? `@${user} ${safeChatText}` : safeChatText,
-      );
+      void sayToChannel(user ? `@${user} ${safeChatText}` : safeChatText);
 
       if (willUseVoice) {
         lastElroyVoiceRef.current = Date.now();
@@ -943,7 +962,7 @@ function BongContent() {
         await speak(clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS));
       }
     } catch (e) { console.error(e); }
-  }, [isTriviaRoundLive, playBongRip, speak]);
+  }, [isTriviaRoundLive, playBongRip, sayToChannel, speak]);
 
   const queueBongLogic = useCallback((
     input: string,
@@ -1164,12 +1183,10 @@ function BongContent() {
     if (Date.now() - active.askedAt < TRIVIA_ANSWER_WINDOW_MS) return;
 
     activeTriviaRef.current = null;
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-    clientRef.current?.say(
-      channel,
+    void sayToChannel(
       `⏰ Trivia time's up! Nobody got it — the answer was ${active.displayAnswer}.`,
     );
-  }, []);
+  }, [sayToChannel]);
 
   const announceTriviaCountdown = useCallback(() => {
     const active = activeTriviaRef.current;
@@ -1194,12 +1211,10 @@ function BongContent() {
         maxLength: 500 - countdownPrefix.length,
       },
     );
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-    clientRef.current?.say(
-      channel,
+    void sayToChannel(
       `⏳ ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} left! ${hint}`,
     );
-  }, []);
+  }, [sayToChannel]);
 
   const askCannabisTrivia = useCallback(async () => {
     if (isFullyMuted() || !streamLiveRef.current) return;
@@ -1240,9 +1255,7 @@ function BongContent() {
 
       if (!picked) {
         lastTriviaAtRef.current = Date.now() - TRIVIA_INTERVAL_MS + 2 * 60 * 1000;
-        const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-        clientRef.current?.say(
-          channel,
+        void sayToChannel(
           '🌿 Trivia round skipped — every curated question in the deck was asked recently. Elroy will reshuffle soon.',
         );
         return;
@@ -1284,16 +1297,14 @@ function BongContent() {
         lastCountdownMinute: 0,
       };
 
-      const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
       const roundPoints = Math.max(1, Number(picked.points) || 1);
-      clientRef.current?.say(
-        channel,
+      void sayToChannel(
         `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer gets ${roundPoints} point${roundPoints === 1 ? '' : 's'}!`,
       );
     } finally {
       triviaAskInFlightRef.current = false;
     }
-  }, [persistStreamSession, processBongLogic]);
+  }, [persistStreamSession, processBongLogic, sayToChannel]);
 
   const runTriviaCycle = useCallback(() => {
     if (!streamLiveRef.current || isFullyMuted()) return;
@@ -1335,7 +1346,6 @@ function BongContent() {
 
   const requestSpotifyComment = useCallback(async (username: string) => {
     if (isFullyMuted()) return;
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
 
     try {
       const res = await fetch(`/api/spotify/now-playing?t=${Date.now()}`, { cache: 'no-store' });
@@ -1347,19 +1357,19 @@ function BongContent() {
       };
 
       if (!data.connected) {
-        clientRef.current?.say(channel, `@${username} Spotify ain't linked — broadcaster connects it from /control.`);
+        void sayToChannel(`@${username} Spotify ain't linked — broadcaster connects it from /control.`);
         return;
       }
       if (!data.track || !data.playing) {
-        clientRef.current?.say(channel, `@${username} Nothing playing on Spotify right now.`);
+        void sayToChannel(`@${username} Nothing playing on Spotify right now.`);
         return;
       }
 
       commentOnSpotifyTrack(data.track, username);
     } catch {
-      clientRef.current?.say(channel, `@${username} Couldn't read Spotify — try again in a sec.`);
+      void sayToChannel(`@${username} Couldn't read Spotify — try again in a sec.`);
     }
-  }, [commentOnSpotifyTrack]);
+  }, [commentOnSpotifyTrack, sayToChannel]);
 
   const awardTriviaWinner = useCallback(async (username: string) => {
     const active = activeTriviaRef.current;
@@ -1385,9 +1395,7 @@ function BongContent() {
     }
 
     void playElroySfx('sub_fanfare');
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-    clientRef.current?.say(
-      channel,
+    void sayToChannel(
       `🎉 @${username} got it FIRST! Correct — ${active.displayAnswer}. (+${awardedPoints} point${awardedPoints === 1 ? '' : 's'} • ${totalWins} total)`,
     );
     void queueBongLogic(
@@ -1403,7 +1411,7 @@ function BongContent() {
       category: active.category,
       totalWins,
     });
-  }, [playElroySfx, queueBongLogic]);
+  }, [playElroySfx, queueBongLogic, sayToChannel]);
 
   const tryHandleTriviaAnswer = useCallback((username: string, message: string) => {
     if (isFullyMuted()) return false;
@@ -1446,11 +1454,10 @@ function BongContent() {
   }, [buildStreamCheckinPrompt, fetchStreamStatus, queueBongLogic]);
 
   const sayBlackjackLines = useCallback((lines: string[]) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     for (const line of lines) {
-      if (line?.trim()) clientRef.current?.say(channel, line);
+      if (line?.trim()) void sayToChannel(line);
     }
-  }, []);
+  }, [sayToChannel]);
 
   const blackjackPendingDareRef = useRef<Set<string>>(new Set());
 
@@ -1519,8 +1526,7 @@ function BongContent() {
 
     const activeTrivia = activeTriviaRef.current;
     if (activeTrivia && !activeTrivia.answered && (cmd === 'bj' || cmd === 'blackjack')) {
-      const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-      clientRef.current?.say(channel, `@${username} trivia's live — wait for the next round to open blackjack.`);
+      void sayToChannel(`@${username} trivia's live — wait for the next round to open blackjack.`);
       return;
     }
 
@@ -1580,7 +1586,7 @@ function BongContent() {
     if (cmd === 'bjstop' && isMod) {
       void postBlackjackAction({ action: 'stop', username, displayName, isMod: true });
     }
-  }, [postBlackjackAction]);
+  }, [postBlackjackAction, sayToChannel]);
 
   const startStreamMonitoring = useCallback(() => {
     if (!streamPollRef.current) {
@@ -1671,31 +1677,27 @@ function BongContent() {
   }, [buildLRoyRoastPrompt, playElroySfx, queueBongLogic]);
 
   const toggleDing = useCallback((user?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const nextState = !dingEnabledRef.current;
     dingEnabledRef.current = nextState;
     setIsDingOn(nextState);
-    clientRef.current?.say(channel, user ? `@${user} ding ${nextState ? 'on' : 'off'}.` : `ding ${nextState ? 'on' : 'off'}.`);
-  }, []);
+    void sayToChannel(user ? `@${user} ding ${nextState ? 'on' : 'off'}.` : `ding ${nextState ? 'on' : 'off'}.`);
+  }, [sayToChannel]);
 
   const toggleVoice = useCallback((user?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const nextState = !voiceEnabledRef.current;
     voiceEnabledRef.current = nextState;
     setIsVoiceOn(nextState);
-    clientRef.current?.say(channel, user ? `@${user} voice ${nextState ? 'on' : 'off'}.` : `voice ${nextState ? 'on' : 'off'}.`);
-  }, []);
+    void sayToChannel(user ? `@${user} voice ${nextState ? 'on' : 'off'}.` : `voice ${nextState ? 'on' : 'off'}.`);
+  }, [sayToChannel]);
 
   const setVolume = useCallback((level: number, user?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const clamped = Math.min(1, Math.max(0, level));
     volumeRef.current = clamped;
     const pct = Math.round(clamped * 100);
-    clientRef.current?.say(channel, user ? `@${user} volume ${pct}%.` : `volume ${pct}%.`);
-  }, []);
+    void sayToChannel(user ? `@${user} volume ${pct}%.` : `volume ${pct}%.`);
+  }, [sayToChannel]);
 
   const announceAboutMe = useCallback(async (username: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     try {
       const res = await fetch(`/api/users/aboutme?username=${encodeURIComponent(username)}`);
       if (!res.ok) throw new Error('aboutme lookup failed');
@@ -1703,26 +1705,25 @@ function BongContent() {
       const text = typeof data.text === 'string' && data.text.trim()
         ? data.text.trim()
         : `Still getting to know you — mention me or win trivia so I can build your file.`;
-      clientRef.current?.say(channel, `@${username} ${text}`);
+      void sayToChannel(`@${username} ${text}`);
     } catch (error) {
       console.warn('!aboutme failed', error);
-      clientRef.current?.say(channel, `@${username} I cannot pull your file right now — try again in a bit.`);
+      void sayToChannel(`@${username} I cannot pull your file right now — try again in a bit.`);
     }
-  }, []);
+  }, [sayToChannel]);
 
   const announceTriviaLeaderboard = useCallback(async (user?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     try {
       const res = await fetch('/api/trivia/leaders');
       if (!res.ok) throw new Error('leader lookup failed');
       const leaders = await res.json();
       const message = formatTriviaLeaderboardChatMessage(leaders);
-      clientRef.current?.say(channel, user ? `@${user} ${message}` : message);
+      void sayToChannel(user ? `@${user} ${message}` : message);
     } catch (error) {
       console.warn('Trivia leaderboard command failed', error);
-      clientRef.current?.say(channel, user ? `@${user} leaderboard unavailable right now.` : 'Leaderboard unavailable right now.');
+      void sayToChannel(user ? `@${user} leaderboard unavailable right now.` : 'Leaderboard unavailable right now.');
     }
-  }, []);
+  }, [sayToChannel]);
 
   const stopBotSessionHeartbeat = useCallback(() => {
     if (botSessionHeartbeatRef.current) {
@@ -1774,12 +1775,11 @@ function BongContent() {
   }, []);
 
   const disconnectBotClient = useCallback(async (announceUser?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const client = clientRef.current;
     if (client) {
       try {
         if (announceUser) {
-          await client.say(channel, `@${announceUser} Elroy is off.`);
+          await sayToChannel(`@${announceUser} Elroy is off.`);
         }
         await client.disconnect();
       } catch (e) {
@@ -1794,7 +1794,7 @@ function BongContent() {
     stopMuteCountdown();
     isActiveRef.current = false;
     setIsActive(false);
-  }, [stopFollowerPolling, stopPowerupRedemptionPolling, stopQuotaPolling, stopStreamMonitoring, stopMuteCountdown]);
+  }, [sayToChannel, stopFollowerPolling, stopPowerupRedemptionPolling, stopQuotaPolling, stopStreamMonitoring, stopMuteCountdown]);
 
   const stopBot = useCallback(async (announceUser?: string) => {
     try {
@@ -1841,7 +1841,7 @@ function BongContent() {
     const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
     chatMessageCountRef.current = 0;
-    const client = new tmi.Client({ identity: { username: chan, password: process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN! }, channels: [chan] });
+    const client = new tmi.Client({ channels: [chan] });
     client.on('message', (_c: string, t: tmi.ChatUserstate, m: string, s: boolean) => {
       if (s) return;
       const username = t.username || 'viewer';
@@ -1975,11 +1975,10 @@ function BongContent() {
       if (m.toLowerCase().startsWith('!volume')) {
         const isModerator = t.mod === true;
         if (!isBroadcaster && !isModerator) return;
-        const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
         const arg = m.slice('!volume'.length).trim();
         if (!arg) {
           const pct = Math.round(volumeRef.current * 100);
-          clientRef.current?.say(channel, `@${t.username} volume ${pct}%.`);
+          void sayToChannel(`@${t.username} volume ${pct}%.`);
           return;
         }
         const deltaMatch = arg.match(/^([+-])(\d+)$/);
@@ -1989,7 +1988,7 @@ function BongContent() {
         }
         const parsed = Number(arg.replace(/%$/, ''));
         if (!Number.isFinite(parsed)) {
-          clientRef.current?.say(channel, `@${t.username} use !volume, !volume 50, or !volume +10 / -10.`);
+          void sayToChannel(`@${t.username} use !volume, !volume 50, or !volume +10 / -10.`);
           return;
         }
         return setVolume(parsed / 100, t.username);
@@ -2051,7 +2050,7 @@ function BongContent() {
         /* ignore */
       }
       startBotSessionHeartbeat();
-      client.say(chan, `Elroy initiated. ${randomCannabisFact()}`);
+      void sayToChannel(`Elroy initiated. ${randomCannabisFact()}`);
       restoreStreamSession();
       const foundPowerUp = await resolveShutElroyPowerUpId();
       if (foundPowerUp) {
