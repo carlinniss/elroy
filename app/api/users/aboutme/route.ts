@@ -1,4 +1,5 @@
 import { generateText } from 'ai';
+import { isControlAuthorized } from '@/lib/control-auth';
 import { getGeminiModel } from '@/lib/gemini-model';
 import {
   buildAboutMePrompt,
@@ -10,6 +11,10 @@ import {
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
+  if (!isControlAuthorized(request)) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const username = new URL(request.url).searchParams.get('username')?.trim();
     if (!username) {

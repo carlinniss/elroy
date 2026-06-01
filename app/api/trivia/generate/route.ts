@@ -1,10 +1,15 @@
 import { listAvailableElroyTrivia, type TriviaCategory } from '@/lib/cannabis-trivia';
+import { isControlAuthorized } from '@/lib/control-auth';
 import { pickStaticTriviaQuestion } from '@/lib/pick-static-trivia';
 import { getRecentTriviaQuestions, mergeRecentTriviaQuestions } from '@/lib/trivia-recent';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
+  if (!isControlAuthorized(request)) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const body = await request.json() as {
       category?: TriviaCategory;

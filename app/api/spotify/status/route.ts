@@ -1,8 +1,13 @@
+import { isControlAuthorized } from '@/lib/control-auth';
 import { fetchSpotifyNowPlaying, getSpotifyConnectionStatus } from '@/lib/spotify';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: Request) {
+  if (!isControlAuthorized(request)) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const status = await getSpotifyConnectionStatus();
     if (!status.connected) {

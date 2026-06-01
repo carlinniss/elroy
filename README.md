@@ -36,7 +36,8 @@ Bong Bot is a high-performance, AI-driven Twitch overlay and chat assistant. Elr
     Create a `.env.local` file in the root directory and add your keys:
     ```text
     NEXT_PUBLIC_TWITCH_CHANNEL=your_channel_name
-    NEXT_PUBLIC_TWITCH_OAUTH_TOKEN=oauth:your_token_here
+    TWITCH_BOT_OAUTH_TOKEN=oauth:your_bot_token_here
+    ELROY_CONTROL_SECRET=long_random_overlay_secret
     GEMINI_API_KEY=your_google_ai_studio_key
     ELEVENLABS_API_KEY=your_elevenlabs_key
     ELEVENLABS_VOICE_ID=pNInz6obpgDQGcFmaJgB
@@ -67,7 +68,7 @@ Ensure your file structure is exact for Next.js routing:
     ```powershell
     npm run dev
     ```
-2.  Open `http://localhost:3000` in your browser.
+2.  Open `http://localhost:3000?controlKey=your-control-secret` in your browser.
 3.  Click **IGNITE BONG** to initialize the Twitch connection.
 4.  Mention Elroy in chat (e.g. `@elroy what's good?`) or trigger a sub/bits/follow to hear the celebration sounds.
 
@@ -93,6 +94,8 @@ Steer Elroy's spontaneous content during a stream without redeploying:
 1. Set `ELROY_CONTROL_SECRET` in Vercel (any long random string).
 2. Open **`/control/your-secret`** on your Elroy site (e.g. `https://elroy-zeta.vercel.app/control/dtl` if your secret is `dtl`) on your phone or a second monitor.
 3. The secret in the URL must match `ELROY_CONTROL_SECRET` in Vercel — the page auto-loads it.
+
+Use the same secret on the OBS overlay URL as `?controlKey=your-secret` so only the overlay can call Elroy's chat, voice, trivia, blackjack, Spotify, and session APIs.
 
 | Mode | What it does |
 | --- | --- |
