@@ -1,9 +1,14 @@
 import type { TriviaCategory } from '@/lib/cannabis-trivia';
+import { isControlAuthorized } from '@/lib/control-auth';
 import { incrementTriviaWin } from '@/lib/trivia-scores';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
+  if (!isControlAuthorized(request)) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const body = await request.json() as { username?: string; category?: TriviaCategory; points?: number };
     const username = body.username?.trim();

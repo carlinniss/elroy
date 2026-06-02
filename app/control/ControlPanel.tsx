@@ -100,8 +100,12 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
   }, [initialSecret, verifySecret]);
 
   const refresh = useCallback(async () => {
+    if (!savedSecret) return;
     try {
-      const res = await fetch(`/api/directives?t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/directives?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: authHeaders(savedSecret),
+      });
       const data = await res.json() as DirectiveSnapshot & { error?: string };
       if (!res.ok) {
         setStatus(data.error || 'Failed to load directives');
@@ -116,7 +120,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     } catch {
       setStatus('Could not reach Elroy');
     }
-  }, []);
+  }, [savedSecret]);
 
   useEffect(() => {
     if (authState !== 'authorized') return;
@@ -126,14 +130,18 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
   }, [authState, refresh]);
 
   const refreshSpotify = useCallback(async () => {
+    if (!savedSecret) return;
     try {
-      const res = await fetch(`/api/spotify/status?t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/spotify/status?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: authHeaders(savedSecret),
+      });
       if (!res.ok) return;
       setSpotifyStatus(await res.json());
     } catch {
       setSpotifyStatus(null);
     }
-  }, []);
+  }, [savedSecret]);
 
   useEffect(() => {
     if (authState !== 'authorized') return;

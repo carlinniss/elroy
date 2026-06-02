@@ -16,7 +16,7 @@ export function getBroadcasterLogin() {
 
 export function getTwitchCredentials() {
   const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL?.replace(/^#/, '').toLowerCase();
-  const token = process.env.TWITCH_OAUTH_TOKEN || process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN;
+  const token = process.env.TWITCH_OAUTH_TOKEN;
   const clientId = process.env.TWITCH_CLIENT_ID;
   if (!channel || !token) return null;
   return { channel, token, clientId: clientId ?? '' };
@@ -29,7 +29,7 @@ export type ValidatedUserCredentials = {
   userId: string;
   login: string;
   scopes: string[];
-  tokenSource: 'TWITCH_OAUTH_TOKEN' | 'NEXT_PUBLIC_TWITCH_OAUTH_TOKEN';
+  tokenSource: 'TWITCH_OAUTH_TOKEN';
 };
 
 export async function validateOAuthToken(token: string) {
@@ -75,12 +75,7 @@ export async function getBroadcasterTwitchCredentials() {
 
 /** User OAuth creds with Client ID taken from the token (fixes Client ID mismatch). */
 export async function getUserTwitchCredentials(): Promise<ValidatedUserCredentials | null> {
-  const broadcaster = await getBroadcasterTwitchCredentials();
-  if (broadcaster) return broadcaster;
-  return validateChannelToken(
-    process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN,
-    'NEXT_PUBLIC_TWITCH_OAUTH_TOKEN',
-  );
+  return getBroadcasterTwitchCredentials();
 }
 
 export function getAppCredentials() {

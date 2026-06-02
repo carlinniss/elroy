@@ -23,10 +23,15 @@ import type { UserMemoryEvent } from '@/lib/user-memory';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
 
-function rememberUser(username: string, displayName: string | undefined, event: UserMemoryEvent) {
+function rememberUser(
+  username: string,
+  displayName: string | undefined,
+  event: UserMemoryEvent,
+  headers?: HeadersInit,
+) {
   void fetch('/api/users/remember', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ username, displayName, event }),
   }).catch((error) => {
     console.warn('User memory write failed', error);
@@ -117,6 +122,35 @@ function BongContent() {
 
   const randomCannabisFact = () =>
     CANNABIS_FACTS[Math.floor(Math.random() * CANNABIS_FACTS.length)];
+
+  const overlayControlSecret =
+    searchParams.get('controlKey')?.trim() || searchParams.get('key')?.trim() || '';
+  const overlayHeaders = useCallback((headers?: HeadersInit) => {
+    const next = new Headers(headers);
+    if (overlayControlSecret) {
+      next.set('x-elroy-control-secret', overlayControlSecret);
+    }
+    return next;
+  }, [overlayControlSecret]);
+
+  const sayToChannel = useCallback(async (message: string) => {
+    const text = message.trim();
+    if (!text) return;
+
+    try {
+      const res = await fetch('/api/twitch/say', {
+        method: 'POST',
+        headers: overlayHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ message: text }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        console.warn('Twitch chat send failed', body.error || res.status);
+      }
+    } catch (error) {
+      console.warn('Twitch chat send failed', error);
+    }
+  }, [overlayHeaders]);
 
   const lastCelebrationRef = useRef(0);
   const knownFollowerIdsRef = useRef<Set<string>>(new Set());
@@ -277,14 +311,14 @@ function BongContent() {
 
   const pollElevenLabsQuota = useCallback(async () => {
     try {
-      const res = await fetch('/api/quota');
+      const res = await fetch('/api/quota', { headers: overlayHeaders() });
       const data = await res.json();
       if (!res.ok || data.error) throw new Error('Quota lookup failed');
       applyVoiceQuotaTier(Number(data.remaining) || 0);
     } catch (e) {
       console.warn('ElevenLabs quota poll failed', e);
     }
-  }, [applyVoiceQuotaTier]);
+  }, [applyVoiceQuotaTier, overlayHeaders]);
 
   const startQuotaPolling = useCallback(() => {
     if (quotaPollRef.current) return;
@@ -369,15 +403,12 @@ function BongContent() {
       silencedUntilRef.current = 0;
       silenceModeRef.current = 'none';
       stopMuteCountdown();
-      clientRef.current?.say(channel, 'Elroy is back — you can talk to me again.');
+      void sayToChannel('Elroy is back — you can talk to me again.');
       return;
     }
     const minutesLeft = Math.ceil(msLeft / 60_000);
-    clientRef.current?.say(
-      channel,
-      `${minutesLeft} minute${minutesLeft === 1 ? '' : 's'} until Elroy can talk again.`,
-    );
-  }, [stopMuteCountdown]);
+    void sayToChannel(`${minutesLeft} minute${minutesLeft === 1 ? '' : 's'} until Elroy can talk again.`);
+  }, [sayToChannel, stopMuteCountdown]);
 
   const enterFullMute = useCallback((redeemer?: string) => {
     stopMuteCountdown();
@@ -390,13 +421,13 @@ function BongContent() {
     const opener = redeemer
       ? `@${redeemer} shut Elroy up — no chat or voice for 10 minutes.`
       : 'Shut Elroy Up power-up activated — no chat or voice for 10 minutes.';
-    clientRef.current?.say(channel, opener);
+    void sayToChannel(opener);
     void playElroySfx('mute_zip');
     postMuteCountdown();
     muteCountdownRef.current = setInterval(() => {
       postMuteCountdown();
     }, 60_000);
-  }, [postMuteCountdown, stopMuteCountdown, playElroySfx]);
+  }, [postMuteCountdown, sayToChannel, stopMuteCountdown, playElroySfx]);
 
   const pollPowerupRedemptions = useCallback(async () => {
     const cachedId = shutElroyPowerUpIdRef.current;
@@ -524,20 +555,16 @@ function BongContent() {
 
     if (isActiveRef.current) {
       localStorage.setItem(AUTO_RESUME_STORAGE_KEY, '1');
-      const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-      const client = clientRef.current;
-      if (client) {
-        try {
-          await client.say(channel, '🔄 Elroy updating — back in a few seconds.');
-          await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-        } catch {
-          /* ignore */
-        }
+      try {
+        await sayToChannel('🔄 Elroy updating — back in a few seconds.');
+        await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+      } catch {
+        /* ignore */
       }
     }
 
     window.location.reload();
-  }, [canSafelyReloadForDeploy, persistStreamSession]);
+  }, [canSafelyReloadForDeploy, persistStreamSession, sayToChannel]);
 
   const pollDeployVersion = useCallback(async () => {
     try {
@@ -657,10 +684,18 @@ function BongContent() {
     }));
 
     try {
-      const chat = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: 'ping' }) });
-      const speech = await fetch('/api/speech', { method: 'POST', body: JSON.stringify({ text: 'ping' }) });
+      const chat = await fetch('/api/chat', {
+        method: 'POST',
+        headers: overlayHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ prompt: 'ping' }),
+      });
+      const speech = await fetch('/api/speech', {
+        method: 'POST',
+        headers: overlayHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ text: 'ping' }),
+      });
       const sound = await fetch('/api/sfx/bong_rip');
-      const quotaRes = await fetch('/api/quota');
+      const quotaRes = await fetch('/api/quota', { headers: overlayHeaders() });
       const qData = await quotaRes.json();
 
       if (quotaRes.ok && !qData.error) {
@@ -692,7 +727,7 @@ function BongContent() {
         }));
       }
     }
-  }, [applyVoiceQuotaTier]);
+  }, [applyVoiceQuotaTier, overlayHeaders]);
 
   useEffect(() => { void runDiagnostics(); }, [runDiagnostics]);
   useEffect(() => { dingEnabledRef.current = isDingOn; }, [isDingOn]);
@@ -704,7 +739,11 @@ function BongContent() {
 
   const speakNow = async (text: string) => {
     try {
-      const res = await fetch('/api/speech', { method: 'POST', body: JSON.stringify({ text }) });
+      const res = await fetch('/api/speech', {
+        method: 'POST',
+        headers: overlayHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ text }),
+      });
       const audioUrl = URL.createObjectURL(await res.blob());
       const audio = new Audio(audioUrl);
       audio.volume = volumeRef.current;
@@ -866,9 +905,9 @@ function BongContent() {
         };
       }
       if (opts.isQuota) {
-        const res = await fetch('/api/quota');
+        const res = await fetch('/api/quota', { headers: overlayHeaders() });
         const d = await res.json();
-        clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate}.`);
+        void sayToChannel(`@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate}.`);
         return;
       }
 
@@ -899,7 +938,11 @@ function BongContent() {
         : `- Chat only: ONE or TWO short sentences, about 120-220 characters total.
 - Hard cap 300 characters. No lists, no paragraphs, no wall of text.`;
       const fullPrompt = `${input}${directiveBlock}\n\nResponse requirements:\n${lengthRule}\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
-      const res = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: fullPrompt }) });
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: overlayHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ prompt: fullPrompt }),
+      });
       const data = await res.json() as { text?: string; error?: string };
       if (!res.ok || !data.text?.trim()) {
         console.warn('Chat brain failed', data.error || res.status);
@@ -908,7 +951,7 @@ function BongContent() {
             data.error || 'Brain stall — check Gemini billing in AI Studio.',
             MAX_TWITCH_CHAT_CHARS - (`@${user} `.length),
           );
-          clientRef.current?.say(process.env.NEXT_PUBLIC_TWITCH_CHANNEL!, `@${user} ${failLine}`);
+          void sayToChannel(`@${user} ${failLine}`);
         }
         return;
       }
@@ -916,7 +959,7 @@ function BongContent() {
         liveDirectivesRef.current = { ...liveDirectivesRef.current, next: [] };
         void fetch('/api/directives', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: overlayHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ action: 'consume-next' }),
         }).catch((error) => {
           console.warn('Directive consume failed', error);
@@ -924,10 +967,7 @@ function BongContent() {
       }
       const safeChatText = formatChatReplyBody(data.text, user);
       setLog(p => [{ text: safeChatText }, ...p].slice(0, 5));
-      clientRef.current?.say(
-        process.env.NEXT_PUBLIC_TWITCH_CHANNEL!,
-        user ? `@${user} ${safeChatText}` : safeChatText,
-      );
+      void sayToChannel(user ? `@${user} ${safeChatText}` : safeChatText);
 
       if (willUseVoice) {
         lastElroyVoiceRef.current = Date.now();
@@ -942,7 +982,7 @@ function BongContent() {
         await speak(clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS));
       }
     } catch (e) { console.error(e); }
-  }, [isTriviaRoundLive, playBongRip, speak]);
+  }, [isTriviaRoundLive, overlayHeaders, playBongRip, sayToChannel, speak]);
 
   const queueBongLogic = useCallback((
     input: string,
@@ -964,7 +1004,10 @@ function BongContent() {
 
   const pollLiveDirectives = useCallback(async () => {
     try {
-      const res = await fetch(`/api/directives?t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/directives?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: overlayHeaders(),
+      });
       if (!res.ok) return;
       const data = await res.json() as {
         sticky?: Array<{ id: string; text: string }>;
@@ -993,7 +1036,7 @@ function BongContent() {
 
         void fetch('/api/directives', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: overlayHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ action: 'ack-push', id: item.id }),
         }).catch((error) => {
           console.warn('Push ack failed', error);
@@ -1002,7 +1045,7 @@ function BongContent() {
     } catch (error) {
       console.warn('Directive poll failed', error);
     }
-  }, [queueBongLogic]);
+  }, [overlayHeaders, queueBongLogic]);
 
   useEffect(() => {
     void pollLiveDirectives();
@@ -1056,9 +1099,10 @@ function BongContent() {
   const celebrate = useCallback((kind: 'follow' | 'sub' | 'bits', username: string, extra = '', bitsAmount?: number) => {
     if (!streamLiveRef.current || isFullyMuted() || !canCelebrate(kind)) return;
     lastCelebrationRef.current = Date.now();
-    if (kind === 'follow') rememberUser(username, username, { type: 'follow' });
-    if (kind === 'sub') rememberUser(username, username, { type: 'sub' });
-    if (kind === 'bits') rememberUser(username, username, { type: 'bits', amount: bitsAmount });
+    const memoryHeaders = overlayHeaders({ 'Content-Type': 'application/json' });
+    if (kind === 'follow') rememberUser(username, username, { type: 'follow' }, memoryHeaders);
+    if (kind === 'sub') rememberUser(username, username, { type: 'sub' }, memoryHeaders);
+    if (kind === 'bits') rememberUser(username, username, { type: 'bits', amount: bitsAmount }, memoryHeaders);
     const sfxId = kind === 'sub' ? 'sub_fanfare' : kind === 'bits' ? 'bits_kaching' : 'follow_ding';
     void playElroySfx(sfxId);
     const prompt =
@@ -1069,7 +1113,7 @@ function BongContent() {
       forceVoice: true,
       voicePriority: kind === 'follow' ? 'normal' : 'celebration',
     });
-  }, [buildBitsPrompt, buildFollowPrompt, buildSubPrompt, playElroySfx, queueBongLogic]);
+  }, [buildBitsPrompt, buildFollowPrompt, buildSubPrompt, overlayHeaders, playElroySfx, queueBongLogic]);
 
   const pollNewFollowers = useCallback(async () => {
     try {
@@ -1163,12 +1207,8 @@ function BongContent() {
     if (Date.now() - active.askedAt < TRIVIA_ANSWER_WINDOW_MS) return;
 
     activeTriviaRef.current = null;
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-    clientRef.current?.say(
-      channel,
-      `⏰ Trivia time's up! Nobody got it — the answer was ${active.displayAnswer}.`,
-    );
-  }, []);
+    void sayToChannel(`⏰ Trivia time's up! Nobody got it — the answer was ${active.displayAnswer}.`);
+  }, [sayToChannel]);
 
   const announceTriviaCountdown = useCallback(() => {
     const active = activeTriviaRef.current;
@@ -1193,12 +1233,8 @@ function BongContent() {
         maxLength: 500 - countdownPrefix.length,
       },
     );
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-    clientRef.current?.say(
-      channel,
-      `⏳ ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} left! ${hint}`,
-    );
-  }, []);
+    void sayToChannel(`⏳ ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} left! ${hint}`);
+  }, [sayToChannel]);
 
   const askCannabisTrivia = useCallback(async () => {
     if (isFullyMuted() || !streamLiveRef.current) return;
@@ -1218,7 +1254,7 @@ function BongContent() {
       try {
         const generateRes = await fetch('/api/trivia/generate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: overlayHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             category,
             recentQuestions: categoryHistory.map((entry) => entry.question),
@@ -1239,11 +1275,7 @@ function BongContent() {
 
       if (!picked) {
         lastTriviaAtRef.current = Date.now() - TRIVIA_INTERVAL_MS + 2 * 60 * 1000;
-        const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-        clientRef.current?.say(
-          channel,
-          '🌿 Trivia round skipped — every curated question in the deck was asked recently. Elroy will reshuffle soon.',
-        );
+        void sayToChannel('🌿 Trivia round skipped — every curated question in the deck was asked recently. Elroy will reshuffle soon.');
         return;
       }
 
@@ -1265,16 +1297,12 @@ function BongContent() {
         lastCountdownMinute: 0,
       };
 
-      const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
       const roundPoints = Math.max(1, Number(picked.points) || 1);
-      clientRef.current?.say(
-        channel,
-        `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer gets ${roundPoints} point${roundPoints === 1 ? '' : 's'}!`,
-      );
+      void sayToChannel(`${triviaIntroFor(picked.category)} ${picked.question} — first correct answer gets ${roundPoints} point${roundPoints === 1 ? '' : 's'}!`);
     } finally {
       triviaAskInFlightRef.current = false;
     }
-  }, [persistStreamSession, processBongLogic]);
+  }, [overlayHeaders, persistStreamSession, sayToChannel]);
 
   const runTriviaCycle = useCallback(() => {
     if (!streamLiveRef.current || isFullyMuted()) return;
@@ -1299,7 +1327,10 @@ function BongContent() {
     if (!streamLiveRef.current || isFullyMuted()) return;
 
     try {
-      const res = await fetch(`/api/spotify/now-playing?t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/spotify/now-playing?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: overlayHeaders(),
+      });
       if (!res.ok) return;
       const data = await res.json() as {
         connected?: boolean;
@@ -1312,14 +1343,16 @@ function BongContent() {
     } catch (error) {
       console.warn('Spotify poll failed', error);
     }
-  }, [commentOnSpotifyTrack]);
+  }, [commentOnSpotifyTrack, overlayHeaders]);
 
   const requestSpotifyComment = useCallback(async (username: string) => {
     if (isFullyMuted()) return;
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
 
     try {
-      const res = await fetch(`/api/spotify/now-playing?t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/spotify/now-playing?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: overlayHeaders(),
+      });
       const data = await res.json() as {
         connected?: boolean;
         playing?: boolean;
@@ -1328,19 +1361,19 @@ function BongContent() {
       };
 
       if (!data.connected) {
-        clientRef.current?.say(channel, `@${username} Spotify ain't linked — broadcaster connects it from /control.`);
+        void sayToChannel(`@${username} Spotify ain't linked — broadcaster connects it from /control.`);
         return;
       }
       if (!data.track || !data.playing) {
-        clientRef.current?.say(channel, `@${username} Nothing playing on Spotify right now.`);
+        void sayToChannel(`@${username} Nothing playing on Spotify right now.`);
         return;
       }
 
       commentOnSpotifyTrack(data.track, username);
     } catch {
-      clientRef.current?.say(channel, `@${username} Couldn't read Spotify — try again in a sec.`);
+      void sayToChannel(`@${username} Couldn't read Spotify — try again in a sec.`);
     }
-  }, [commentOnSpotifyTrack]);
+  }, [commentOnSpotifyTrack, overlayHeaders, sayToChannel]);
 
   const awardTriviaWinner = useCallback(async (username: string) => {
     const active = activeTriviaRef.current;
@@ -1354,7 +1387,7 @@ function BongContent() {
     try {
       const winRes = await fetch('/api/trivia/win', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: overlayHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ username, category: active.category, points: awardedPoints }),
       });
       if (winRes.ok) {
@@ -1366,11 +1399,7 @@ function BongContent() {
     }
 
     void playElroySfx('sub_fanfare');
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-    clientRef.current?.say(
-      channel,
-      `🎉 @${username} got it FIRST! Correct — ${active.displayAnswer}. (+${awardedPoints} point${awardedPoints === 1 ? '' : 's'} • ${totalWins} total)`,
-    );
+    void sayToChannel(`🎉 @${username} got it FIRST! Correct — ${active.displayAnswer}. (+${awardedPoints} point${awardedPoints === 1 ? '' : 's'} • ${totalWins} total)`);
     void queueBongLogic(
       `${username} just won trivia with the first correct answer. Hype them up in one short OG sentence — make them feel legendary.`,
       username,
@@ -1383,8 +1412,8 @@ function BongContent() {
       type: 'trivia_win',
       category: active.category,
       totalWins,
-    });
-  }, [playElroySfx, queueBongLogic]);
+    }, overlayHeaders({ 'Content-Type': 'application/json' }));
+  }, [overlayHeaders, playElroySfx, queueBongLogic, sayToChannel]);
 
   const tryHandleTriviaAnswer = useCallback((username: string, message: string) => {
     if (isFullyMuted()) return false;
@@ -1407,7 +1436,7 @@ function BongContent() {
     const cheatKind = detectElroyTriviaCheat(message, active.question, active.answers);
     if (!cheatKind) return false;
 
-    rememberUser(username, displayName, { type: 'mention', message });
+    rememberUser(username, displayName, { type: 'mention', message }, overlayHeaders({ 'Content-Type': 'application/json' }));
 
     void playElroySfx('roast_sting');
     void queueBongLogic(
@@ -1416,7 +1445,7 @@ function BongContent() {
       { chatOnly: true },
     );
     return true;
-  }, [buildTriviaCheatRoastPrompt, playElroySfx, queueBongLogic]);
+  }, [buildTriviaCheatRoastPrompt, overlayHeaders, playElroySfx, queueBongLogic]);
 
   const runStreamCheckin = useCallback(async () => {
     if (isSilenced() || !streamLiveRef.current) return;
@@ -1427,11 +1456,10 @@ function BongContent() {
   }, [buildStreamCheckinPrompt, fetchStreamStatus, queueBongLogic]);
 
   const sayBlackjackLines = useCallback((lines: string[]) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     for (const line of lines) {
-      if (line?.trim()) clientRef.current?.say(channel, line);
+      if (line?.trim()) void sayToChannel(line);
     }
-  }, []);
+  }, [sayToChannel]);
 
   const blackjackPendingDareRef = useRef<Set<string>>(new Set());
 
@@ -1447,7 +1475,7 @@ function BongContent() {
     try {
       const res = await fetch('/api/blackjack/action', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: overlayHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
       });
       const data = await res.json();
@@ -1459,7 +1487,7 @@ function BongContent() {
       console.warn('Blackjack action failed', error);
       return null;
     }
-  }, [sayBlackjackLines]);
+  }, [overlayHeaders, sayBlackjackLines]);
 
   const tryCompleteDareRitual = useCallback((
     username: string,
@@ -1500,8 +1528,7 @@ function BongContent() {
 
     const activeTrivia = activeTriviaRef.current;
     if (activeTrivia && !activeTrivia.answered && (cmd === 'bj' || cmd === 'blackjack')) {
-      const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-      clientRef.current?.say(channel, `@${username} trivia's live — wait for the next round to open blackjack.`);
+      void sayToChannel(`@${username} trivia's live — wait for the next round to open blackjack.`);
       return;
     }
 
@@ -1561,7 +1588,7 @@ function BongContent() {
     if (cmd === 'bjstop' && isMod) {
       void postBlackjackAction({ action: 'stop', username, displayName, isMod: true });
     }
-  }, [postBlackjackAction]);
+  }, [postBlackjackAction, sayToChannel]);
 
   const startStreamMonitoring = useCallback(() => {
     if (!streamPollRef.current) {
@@ -1622,7 +1649,7 @@ function BongContent() {
 
   const handleElroyMention = useCallback((username: string, displayName: string, message: string) => {
     if (isFullyMuted()) return;
-    rememberUser(username, displayName, { type: 'mention', message });
+    rememberUser(username, displayName, { type: 'mention', message }, overlayHeaders({ 'Content-Type': 'application/json' }));
 
     const lower = message.toLowerCase();
     const looksLikeSongQuestion = /\b(now\s+playing|what('?s)?\s+playing|playing\s+now|song\s+playing|what\s+song|what\s+track|current\s+song|current\s+track|what\s+music|what\s+music\s+is)\b/.test(lower);
@@ -1637,11 +1664,11 @@ function BongContent() {
       return;
     }
     void queueBongLogic(buildMentionPrompt(username, message), username);
-  }, [buildComebackPrompt, buildMentionPrompt, queueBongLogic, requestSpotifyComment]);
+  }, [buildComebackPrompt, buildMentionPrompt, overlayHeaders, queueBongLogic, requestSpotifyComment]);
 
   const handleLRoyMisname = useCallback((username: string, displayName: string, message: string) => {
     if (isFullyMuted()) return;
-    rememberUser(username, displayName, { type: 'mention', message });
+    rememberUser(username, displayName, { type: 'mention', message }, overlayHeaders({ 'Content-Type': 'application/json' }));
     if (isSilenced()) {
       if (!streamLiveRef.current || Math.random() >= COMEBACK_CHANCE) return;
       void queueBongLogic(buildLRoyRoastPrompt(username, message), username, { chatOnly: true });
@@ -1649,61 +1676,58 @@ function BongContent() {
     }
     void playElroySfx('roast_sting');
     void queueBongLogic(buildLRoyRoastPrompt(username, message), username);
-  }, [buildLRoyRoastPrompt, playElroySfx, queueBongLogic]);
+  }, [buildLRoyRoastPrompt, overlayHeaders, playElroySfx, queueBongLogic]);
 
   const toggleDing = useCallback((user?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const nextState = !dingEnabledRef.current;
     dingEnabledRef.current = nextState;
     setIsDingOn(nextState);
-    clientRef.current?.say(channel, user ? `@${user} ding ${nextState ? 'on' : 'off'}.` : `ding ${nextState ? 'on' : 'off'}.`);
-  }, []);
+    void sayToChannel(user ? `@${user} ding ${nextState ? 'on' : 'off'}.` : `ding ${nextState ? 'on' : 'off'}.`);
+  }, [sayToChannel]);
 
   const toggleVoice = useCallback((user?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const nextState = !voiceEnabledRef.current;
     voiceEnabledRef.current = nextState;
     setIsVoiceOn(nextState);
-    clientRef.current?.say(channel, user ? `@${user} voice ${nextState ? 'on' : 'off'}.` : `voice ${nextState ? 'on' : 'off'}.`);
-  }, []);
+    void sayToChannel(user ? `@${user} voice ${nextState ? 'on' : 'off'}.` : `voice ${nextState ? 'on' : 'off'}.`);
+  }, [sayToChannel]);
 
   const setVolume = useCallback((level: number, user?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const clamped = Math.min(1, Math.max(0, level));
     volumeRef.current = clamped;
     const pct = Math.round(clamped * 100);
-    clientRef.current?.say(channel, user ? `@${user} volume ${pct}%.` : `volume ${pct}%.`);
-  }, []);
+    void sayToChannel(user ? `@${user} volume ${pct}%.` : `volume ${pct}%.`);
+  }, [sayToChannel]);
 
   const announceAboutMe = useCallback(async (username: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     try {
-      const res = await fetch(`/api/users/aboutme?username=${encodeURIComponent(username)}`);
+      const res = await fetch(`/api/users/aboutme?username=${encodeURIComponent(username)}`, {
+        headers: overlayHeaders(),
+      });
       if (!res.ok) throw new Error('aboutme lookup failed');
       const data = await res.json();
       const text = typeof data.text === 'string' && data.text.trim()
         ? data.text.trim()
         : `Still getting to know you — mention me or win trivia so I can build your file.`;
-      clientRef.current?.say(channel, `@${username} ${text}`);
+      void sayToChannel(`@${username} ${text}`);
     } catch (error) {
       console.warn('!aboutme failed', error);
-      clientRef.current?.say(channel, `@${username} I cannot pull your file right now — try again in a bit.`);
+      void sayToChannel(`@${username} I cannot pull your file right now — try again in a bit.`);
     }
-  }, []);
+  }, [overlayHeaders, sayToChannel]);
 
   const announceTriviaLeaderboard = useCallback(async (user?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     try {
       const res = await fetch('/api/trivia/leaders');
       if (!res.ok) throw new Error('leader lookup failed');
       const leaders = await res.json();
       const message = formatTriviaLeaderboardChatMessage(leaders);
-      clientRef.current?.say(channel, user ? `@${user} ${message}` : message);
+      void sayToChannel(user ? `@${user} ${message}` : message);
     } catch (error) {
       console.warn('Trivia leaderboard command failed', error);
-      clientRef.current?.say(channel, user ? `@${user} leaderboard unavailable right now.` : 'Leaderboard unavailable right now.');
+      void sayToChannel(user ? `@${user} leaderboard unavailable right now.` : 'Leaderboard unavailable right now.');
     }
-  }, []);
+  }, [sayToChannel]);
 
   const stopBotSessionHeartbeat = useCallback(() => {
     if (botSessionHeartbeatRef.current) {
@@ -1719,14 +1743,14 @@ function BongContent() {
     try {
       await fetch('/api/bot/session', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: overlayHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ action: 'release', instanceId }),
         keepalive: true,
       });
     } catch (error) {
       console.warn('Bot session release failed', error);
     }
-  }, [stopBotSessionHeartbeat]);
+  }, [overlayHeaders, stopBotSessionHeartbeat]);
 
   const claimBotSessionLock = useCallback(async () => {
     const instanceId = getBotInstanceId();
@@ -1734,7 +1758,7 @@ function BongContent() {
     try {
       const res = await fetch('/api/bot/session', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: overlayHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ action: 'claim', instanceId }),
       });
       if (res.status === 409) {
@@ -1752,15 +1776,14 @@ function BongContent() {
       setBotBlockReason('Could not reach Elroy session service.');
       return false;
     }
-  }, []);
+  }, [overlayHeaders]);
 
   const disconnectBotClient = useCallback(async (announceUser?: string) => {
-    const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const client = clientRef.current;
     if (client) {
       try {
         if (announceUser) {
-          await client.say(channel, `@${announceUser} Elroy is off.`);
+          await sayToChannel(`@${announceUser} Elroy is off.`);
         }
         await client.disconnect();
       } catch (e) {
@@ -1775,7 +1798,7 @@ function BongContent() {
     stopMuteCountdown();
     isActiveRef.current = false;
     setIsActive(false);
-  }, [stopFollowerPolling, stopPowerupRedemptionPolling, stopQuotaPolling, stopStreamMonitoring, stopMuteCountdown]);
+  }, [sayToChannel, stopFollowerPolling, stopPowerupRedemptionPolling, stopQuotaPolling, stopStreamMonitoring, stopMuteCountdown]);
 
   const stopBot = useCallback(async (announceUser?: string) => {
     try {
@@ -1802,7 +1825,7 @@ function BongContent() {
         try {
           const res = await fetch('/api/bot/session', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: overlayHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ action: 'heartbeat', instanceId }),
           });
           if (res.status === 409) {
@@ -1813,7 +1836,7 @@ function BongContent() {
         }
       })();
     }, BOT_SESSION_HEARTBEAT_MS);
-  }, [stopBotForSessionLoss, stopBotSessionHeartbeat]);
+  }, [overlayHeaders, stopBotForSessionLoss, stopBotSessionHeartbeat]);
 
   const startBot = async () => {
     if (isActive) return;
@@ -1822,7 +1845,7 @@ function BongContent() {
     const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
     chatMessageCountRef.current = 0;
-    const client = new tmi.Client({ identity: { username: chan, password: process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN! }, channels: [chan] });
+    const client = new tmi.Client({ channels: [chan] });
     client.on('message', (_c: string, t: tmi.ChatUserstate, m: string, s: boolean) => {
       if (s) return;
       const username = t.username || 'viewer';
@@ -1956,11 +1979,10 @@ function BongContent() {
       if (m.toLowerCase().startsWith('!volume')) {
         const isModerator = t.mod === true;
         if (!isBroadcaster && !isModerator) return;
-        const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
         const arg = m.slice('!volume'.length).trim();
         if (!arg) {
           const pct = Math.round(volumeRef.current * 100);
-          clientRef.current?.say(channel, `@${t.username} volume ${pct}%.`);
+          void sayToChannel(`@${t.username} volume ${pct}%.`);
           return;
         }
         const deltaMatch = arg.match(/^([+-])(\d+)$/);
@@ -1970,7 +1992,7 @@ function BongContent() {
         }
         const parsed = Number(arg.replace(/%$/, ''));
         if (!Number.isFinite(parsed)) {
-          clientRef.current?.say(channel, `@${t.username} use !volume, !volume 50, or !volume +10 / -10.`);
+          void sayToChannel(`@${t.username} use !volume, !volume 50, or !volume +10 / -10.`);
           return;
         }
         return setVolume(parsed / 100, t.username);
@@ -2032,7 +2054,7 @@ function BongContent() {
         /* ignore */
       }
       startBotSessionHeartbeat();
-      client.say(chan, `Elroy initiated. ${randomCannabisFact()}`);
+      void sayToChannel(`Elroy initiated. ${randomCannabisFact()}`);
       restoreStreamSession();
       const foundPowerUp = await resolveShutElroyPowerUpId();
       if (foundPowerUp) {
@@ -2059,14 +2081,16 @@ function BongContent() {
     const onLeave = () => {
       const instanceId = botInstanceIdRef.current || getBotInstanceId();
       if (!instanceId || !isActiveRef.current) return;
-      const payload = JSON.stringify({ action: 'release', instanceId });
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon('/api/bot/session', new Blob([payload], { type: 'application/json' }));
-      }
+      void fetch('/api/bot/session', {
+        method: 'POST',
+        headers: overlayHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ action: 'release', instanceId }),
+        keepalive: true,
+      }).catch(() => {});
     };
     window.addEventListener('pagehide', onLeave);
     return () => window.removeEventListener('pagehide', onLeave);
-  }, []);
+  }, [overlayHeaders]);
 
   useEffect(() => {
     const shouldAutoStart =
