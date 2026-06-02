@@ -67,7 +67,7 @@ Ensure your file structure is exact for Next.js routing:
     ```powershell
     npm run dev
     ```
-2.  Open `http://localhost:3000` in your browser.
+2.  Open `http://localhost:3000?controlKey=your-secret` in your browser (the secret must match `ELROY_CONTROL_SECRET`).
 3.  Click **IGNITE BONG** to initialize the Twitch connection.
 4.  Mention Elroy in chat (e.g. `@elroy what's good?`) or trigger a sub/bits/follow to hear the celebration sounds.
 
@@ -100,7 +100,7 @@ Steer Elroy's spontaneous content during a stream without redeploying:
 | **Next response** | Injected once on Elroy's very next AI line, then cleared. |
 | **Push now** | Elroy responds immediately (within ~12s). Optional chat-only or force-voice. |
 
-The overlay polls Redis every ~12 seconds. Keep the OBS browser source running so push/next directives take effect.
+The overlay polls Redis every ~12 seconds. Keep the OBS browser source running with `?controlKey=your-secret` (or `?key=your-secret`) so push/next directives and the singleton bot session stay authenticated.
 
 ## 🎵 Spotify (now playing)
 

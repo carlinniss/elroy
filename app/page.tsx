@@ -55,6 +55,7 @@ function BongContent() {
   const botInstanceIdRef = useRef('');
   const botSessionHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isActiveRef = useRef(false);
+  const startInFlightRef = useRef(false);
   const dingEnabledRef = useRef(true);
   const voiceEnabledRef = useRef(true);
   const volumeRef = useRef(DEFAULT_VOLUME);
@@ -94,6 +95,7 @@ function BongContent() {
   const SESSION_STORAGE_KEY = 'elroy-stream-session';
   const AUTO_RESUME_STORAGE_KEY = 'elroy-auto-resume';
   const POST_UPDATE_DIAGNOSTICS_KEY = 'elroy-post-update-diagnostics';
+  const OVERLAY_CONTROL_SECRET_STORAGE_KEY = 'elroy-overlay-control-secret';
   const VERSION_POLL_MS = 90_000;
   const DIRECTIVE_POLL_MS = 12_000;
   const SPOTIFY_POLL_MS = 5_000;
@@ -117,6 +119,27 @@ function BongContent() {
 
   const randomCannabisFact = () =>
     CANNABIS_FACTS[Math.floor(Math.random() * CANNABIS_FACTS.length)];
+
+  const controlRequestHeaders = useCallback((includeJson = true) => {
+    const headers: Record<string, string> = includeJson ? { 'Content-Type': 'application/json' } : {};
+    const fromUrl =
+      searchParams.get('controlKey')?.trim()
+      || searchParams.get('key')?.trim()
+      || '';
+    const fromStorage = typeof window !== 'undefined'
+      ? sessionStorage.getItem(OVERLAY_CONTROL_SECRET_STORAGE_KEY)?.trim() || ''
+      : '';
+    const secret = fromUrl || fromStorage;
+
+    if (fromUrl && typeof window !== 'undefined') {
+      sessionStorage.setItem(OVERLAY_CONTROL_SECRET_STORAGE_KEY, fromUrl);
+    }
+    if (secret) {
+      headers.Authorization = `Bearer ${secret}`;
+    }
+
+    return headers;
+  }, [searchParams]);
 
   const lastCelebrationRef = useRef(0);
   const knownFollowerIdsRef = useRef<Set<string>>(new Set());
@@ -916,7 +939,7 @@ function BongContent() {
         liveDirectivesRef.current = { ...liveDirectivesRef.current, next: [] };
         void fetch('/api/directives', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: controlRequestHeaders(),
           body: JSON.stringify({ action: 'consume-next' }),
         }).catch((error) => {
           console.warn('Directive consume failed', error);
@@ -942,7 +965,7 @@ function BongContent() {
         await speak(clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS));
       }
     } catch (e) { console.error(e); }
-  }, [isTriviaRoundLive, playBongRip, speak]);
+  }, [controlRequestHeaders, isTriviaRoundLive, playBongRip, speak]);
 
   const queueBongLogic = useCallback((
     input: string,
@@ -964,7 +987,10 @@ function BongContent() {
 
   const pollLiveDirectives = useCallback(async () => {
     try {
-      const res = await fetch(`/api/directives?t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/directives?t=${Date.now()}`, {
+        headers: controlRequestHeaders(false),
+        cache: 'no-store',
+      });
       if (!res.ok) return;
       const data = await res.json() as {
         sticky?: Array<{ id: string; text: string }>;
@@ -993,7 +1019,7 @@ function BongContent() {
 
         void fetch('/api/directives', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: controlRequestHeaders(),
           body: JSON.stringify({ action: 'ack-push', id: item.id }),
         }).catch((error) => {
           console.warn('Push ack failed', error);
@@ -1002,7 +1028,7 @@ function BongContent() {
     } catch (error) {
       console.warn('Directive poll failed', error);
     }
-  }, [queueBongLogic]);
+  }, [controlRequestHeaders, queueBongLogic]);
 
   useEffect(() => {
     void pollLiveDirectives();
@@ -1719,14 +1745,14 @@ function BongContent() {
     try {
       await fetch('/api/bot/session', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: controlRequestHeaders(),
         body: JSON.stringify({ action: 'release', instanceId }),
         keepalive: true,
       });
     } catch (error) {
       console.warn('Bot session release failed', error);
     }
-  }, [stopBotSessionHeartbeat]);
+  }, [controlRequestHeaders, stopBotSessionHeartbeat]);
 
   const claimBotSessionLock = useCallback(async () => {
     const instanceId = getBotInstanceId();
@@ -1734,11 +1760,15 @@ function BongContent() {
     try {
       const res = await fetch('/api/bot/session', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: controlRequestHeaders(),
         body: JSON.stringify({ action: 'claim', instanceId }),
       });
       if (res.status === 409) {
         setBotBlockReason('Another Elroy is already running. Close the other browser tab or OBS browser source.');
+        return false;
+      }
+      if (res.status === 401) {
+        setBotBlockReason('Missing or invalid Elroy control key in the overlay URL.');
         return false;
       }
       if (!res.ok) {
@@ -1752,7 +1782,7 @@ function BongContent() {
       setBotBlockReason('Could not reach Elroy session service.');
       return false;
     }
-  }, []);
+  }, [controlRequestHeaders]);
 
   const disconnectBotClient = useCallback(async (announceUser?: string) => {
     const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
@@ -1802,7 +1832,7 @@ function BongContent() {
         try {
           const res = await fetch('/api/bot/session', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: controlRequestHeaders(),
             body: JSON.stringify({ action: 'heartbeat', instanceId }),
           });
           if (res.status === 409) {
@@ -1813,17 +1843,20 @@ function BongContent() {
         }
       })();
     }, BOT_SESSION_HEARTBEAT_MS);
-  }, [stopBotForSessionLoss, stopBotSessionHeartbeat]);
+  }, [controlRequestHeaders, stopBotForSessionLoss, stopBotSessionHeartbeat]);
 
   const startBot = async () => {
-    if (isActive) return;
-    if (!(await claimBotSessionLock())) return;
+    if (isActiveRef.current || startInFlightRef.current) return;
+    startInFlightRef.current = true;
 
-    const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
-    const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
-    chatMessageCountRef.current = 0;
-    const client = new tmi.Client({ identity: { username: chan, password: process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN! }, channels: [chan] });
-    client.on('message', (_c: string, t: tmi.ChatUserstate, m: string, s: boolean) => {
+    try {
+      if (!(await claimBotSessionLock())) return;
+
+      const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
+      const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
+      chatMessageCountRef.current = 0;
+      const client = new tmi.Client({ identity: { username: chan, password: process.env.NEXT_PUBLIC_TWITCH_OAUTH_TOKEN! }, channels: [chan] });
+      client.on('message', (_c: string, t: tmi.ChatUserstate, m: string, s: boolean) => {
       if (s) return;
       const username = t.username || 'viewer';
       const displayName = t['display-name'] || username;
@@ -2053,20 +2086,34 @@ function BongContent() {
       await releaseBotSessionLock();
       setBotBlockReason('Elroy failed to connect to Twitch. Try again.');
     }
+    } finally {
+      startInFlightRef.current = false;
+    }
   };
 
   useEffect(() => {
     const onLeave = () => {
       const instanceId = botInstanceIdRef.current || getBotInstanceId();
       if (!instanceId || !isActiveRef.current) return;
-      const payload = JSON.stringify({ action: 'release', instanceId });
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon('/api/bot/session', new Blob([payload], { type: 'application/json' }));
+      if (
+        typeof window !== 'undefined'
+        && sessionStorage.getItem(POST_UPDATE_DIAGNOSTICS_KEY) === '1'
+      ) {
+        return;
       }
+      const payload = JSON.stringify({ action: 'release', instanceId });
+      void fetch('/api/bot/session', {
+        method: 'POST',
+        headers: controlRequestHeaders(),
+        body: payload,
+        keepalive: true,
+      }).catch((error) => {
+        console.warn('Bot session release failed', error);
+      });
     };
     window.addEventListener('pagehide', onLeave);
     return () => window.removeEventListener('pagehide', onLeave);
-  }, []);
+  }, [controlRequestHeaders]);
 
   useEffect(() => {
     const shouldAutoStart =
