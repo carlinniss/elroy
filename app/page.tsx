@@ -642,7 +642,7 @@ function BongContent() {
       return "No one is chatting yet. Drop a longer, welcoming OG check-in and invite chat to ask a question.";
     }
     const lines = recent.map((entry) => `- ${entry.user}: ${entry.text}`).join("\n");
-    return `Use the recent Twitch chat for a quick topical comment (1-2 short sentences max). Reference the vibe from:\n${lines}\nDo not force a rhyme.`;
+    return `Use the recent Twitch chat for a topical comment (2-3 sentences). Reference the vibe from:\n${lines}\nDo not force a rhyme.`;
   }, []);
 
   const runDiagnostics = useCallback(async (opts?: { afterDeploy?: boolean }) => {
@@ -743,7 +743,7 @@ function BongContent() {
     const context = recent.length
       ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
       : '(no other recent lines)';
-    return `Someone brought you up in Twitch chat. ${user} said: "${message}"\n\nRecent chat:\n${context}\n\nReply in OG character — keep it short (1-2 sentences).`;
+    return `Someone brought you up in Twitch chat. ${user} said: "${message}"\n\nRecent chat:\n${context}\n\nReply in OG character — 2-3 sentences, enough personality to land the bit.`;
   }, []);
 
   const buildLRoyRoastPrompt = useCallback((user: string, message: string) => {
@@ -755,10 +755,10 @@ function BongContent() {
   }, []);
 
   const buildFollowPrompt = useCallback((user: string) =>
-    `${user} just followed the Twitch channel. One short welcome line — hype but brief.`, []);
+    `${user} just followed the Twitch channel. One or two welcome sentences — hype but real.`, []);
 
   const buildJoinGreetingPrompt = useCallback((user: string) =>
-    `${user} just entered the Twitch chat while the stream is live. One short welcome by username.`, []);
+    `${user} just entered the Twitch chat while the stream is live. One or two welcome sentences by username.`, []);
 
   const buildTriviaCheatRoastPrompt = useCallback((
     user: string,
@@ -775,10 +775,10 @@ function BongContent() {
   }, []);
 
   const buildSubPrompt = useCallback((user: string, details: string) =>
-    `${user} just subscribed to the channel! ${details} One short celebration line.`, []);
+    `${user} just subscribed to the channel! ${details} One or two celebration sentences.`, []);
 
   const buildBitsPrompt = useCallback((user: string, details: string) =>
-    `${user} just cheered ${details} in chat! One short thank-you line.`, []);
+    `${user} just cheered ${details} in chat! One or two thank-you sentences.`, []);
 
   const buildStreamCheckinPrompt = useCallback((
     viewerCount: number | null,
@@ -804,7 +804,7 @@ function BongContent() {
       viewerLine = 'Viewer count could not be verified. Do not say the stream or chat is offline — keep the energy up anyway.';
     }
 
-    return `10-minute stream check-in.\n${viewerLine}\n\nRecent chat (last ~20 minutes):\n${lines}\n\nWrite a brief chat check-in (1-2 short sentences):\n- Mention viewer count only if provided above.\n- Optionally shout out ONE chatter by username from the list.`;
+    return `10-minute stream check-in.\n${viewerLine}\n\nRecent chat (last ~20 minutes):\n${lines}\n\nWrite a chat check-in (2-3 sentences):\n- Mention viewer count only if provided above.\n- Optionally shout out ONE chatter by username from the list.`;
   }, []);
 
   const buildStreamGreetingPrompt = useCallback((viewerCount: number | null, cannabisFact: string) => {
@@ -826,7 +826,7 @@ function BongContent() {
       ? messages.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
       : '(very little chat captured this stream)';
     const durationLine = durationMin ? `Stream ran about ${durationMin} minutes.` : '';
-    return `The stream just ended. Write a short recap for Twitch chat (chat-only, no voice).\n${durationLine} ${messages.length} messages logged from ~${uniqueChatters} chatters.\n\nChat sample:\n${lines}\n\nOne or two sentences: one highlight and thanks. Stay under 250 characters. Only reference usernames/topics above.`;
+    return `The stream just ended. Write a recap for Twitch chat (chat-only, no voice).\n${durationLine} ${messages.length} messages logged from ~${uniqueChatters} chatters.\n\nChat sample:\n${lines}\n\nTwo or three sentences: a highlight, a shout-out if someone stood out, and thanks. Stay under 450 characters. Only reference usernames/topics above.`;
   }, [sampleSessionChat]);
 
   const buildComebackPrompt = useCallback((user: string, message: string) => {
@@ -895,9 +895,9 @@ function BongContent() {
         ? `- Personalize the response directly for ${user} by name (say their username naturally in the message).`
         : `- Keep it general for the whole chat, not aimed at one person.`;
       const lengthRule = willUseVoice
-        ? '- Voice: ONE short sentence, about 60-120 characters total.'
-        : `- Chat only: ONE or TWO short sentences, about 120-220 characters total.
-- Hard cap 300 characters. No lists, no paragraphs, no wall of text.`;
+        ? `- Voice: 2-3 sentences, about 180-${MAX_VOICE_REPLY_CHARS} characters total. Say the full thought — do not stop mid-sentence.`
+        : `- Chat only: 2-4 sentences, about 200-${MAX_TWITCH_CHAT_CHARS} characters total.
+- Hard cap ${MAX_TWITCH_CHAT_CHARS} characters. No bullet lists or paragraphs — keep it flowing chat prose.`;
       const fullPrompt = `${input}${directiveBlock}\n\nResponse requirements:\n${lengthRule}\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
       const res = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ prompt: fullPrompt }) });
       const data = await res.json() as { text?: string; error?: string };
@@ -1372,7 +1372,7 @@ function BongContent() {
       `🎉 @${username} got it FIRST! Correct — ${active.displayAnswer}. (+${awardedPoints} point${awardedPoints === 1 ? '' : 's'} • ${totalWins} total)`,
     );
     void queueBongLogic(
-      `${username} just won trivia with the first correct answer. Hype them up in one short OG sentence — make them feel legendary.`,
+      `${username} just won trivia with the first correct answer. Hype them up in 1-2 OG sentences — make them feel legendary.`,
       username,
       {
         chatOnly: true,

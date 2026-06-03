@@ -1,5 +1,5 @@
-export const MAX_TWITCH_CHAT_CHARS = 300;
-export const MAX_VOICE_REPLY_CHARS = 150;
+export const MAX_TWITCH_CHAT_CHARS = 480;
+export const MAX_VOICE_REPLY_CHARS = 480;
 
 export function clampReplyLength(text: string, maxChars: number): string {
   const cleaned = text.replace(/\s+/g, ' ').trim();
