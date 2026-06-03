@@ -1,4 +1,5 @@
 import { listAvailableElroyTrivia, type TriviaCategory } from '@/lib/cannabis-trivia';
+import { isControlAuthorized } from '@/lib/control-auth';
 import { pickStaticTriviaQuestion } from '@/lib/pick-static-trivia';
 import { generateTriviaQuestion } from '@/lib/trivia-generator';
 import { passesTriviaDifficultyGate } from '@/lib/trivia-quality';
@@ -81,7 +82,7 @@ export async function POST(request: Request) {
     const serverRecent = await getRecentTriviaQuestions(category);
     let recentQuestions = mergeRecentTriviaQuestions(clientRecent, serverRecent);
 
-    if (triviaGeminiEnabled()) {
+    if (triviaGeminiEnabled() && isControlAuthorized(request)) {
       for (let attempt = 0; attempt < GENERATION_ATTEMPTS; attempt += 1) {
         const generated = await generateTriviaQuestion(category, recentQuestions, attempt);
         if (!generated) continue;
