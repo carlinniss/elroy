@@ -40,6 +40,11 @@ function BongContent() {
   const [isDingOn, setIsDingOn] = useState(true);
   const [isVoiceOn, setIsVoiceOn] = useState(true);
   const searchParams = useSearchParams();
+  const controlSecret =
+    searchParams.get('controlKey')?.trim()
+    || searchParams.get('key')?.trim()
+    || searchParams.get('secret')?.trim()
+    || '';
   const [diagnostics, setDiagnostics] = useState({
     chat: '...',
     speech: '...',
@@ -167,8 +172,19 @@ function BongContent() {
   const pendingDeployReloadRef = useRef(false);
   const bundledBuildIdRef = useRef(process.env.NEXT_PUBLIC_BUILD_ID || 'dev');
   const sfxUrlCacheRef = useRef<Map<string, string>>(new Map());
+  const controlSecretRef = useRef(controlSecret);
+  controlSecretRef.current = controlSecret;
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
+
+  const controlHeaders = useCallback((withJson = false) => {
+    const headers: Record<string, string> = {};
+    if (withJson) headers['Content-Type'] = 'application/json';
+    if (controlSecretRef.current) {
+      headers['x-elroy-control-secret'] = controlSecretRef.current;
+    }
+    return headers;
+  }, []);
 
   /** "L Roy" / L-Roy / lroy (without "Elroy") — misname, gets roasted. */
   const misnamesElroyAsLRoy = (text: string) => {
@@ -916,7 +932,7 @@ function BongContent() {
         liveDirectivesRef.current = { ...liveDirectivesRef.current, next: [] };
         void fetch('/api/directives', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: controlHeaders(true),
           body: JSON.stringify({ action: 'consume-next' }),
         }).catch((error) => {
           console.warn('Directive consume failed', error);
@@ -942,7 +958,7 @@ function BongContent() {
         await speak(clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS));
       }
     } catch (e) { console.error(e); }
-  }, [isTriviaRoundLive, playBongRip, speak]);
+  }, [controlHeaders, isTriviaRoundLive, playBongRip, speak]);
 
   const queueBongLogic = useCallback((
     input: string,
@@ -964,7 +980,10 @@ function BongContent() {
 
   const pollLiveDirectives = useCallback(async () => {
     try {
-      const res = await fetch(`/api/directives?t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/directives?t=${Date.now()}`, {
+        headers: controlHeaders(),
+        cache: 'no-store',
+      });
       if (!res.ok) return;
       const data = await res.json() as {
         sticky?: Array<{ id: string; text: string }>;
@@ -993,7 +1012,7 @@ function BongContent() {
 
         void fetch('/api/directives', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: controlHeaders(true),
           body: JSON.stringify({ action: 'ack-push', id: item.id }),
         }).catch((error) => {
           console.warn('Push ack failed', error);
@@ -1002,7 +1021,7 @@ function BongContent() {
     } catch (error) {
       console.warn('Directive poll failed', error);
     }
-  }, [queueBongLogic]);
+  }, [controlHeaders, queueBongLogic]);
 
   useEffect(() => {
     void pollLiveDirectives();

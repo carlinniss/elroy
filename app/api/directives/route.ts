@@ -11,7 +11,11 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: Request) {
+  if (!isControlAuthorized(request)) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const directives = await listDirectives();
     return Response.json(directives, {
@@ -24,6 +28,10 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  if (!isControlAuthorized(request)) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const body = await request.json() as {
       action?: string;
@@ -33,20 +41,6 @@ export async function POST(request: Request) {
       chatOnly?: boolean;
       forceVoice?: boolean;
     };
-
-    if (body.action === 'consume-next') {
-      const consumed = await consumeNextDirectives();
-      return Response.json({ ok: true, consumed });
-    }
-
-    if (body.action === 'ack-push' && body.id) {
-      await ackPushDirective(body.id);
-      return Response.json({ ok: true });
-    }
-
-    if (!isControlAuthorized(request)) {
-      return Response.json({ error: 'Unauthorized' }, { status: 401 });
-    }
 
     if (body.action === 'add') {
       const kind = body.kind;
@@ -66,6 +60,16 @@ export async function POST(request: Request) {
         return Response.json({ error: 'text required' }, { status: 400 });
       }
       return Response.json({ ok: true, directive });
+    }
+
+    if (body.action === 'consume-next') {
+      const consumed = await consumeNextDirectives();
+      return Response.json({ ok: true, consumed });
+    }
+
+    if (body.action === 'ack-push' && body.id) {
+      await ackPushDirective(body.id);
+      return Response.json({ ok: true });
     }
 
     if (body.action === 'clear') {
