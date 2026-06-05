@@ -118,6 +118,17 @@ function BongContent() {
   const randomCannabisFact = () =>
     CANNABIS_FACTS[Math.floor(Math.random() * CANNABIS_FACTS.length)];
 
+  const getControlHeaders = useCallback((headers: Record<string, string> = {}) => {
+    const controlSecret =
+      searchParams.get('controlKey')?.trim()
+      || searchParams.get('key')?.trim()
+      || '';
+
+    return controlSecret
+      ? { ...headers, 'x-elroy-control-secret': controlSecret }
+      : headers;
+  }, [searchParams]);
+
   const lastCelebrationRef = useRef(0);
   const knownFollowerIdsRef = useRef<Set<string>>(new Set());
   const greetedThisSessionRef = useRef<Set<string>>(new Set());
@@ -1218,7 +1229,7 @@ function BongContent() {
       try {
         const generateRes = await fetch('/api/trivia/generate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getControlHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             category,
             recentQuestions: categoryHistory.map((entry) => entry.question),
@@ -1274,7 +1285,7 @@ function BongContent() {
     } finally {
       triviaAskInFlightRef.current = false;
     }
-  }, [persistStreamSession, processBongLogic]);
+  }, [getControlHeaders, persistStreamSession, processBongLogic]);
 
   const runTriviaCycle = useCallback(() => {
     if (!streamLiveRef.current || isFullyMuted()) return;

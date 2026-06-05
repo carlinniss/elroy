@@ -45,7 +45,7 @@ Bong Bot is a high-performance, AI-driven Twitch overlay and chat assistant. Elr
 ## ⚙️ Configuration Notes
 
 ### API Billing (Critical)
-Elroy uses **Google Gemini** for chat and `!aboutme` only. **Trivia is 100% curated static questions** (no Gemini) — see `lib/trivia-bank.ts`. Voice uses a separate **ElevenLabs** quota (`!quota`).
+Elroy uses **Google Gemini** for chat, `!aboutme`, and optional generated trivia. Trivia falls back to curated static questions from `lib/trivia-bank.ts` when Gemini is disabled or the overlay is not authorized. Voice uses a separate **ElevenLabs** quota (`!quota`).
 
 **Google AI Pro ($20/mo) does not refill API credits.** Chat uses `GOOGLE_GENERATIVE_AI_API_KEY` from [AI Studio](https://aistudio.google.com/).
 
@@ -166,7 +166,7 @@ To test in-stream, run the overlay and trigger the matching event (sub, bits, fo
 ## 🖥️ OBS Setup
 
 1.  Add a new **Browser Source** in OBS.
-2.  Set URL to `http://localhost:3000`.
+2.  Set URL to `http://localhost:3000?controlKey=your-secret` when `ELROY_CONTROL_SECRET` is configured (or just `http://localhost:3000` for static-only/local testing).
 3.  Set Width/Height to your canvas size (e.g., 1920x1080).
 4.  Check **Control Audio via OBS** if you want to mix the bot's voice separately.
 
