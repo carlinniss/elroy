@@ -1,9 +1,13 @@
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 
-const client = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY });
-
 export async function GET() {
   try {
+    const apiKey = process.env.ELEVENLABS_API_KEY?.trim();
+    if (!apiKey) {
+      return new Response("Stats unavailable", { status: 503 });
+    }
+
+    const client = new ElevenLabsClient({ apiKey });
     const sub = await client.user.subscription.get();
     return Response.json({ remaining: sub.characterLimit - sub.characterCount });
   } catch (error) {
