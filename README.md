@@ -36,8 +36,11 @@ Bong Bot is a high-performance, AI-driven Twitch overlay and chat assistant. Elr
     Create a `.env.local` file in the root directory and add your keys:
     ```text
     NEXT_PUBLIC_TWITCH_CHANNEL=your_channel_name
-    NEXT_PUBLIC_TWITCH_OAUTH_TOKEN=oauth:your_token_here
-    GEMINI_API_KEY=your_google_ai_studio_key
+    ELROY_CONTROL_SECRET=your_long_random_overlay_secret
+    TWITCH_BOT_USERNAME=your_bot_login
+    TWITCH_BOT_OAUTH_TOKEN=oauth:your_bot_token_here
+    TWITCH_OAUTH_TOKEN=oauth:your_broadcaster_or_mod_token_here
+    GOOGLE_GENERATIVE_AI_API_KEY=your_google_ai_studio_key
     ELEVENLABS_API_KEY=your_elevenlabs_key
     ELEVENLABS_VOICE_ID=pNInz6obpgDQGcFmaJgB
     ```
@@ -67,7 +70,7 @@ Ensure your file structure is exact for Next.js routing:
     ```powershell
     npm run dev
     ```
-2.  Open `http://localhost:3000` in your browser.
+2.  Open `http://localhost:3000?controlKey=your_long_random_overlay_secret` in your browser.
 3.  Click **IGNITE BONG** to initialize the Twitch connection.
 4.  Mention Elroy in chat (e.g. `@elroy what's good?`) or trigger a sub/bits/follow to hear the celebration sounds.
 
@@ -166,7 +169,7 @@ To test in-stream, run the overlay and trigger the matching event (sub, bits, fo
 ## 🖥️ OBS Setup
 
 1.  Add a new **Browser Source** in OBS.
-2.  Set URL to `http://localhost:3000`.
+2.  Set URL to `http://localhost:3000?controlKey=your_long_random_overlay_secret`.
 3.  Set Width/Height to your canvas size (e.g., 1920x1080).
 4.  Check **Control Audio via OBS** if you want to mix the bot's voice separately.
 

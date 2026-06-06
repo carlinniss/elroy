@@ -1,8 +1,13 @@
 import { generateText } from 'ai';
 import { clampReplyLength, mapBrainErrorMessage, MAX_TWITCH_CHAT_CHARS } from '@/lib/chat-reply';
+import { isControlAuthorized } from '@/lib/control-auth';
 import { getGeminiModel } from '@/lib/gemini-model';
 
 export async function POST(req: Request) {
+  if (!isControlAuthorized(req)) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const { prompt } = await req.json();
     const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
