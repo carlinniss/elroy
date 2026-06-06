@@ -1,4 +1,10 @@
-export async function GET() {
+import { isControlAuthorized } from '@/lib/control-auth';
+
+export async function GET(request: Request) {
+  if (!isControlAuthorized(request)) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const res = await fetch("https://api.elevenlabs.io/v1/user/subscription", {
       method: "GET",

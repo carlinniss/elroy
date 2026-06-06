@@ -1,6 +1,11 @@
+import { isControlAuthorized } from '@/lib/control-auth';
 import { fetchShutElroyPowerUpId, getBroadcasterLogin } from '@/lib/twitch';
 
-export async function GET() {
+export async function GET(request: Request) {
+  if (!isControlAuthorized(request)) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const broadcasterLogin = getBroadcasterLogin();
   const result = await fetchShutElroyPowerUpId();
 

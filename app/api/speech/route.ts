@@ -1,4 +1,10 @@
+import { isControlAuthorized } from '@/lib/control-auth';
+
 export async function POST(req: Request) {
+  if (!isControlAuthorized(req)) {
+    return new Response('Unauthorized', { status: 401 });
+  }
+
   try {
     const { text } = await req.json();
     const voiceId = process.env.ELEVENLABS_VOICE_ID || "pNInz6obpgDQGcFmaJgB";
