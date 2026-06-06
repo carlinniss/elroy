@@ -184,10 +184,10 @@ function BongContent() {
     controlSecretRef.current = controlSecret;
   }, [controlSecret]);
 
-  const controlHeaders = useCallback((extra: Record<string, string> = {}) => {
+  const controlHeaders = useCallback((extra: Record<string, string> = {}): Record<string, string> => {
     const secret = controlSecretRef.current;
     return secret ? { ...extra, Authorization: `Bearer ${secret}` } : extra;
-  }, [controlHeaders]);
+  }, []);
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
