@@ -22,6 +22,7 @@ import {
 import type { UserMemoryEvent } from '@/lib/user-memory';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
+const CONTROL_SECRET_STORAGE_KEY = 'elroy-control-secret';
 
 function rememberUser(
   username: string,
@@ -46,6 +47,8 @@ function BongContent() {
   const [isVoiceOn, setIsVoiceOn] = useState(true);
   const searchParams = useSearchParams();
   const controlSecretRef = useRef('');
+  const [controlSecretReady, setControlSecretReady] = useState(false);
+  const [resolvedControlSecret, setResolvedControlSecret] = useState('');
   const [diagnostics, setDiagnostics] = useState({
     chat: '...',
     speech: '...',
@@ -174,15 +177,33 @@ function BongContent() {
   const bundledBuildIdRef = useRef(process.env.NEXT_PUBLIC_BUILD_ID || 'dev');
   const sfxUrlCacheRef = useRef<Map<string, string>>(new Map());
 
-  const controlSecret =
+  const controlSecretFromUrl =
     searchParams.get('controlKey')?.trim()
     || searchParams.get('key')?.trim()
     || searchParams.get('secret')?.trim()
     || '';
 
   useEffect(() => {
-    controlSecretRef.current = controlSecret;
-  }, [controlSecret]);
+    let resolved = controlSecretFromUrl;
+    if (resolved) {
+      try {
+        sessionStorage.setItem(CONTROL_SECRET_STORAGE_KEY, resolved);
+      } catch {
+        /* ignore */
+      }
+    } else {
+      try {
+        resolved = sessionStorage.getItem(CONTROL_SECRET_STORAGE_KEY)?.trim() || '';
+      } catch {
+        resolved = '';
+      }
+    }
+    controlSecretRef.current = resolved;
+    setResolvedControlSecret(resolved);
+    setControlSecretReady(true);
+  }, [controlSecretFromUrl]);
+
+  const overlayAuthMissing = controlSecretReady && !resolvedControlSecret;
 
   const controlHeaders = useCallback((extra: Record<string, string> = {}): Record<string, string> => {
     const secret = controlSecretRef.current;
@@ -746,7 +767,10 @@ function BongContent() {
     }
   }, [applyVoiceQuotaTier, controlHeaders]);
 
-  useEffect(() => { void runDiagnostics(); }, [runDiagnostics]);
+  useEffect(() => {
+    if (!controlSecretReady) return;
+    void runDiagnostics();
+  }, [controlSecretReady, runDiagnostics]);
   useEffect(() => { dingEnabledRef.current = isDingOn; }, [isDingOn]);
   useEffect(() => { voiceEnabledRef.current = isVoiceOn; }, [isVoiceOn]);
   useEffect(() => {
@@ -1791,6 +1815,12 @@ function BongContent() {
         headers: controlHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ action: 'claim', instanceId }),
       });
+      if (res.status === 401) {
+        setBotBlockReason(
+          'Overlay not authorized. Add ?controlKey=YOUR_SECRET to the browser source URL — must match ELROY_CONTROL_SECRET in Vercel.',
+        );
+        return false;
+      }
       if (res.status === 409) {
         setBotBlockReason('Another Elroy is already running. Close the other browser tab or OBS browser source.');
         return false;
@@ -2126,6 +2156,8 @@ function BongContent() {
   }, [controlHeaders]);
 
   useEffect(() => {
+    if (!controlSecretReady) return;
+
     const shouldAutoStart =
       searchParams.get('autostart') === 'true'
       || (typeof window !== 'undefined' && localStorage.getItem(AUTO_RESUME_STORAGE_KEY) === '1');
@@ -2146,7 +2178,7 @@ function BongContent() {
     }
 
     void startBot();
-  }, [searchParams, runDiagnostics]);
+  }, [controlSecretReady, searchParams, runDiagnostics]);
   return (
     <div style={{ height: '100vh', padding: '60px', color: 'white', backgroundColor: 'transparent', fontFamily: 'sans-serif' }}>
       <div
@@ -2173,6 +2205,12 @@ function BongContent() {
         {postUpdateCheck ? (
           <div style={{ color: '#FFE08A', marginTop: '6px', fontSize: isActive ? '12px' : '14px' }}>
             Verifying Brain / Voice / Sound after auto-update…
+          </div>
+        ) : null}
+        {overlayAuthMissing ? (
+          <div style={{ color: '#FFB4B4', marginTop: '8px', fontSize: isActive ? '12px' : '14px', lineHeight: 1.45 }}>
+            Overlay locked — add <code style={{ color: '#FFE08A' }}>?controlKey=YOUR_SECRET</code> to the browser source URL
+            (same value as <code style={{ color: '#FFE08A' }}>ELROY_CONTROL_SECRET</code> in Vercel).
           </div>
         ) : null}
         <div style={{ color: '#B794F6', marginTop: isActive ? '6px' : '8px', fontSize: isActive ? '12px' : '14px' }}>
