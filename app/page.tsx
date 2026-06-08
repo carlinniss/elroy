@@ -58,6 +58,7 @@ function BongContent() {
     update: 'auto-update checking…',
   });
   const [postUpdateCheck, setPostUpdateCheck] = useState(false);
+  const [overlayAuthStatus, setOverlayAuthStatus] = useState<'checking' | 'missing' | 'rejected' | 'ok' | 'open'>('checking');
 
   const DEFAULT_VOLUME = 0.85;
   const clientRef = useRef<tmi.Client | null>(null);
@@ -203,12 +204,40 @@ function BongContent() {
     setControlSecretReady(true);
   }, [controlSecretFromUrl]);
 
-  const overlayAuthMissing = controlSecretReady && !resolvedControlSecret;
-
   const controlHeaders = useCallback((extra: Record<string, string> = {}): Record<string, string> => {
     const secret = controlSecretRef.current;
     return secret ? { ...extra, Authorization: `Bearer ${secret}` } : extra;
   }, []);
+
+  useEffect(() => {
+    if (!controlSecretReady) return;
+
+    void (async () => {
+      try {
+        const statusRes = await fetch('/api/control/status', { cache: 'no-store' });
+        const statusData = await statusRes.json() as { configured?: boolean };
+        const authRequired = statusData.configured === true;
+
+        if (!authRequired) {
+          setOverlayAuthStatus('open');
+          return;
+        }
+
+        if (!resolvedControlSecret) {
+          setOverlayAuthStatus('missing');
+          return;
+        }
+
+        const verifyRes = await fetch('/api/control/verify', {
+          headers: controlHeaders(),
+          cache: 'no-store',
+        });
+        setOverlayAuthStatus(verifyRes.ok ? 'ok' : 'rejected');
+      } catch {
+        setOverlayAuthStatus(resolvedControlSecret ? 'rejected' : 'missing');
+      }
+    })();
+  }, [controlSecretReady, resolvedControlSecret, controlHeaders]);
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
@@ -1817,7 +1846,9 @@ function BongContent() {
       });
       if (res.status === 401) {
         setBotBlockReason(
-          'Overlay not authorized. Add ?controlKey=YOUR_SECRET to the browser source URL — must match ELROY_CONTROL_SECRET in Vercel.',
+          overlayAuthStatus === 'rejected'
+            ? 'Control key rejected — your URL controlKey does not match ELROY_CONTROL_SECRET in Vercel. Fix the env var or URL, redeploy if needed.'
+            : 'Overlay not authorized. Add ?controlKey=YOUR_SECRET to the browser source URL — must match ELROY_CONTROL_SECRET in Vercel.',
         );
         return false;
       }
@@ -1836,7 +1867,7 @@ function BongContent() {
       setBotBlockReason('Could not reach Elroy session service.');
       return false;
     }
-  }, [controlHeaders]);
+  }, [controlHeaders, overlayAuthStatus]);
 
   const disconnectBotClient = useCallback(async (announceUser?: string) => {
     const client = clientRef.current;
@@ -2207,10 +2238,22 @@ function BongContent() {
             Verifying Brain / Voice / Sound after auto-update…
           </div>
         ) : null}
-        {overlayAuthMissing ? (
+        {overlayAuthStatus === 'missing' ? (
           <div style={{ color: '#FFB4B4', marginTop: '8px', fontSize: isActive ? '12px' : '14px', lineHeight: 1.45 }}>
             Overlay locked — add <code style={{ color: '#FFE08A' }}>?controlKey=YOUR_SECRET</code> to the browser source URL
             (same value as <code style={{ color: '#FFE08A' }}>ELROY_CONTROL_SECRET</code> in Vercel).
+          </div>
+        ) : null}
+        {overlayAuthStatus === 'rejected' ? (
+          <div style={{ color: '#FFB4B4', marginTop: '8px', fontSize: isActive ? '12px' : '14px', lineHeight: 1.45 }}>
+            Control key rejected — <code style={{ color: '#FFE08A' }}>controlKey</code> in the URL does not match{' '}
+            <code style={{ color: '#FFE08A' }}>ELROY_CONTROL_SECRET</code> on Vercel. Copy the exact value from Vercel env vars,
+            update the browser source URL, then <strong>redeploy</strong> if you changed the env var.
+          </div>
+        ) : null}
+        {overlayAuthStatus === 'ok' ? (
+          <div style={{ color: '#8AE68A', marginTop: '6px', fontSize: isActive ? '12px' : '14px' }}>
+            Overlay authorized
           </div>
         ) : null}
         <div style={{ color: '#B794F6', marginTop: isActive ? '6px' : '8px', fontSize: isActive ? '12px' : '14px' }}>
