@@ -24,6 +24,21 @@ import { controlAuthHeaders } from '@/lib/control-auth';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
 const CONTROL_SECRET_STORAGE_KEY = 'elroy-control-secret';
+const CHAT_BRAIN_TIMEOUT_MS = 45_000;
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs = CHAT_BRAIN_TIMEOUT_MS,
+) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 function rememberUser(
   username: string,
@@ -52,6 +67,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const [resolvedControlSecret, setResolvedControlSecret] = useState('');
   const [diagnostics, setDiagnostics] = useState({
     chat: '...',
+    twitch: '...',
     speech: '...',
     sound: '...',
     quota: '...',
@@ -61,7 +77,13 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const [postUpdateCheck, setPostUpdateCheck] = useState(false);
   const [overlayAuthStatus, setOverlayAuthStatus] = useState<'checking' | 'missing' | 'rejected' | 'ok' | 'open'>('checking');
   const [overlayAuthSource, setOverlayAuthSource] = useState<'path' | 'query' | 'storage' | 'none'>('none');
-  const [runtimeHud, setRuntimeHud] = useState({ stream: 'checking…', tts: 'idle' });
+  const [runtimeHud, setRuntimeHud] = useState({
+    stream: 'checking…',
+    tts: 'idle',
+    irc: 'off',
+    chat: 'idle',
+    mute: '',
+  });
 
   const DEFAULT_VOLUME = 0.85;
   const clientRef = useRef<tmi.Client | null>(null);
@@ -310,6 +332,16 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
   const isFullyMuted = () => isSilenced() && silenceModeRef.current === 'full';
 
+  const syncMuteHud = useCallback(() => {
+    if (!isSilenced()) {
+      setRuntimeHud((prev) => ({ ...prev, mute: '' }));
+      return;
+    }
+    const minutesLeft = Math.max(1, Math.ceil((silencedUntilRef.current - Date.now()) / 60_000));
+    const mode = silenceModeRef.current === 'full' ? 'FULL MUTE — no chat' : 'voice muted — chat still on';
+    setRuntimeHud((prev) => ({ ...prev, mute: `${mode} (~${minutesLeft}m)` }));
+  }, []);
+
   const resolveShutElroyPowerUpId = useCallback(async () => {
     try {
       const res = await fetch('/api/twitch/powerups', {
@@ -509,9 +541,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
   }, []);
 
-  const sayChat = useCallback(async (message: string) => {
+  const sayChat = useCallback(async (message: string): Promise<boolean> => {
     const text = message.trim();
-    if (!text) return;
+    if (!text) return false;
 
     try {
       const res = await fetch('/api/twitch/say', {
@@ -521,10 +553,18 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(data.error || `Twitch say failed (${res.status})`);
+        const detail = data.error || `HTTP ${res.status}`;
+        const hudLine = res.status === 401
+          ? 'chat blocked — overlay not authorized'
+          : `chat failed — ${detail}`;
+        setRuntimeHud((prev) => ({ ...prev, chat: hudLine }));
+        throw new Error(detail);
       }
+      setRuntimeHud((prev) => ({ ...prev, chat: 'sent' }));
+      return true;
     } catch (error) {
       console.warn('Twitch say failed', error);
+      return false;
     }
   }, [controlHeaders]);
 
@@ -541,14 +581,16 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       silencedUntilRef.current = 0;
       silenceModeRef.current = 'none';
       stopMuteCountdown();
+      syncMuteHud();
       void sayChat('Elroy is back — you can talk to me again.');
       return;
     }
+    syncMuteHud();
     const minutesLeft = Math.ceil(msLeft / 60_000);
     void sayChat(
       `${minutesLeft} minute${minutesLeft === 1 ? '' : 's'} until Elroy can talk again.`,
     );
-  }, [sayChat, stopMuteCountdown]);
+  }, [sayChat, stopMuteCountdown, syncMuteHud]);
 
   const enterFullMute = useCallback((redeemer?: string) => {
     stopMuteCountdown();
@@ -556,6 +598,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     silenceModeRef.current = 'full';
     voiceEnabledRef.current = false;
     setIsVoiceOn(false);
+    syncMuteHud();
 
     const opener = redeemer
       ? `@${redeemer} shut Elroy up — no chat or voice for 10 minutes.`
@@ -566,7 +609,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     muteCountdownRef.current = setInterval(() => {
       postMuteCountdown();
     }, 60_000);
-  }, [postMuteCountdown, stopMuteCountdown, playElroySfx, sayChat]);
+  }, [postMuteCountdown, stopMuteCountdown, playElroySfx, sayChat, syncMuteHud]);
 
   const pollPowerupRedemptions = useCallback(async () => {
     const cachedId = shutElroyPowerUpIdRef.current;
@@ -818,6 +861,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     setDiagnostics((prev) => ({
       ...prev,
       chat: '...',
+      twitch: '...',
       speech: '...',
       sound: '...',
       ...(afterDeploy ? { quota: '...' } : {}),
@@ -830,6 +874,15 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         headers: controlHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ prompt: 'ping' }),
       });
+      const twitchStatus = await fetch('/api/twitch/chat-status', {
+        headers: controlHeaders(),
+      });
+      const twitchData = await twitchStatus.json() as {
+        ok?: boolean;
+        error?: string;
+        hint?: string;
+        tokenLogin?: string;
+      };
       const speech = await fetch('/api/speech', {
         method: 'POST',
         headers: controlHeaders({ 'Content-Type': 'application/json' }),
@@ -849,9 +902,20 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         ? `${Number(qData.remaining || 0).toLocaleString()} left`
         : '❌';
 
+      const twitchLabel = twitchStatus.ok && twitchData.ok
+        ? `✅ ${twitchData.tokenLogin || 'ready'}`
+        : '❌';
+      if (!twitchStatus.ok || !twitchData.ok) {
+        const twitchHud = twitchData.error
+          ? `${twitchData.error}${twitchData.hint ? ` — ${twitchData.hint}` : ''}`
+          : 'Twitch chat not configured on server';
+        setRuntimeHud((prev) => ({ ...prev, chat: twitchHud }));
+      }
+
       setDiagnostics((prev) => ({
         ...prev,
         chat: chat.status === 200 ? '✅' : '❌',
+        twitch: twitchLabel,
         speech: speech.status === 200 ? '✅' : '❌',
         sound: sound.ok ? '✅' : '❌',
         quota: afterDeploy ? quotaLabel : (prev.quota !== '...' ? prev.quota : quotaLabel),
@@ -863,6 +927,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         setDiagnostics((prev) => ({
           ...prev,
           chat: '❌',
+          twitch: '❌',
           speech: '❌',
           sound: '❌',
           quota: '❌',
@@ -1127,20 +1192,42 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         : `- Chat only: 2-4 sentences, about 200-${MAX_TWITCH_CHAT_CHARS} characters total.
 - Hard cap ${MAX_TWITCH_CHAT_CHARS} characters. No bullet lists or paragraphs — keep it flowing chat prose.`;
       const fullPrompt = `${input}${directiveBlock}\n\nResponse requirements:\n${lengthRule}\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: controlHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ prompt: fullPrompt }),
-      });
+      let res: Response;
+      try {
+        res = await fetchWithTimeout('/api/chat', {
+          method: 'POST',
+          headers: controlHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ prompt: fullPrompt }),
+        });
+      } catch (error) {
+        const timedOut = error instanceof DOMException && error.name === 'AbortError';
+        console.warn('Chat brain request failed', error);
+        setRuntimeHud((prev) => ({
+          ...prev,
+          chat: timedOut ? 'brain timed out — try again' : 'brain unreachable',
+        }));
+        if (user) {
+          const failLine = clampReplyLength(
+            timedOut ? 'Brain timed out — try again in a sec.' : 'Brain unreachable — check overlay auth.',
+            MAX_TWITCH_CHAT_CHARS - (`@${user} `.length),
+          );
+          await sayChat(`@${user} ${failLine}`);
+        }
+        return;
+      }
       const data = await res.json() as { text?: string; error?: string };
       if (!res.ok || !data.text?.trim()) {
         console.warn('Chat brain failed', data.error || res.status);
+        setRuntimeHud((prev) => ({
+          ...prev,
+          chat: res.status === 401 ? 'brain blocked — overlay not authorized' : `brain error ${res.status}`,
+        }));
         if (user) {
           const failLine = clampReplyLength(
             data.error || 'Brain stall — check Gemini billing in AI Studio.',
             MAX_TWITCH_CHAT_CHARS - (`@${user} `.length),
           );
-          void sayChat(`@${user} ${failLine}`);
+          await sayChat(`@${user} ${failLine}`);
         }
         return;
       }
@@ -1156,19 +1243,19 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       }
       const safeChatText = formatChatReplyBody(data.text, user);
       setLog(p => [{ text: safeChatText }, ...p].slice(0, 5));
-      void sayChat(user ? `@${user} ${safeChatText}` : safeChatText);
+      await sayChat(user ? `@${user} ${safeChatText}` : safeChatText);
 
       if (willUseVoice) {
         lastElroyVoiceRef.current = Date.now();
         const playDing = dingEnabledRef.current && !opts.skipDing;
-        if (playDing) {
-          await playBongRip(volumeRef.current);
-        }
-        const speechDelayMs = playDing ? 1600 : 0;
-        if (speechDelayMs > 0) {
-          await new Promise<void>((resolve) => setTimeout(resolve, speechDelayMs));
-        }
-        await speak(clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS));
+        const voiceText = clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS);
+        void (async () => {
+          if (playDing) {
+            await playBongRip(volumeRef.current);
+            await new Promise<void>((resolve) => setTimeout(resolve, 1600));
+          }
+          void speak(voiceText);
+        })();
       }
     } catch (e) { console.error(e); }
   }, [controlHeaders, describeVoiceSkip, isTriviaRoundLive, playBongRip, sayChat, speak]);
@@ -1254,7 +1341,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     silenceModeRef.current = 'voice';
     voiceEnabledRef.current = false;
     setIsVoiceOn(false);
-  }, []);
+    syncMuteHud();
+  }, [syncMuteHud]);
 
   const canCelebrate = (kind: 'follow' | 'sub' | 'bits') => {
     const cooldown = kind === 'follow' ? FOLLOW_CELEBRATION_COOLDOWN_MS : CELEBRATION_COOLDOWN_MS;
@@ -2059,9 +2147,19 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
     chatMessageCountRef.current = 0;
+    setRuntimeHud((prev) => ({ ...prev, irc: 'connecting…' }));
     const client = new tmi.Client({
       connection: { reconnect: true, secure: true },
       channels: [chan],
+    });
+    client.on('connected', () => {
+      setRuntimeHud((prev) => ({ ...prev, irc: 'connected — listening' }));
+    });
+    client.on('disconnected', (reason: string) => {
+      setRuntimeHud((prev) => ({
+        ...prev,
+        irc: reason ? `disconnected (${reason})` : 'disconnected',
+      }));
     });
     client.on('message', (_c: string, t: tmi.ChatUserstate, m: string, s: boolean) => {
       if (s) return;
@@ -2271,7 +2369,13 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         /* ignore */
       }
       startBotSessionHeartbeat();
-      void sayChat(`Elroy initiated. ${randomCannabisFact()}`);
+      const initiated = await sayChat(`Elroy initiated. ${randomCannabisFact()}`);
+      if (!initiated) {
+        setRuntimeHud((prev) => ({
+          ...prev,
+          chat: 'cannot post to Twitch — set TWITCH_BOT_OAUTH_TOKEN in Vercel',
+        }));
+      }
       restoreStreamSession();
       const foundPowerUp = await resolveShutElroyPowerUpId();
       if (foundPowerUp) {
@@ -2352,7 +2456,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         }}
       >
         <div style={{ fontSize: isActive ? '13px' : '16px' }}>
-          Brain: {diagnostics.chat} | Voice: {diagnostics.speech} | Sound: {diagnostics.sound}
+          Brain: {diagnostics.chat} | Twitch: {diagnostics.twitch} | Voice: {diagnostics.speech} | Sound: {diagnostics.sound}
         </div>
         <div style={{ color: '#00FF00', marginTop: '5px', fontSize: isActive ? '13px' : '16px' }}>
           Quota: {diagnostics.quota}
@@ -2360,11 +2464,22 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         {isActive ? (
           <>
             <div style={{ color: '#7DD3FC', marginTop: '6px', fontSize: '12px' }}>
+              IRC: {runtimeHud.irc}
+            </div>
+            <div style={{ color: '#7DD3FC', marginTop: '4px', fontSize: '12px' }}>
               Stream: {runtimeHud.stream}
+            </div>
+            <div style={{ color: '#A7F3D0', marginTop: '4px', fontSize: '12px' }}>
+              Chat: {runtimeHud.chat}
             </div>
             <div style={{ color: '#FDE68A', marginTop: '4px', fontSize: '12px' }}>
               TTS: {runtimeHud.tts}
             </div>
+            {runtimeHud.mute ? (
+              <div style={{ color: '#FCA5A5', marginTop: '4px', fontSize: '12px' }}>
+                {runtimeHud.mute}
+              </div>
+            ) : null}
           </>
         ) : null}
         {postUpdateCheck ? (

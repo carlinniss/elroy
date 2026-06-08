@@ -68,9 +68,196 @@ async function validateChannelToken(
   };
 }
 
+export type TwitchChatTokenCandidate = {
+  token: string;
+  clientId: string;
+  userId: string;
+  login: string;
+  scopes: string[];
+  source: 'TWITCH_BOT_OAUTH_TOKEN' | 'TWITCH_OAUTH_TOKEN';
+};
+
+export type TwitchChatSendStatus = {
+  ok: boolean;
+  error?: string;
+  hint?: string;
+  tokenLogin?: string;
+  tokenSource?: string;
+  configuredUsername?: string;
+  scopes?: string[];
+  hasBotToken: boolean;
+  hasBroadcasterToken: boolean;
+  canHelix: boolean;
+  canIrc: boolean;
+};
+
 /** Broadcaster/server token only — never the public bot token. */
 export async function getBroadcasterTwitchCredentials() {
   return validateChannelToken(process.env.TWITCH_OAUTH_TOKEN, 'TWITCH_OAUTH_TOKEN');
+}
+
+export async function resolveTwitchChatTokenCandidates(): Promise<TwitchChatTokenCandidate[]> {
+  const candidates: TwitchChatTokenCandidate[] = [];
+  const botToken = process.env.TWITCH_BOT_OAUTH_TOKEN?.trim();
+  const broadcasterToken = process.env.TWITCH_OAUTH_TOKEN?.trim();
+
+  if (botToken) {
+    const validated = await validateOAuthToken(botToken);
+    if (validated) {
+      candidates.push({
+        token: botToken,
+        clientId: validated.clientId,
+        userId: validated.userId,
+        login: validated.login,
+        scopes: validated.scopes,
+        source: 'TWITCH_BOT_OAUTH_TOKEN',
+      });
+    }
+  }
+
+  if (broadcasterToken && broadcasterToken !== botToken) {
+    const validated = await validateOAuthToken(broadcasterToken);
+    if (validated) {
+      candidates.push({
+        token: broadcasterToken,
+        clientId: validated.clientId,
+        userId: validated.userId,
+        login: validated.login,
+        scopes: validated.scopes,
+        source: 'TWITCH_OAUTH_TOKEN',
+      });
+    }
+  }
+
+  return candidates;
+}
+
+export async function sendHelixChatMessage(message: string, candidate: TwitchChatTokenCandidate) {
+  const broadcasterLogin = getBroadcasterLogin();
+  if (!broadcasterLogin) {
+    throw new Error('Missing NEXT_PUBLIC_TWITCH_CHANNEL.');
+  }
+
+  const broadcasterId = await getBroadcasterId(broadcasterLogin, candidate.token, candidate.clientId);
+  if (!broadcasterId) {
+    throw new Error(`Channel not found: ${broadcasterLogin}`);
+  }
+
+  const res = await fetch(`${TWITCH_API}/chat/messages`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${normalizeToken(candidate.token)}`,
+      'Client-Id': candidate.clientId,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      broadcaster_id: broadcasterId,
+      sender_id: candidate.userId,
+      message: message.slice(0, 500),
+    }),
+  });
+
+  const data = await res.json().catch(() => ({})) as {
+    message?: string;
+    data?: Array<{ is_sent?: boolean; drop_reason?: { message?: string } }>;
+  };
+
+  if (!res.ok) {
+    throw new Error(data.message || `Helix chat ${res.status}`);
+  }
+
+  const sent = data.data?.[0];
+  if (sent?.is_sent === false) {
+    throw new Error(sent.drop_reason?.message || 'Helix chat message dropped');
+  }
+}
+
+export async function inspectTwitchChatSend(): Promise<TwitchChatSendStatus> {
+  const broadcasterLogin = getBroadcasterLogin();
+  const hasBotToken = Boolean(process.env.TWITCH_BOT_OAUTH_TOKEN?.trim());
+  const hasBroadcasterToken = Boolean(process.env.TWITCH_OAUTH_TOKEN?.trim());
+  const empty = {
+    hasBotToken,
+    hasBroadcasterToken,
+    canHelix: false,
+    canIrc: false,
+  };
+
+  if (!broadcasterLogin) {
+    return {
+      ...empty,
+      ok: false,
+      error: 'Missing NEXT_PUBLIC_TWITCH_CHANNEL.',
+    };
+  }
+
+  if (!hasBotToken && !hasBroadcasterToken) {
+    return {
+      ...empty,
+      ok: false,
+      error: 'No Twitch chat token on server.',
+      hint: 'Add TWITCH_BOT_OAUTH_TOKEN in Vercel (generate at twitchapps.com/tmi).',
+    };
+  }
+
+  const candidates = await resolveTwitchChatTokenCandidates();
+  if (!candidates.length) {
+    return {
+      ...empty,
+      ok: false,
+      error: 'Twitch token is invalid or expired.',
+      hint: 'Regenerate the bot token and redeploy Vercel.',
+    };
+  }
+
+  const configuredUsername = process.env.TWITCH_BOT_USERNAME?.trim().toLowerCase()
+    || process.env.TWITCH_BOT_LOGIN?.trim().toLowerCase()
+    || '';
+  const primary = candidates[0];
+  const canHelix = candidates.some((candidate) => candidate.scopes.includes('user:write:chat'));
+  const canIrc = candidates.some((candidate) => candidate.scopes.includes('chat:write'));
+
+  if (
+    configuredUsername
+    && primary.source === 'TWITCH_BOT_OAUTH_TOKEN'
+    && configuredUsername !== primary.login
+  ) {
+    return {
+      ...empty,
+      ok: false,
+      error: `TWITCH_BOT_USERNAME is "${configuredUsername}" but token is for "${primary.login}".`,
+      hint: `Set TWITCH_BOT_USERNAME=${primary.login} or remove it.`,
+      tokenLogin: primary.login,
+      tokenSource: primary.source,
+      configuredUsername,
+      canHelix,
+      canIrc,
+    };
+  }
+
+  if (!canHelix && !canIrc) {
+    return {
+      ...empty,
+      ok: false,
+      error: `Token for ${primary.login} lacks chat scopes.`,
+      hint: 'Regenerate with chat:write at twitchapps.com/tmi.',
+      tokenLogin: primary.login,
+      tokenSource: primary.source,
+      scopes: primary.scopes,
+      canHelix,
+      canIrc,
+    };
+  }
+
+  return {
+    ok: true,
+    tokenLogin: primary.login,
+    tokenSource: primary.source,
+    hasBotToken,
+    hasBroadcasterToken,
+    canHelix,
+    canIrc,
+  };
 }
 
 /** User OAuth creds with Client ID taken from the token (fixes Client ID mismatch). */
