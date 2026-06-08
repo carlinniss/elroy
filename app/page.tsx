@@ -186,6 +186,7 @@ function BongContent() {
 
   useEffect(() => {
     let resolved = controlSecretFromUrl;
+
     if (resolved) {
       try {
         sessionStorage.setItem(CONTROL_SECRET_STORAGE_KEY, resolved);
@@ -232,7 +233,18 @@ function BongContent() {
           headers: controlHeaders(),
           cache: 'no-store',
         });
-        setOverlayAuthStatus(verifyRes.ok ? 'ok' : 'rejected');
+        if (verifyRes.ok) {
+          setOverlayAuthStatus('ok');
+        } else {
+          try {
+            sessionStorage.removeItem(CONTROL_SECRET_STORAGE_KEY);
+          } catch {
+            /* ignore */
+          }
+          controlSecretRef.current = '';
+          setResolvedControlSecret('');
+          setOverlayAuthStatus('rejected');
+        }
       } catch {
         setOverlayAuthStatus(resolvedControlSecret ? 'rejected' : 'missing');
       }
@@ -2240,8 +2252,8 @@ function BongContent() {
         ) : null}
         {overlayAuthStatus === 'missing' ? (
           <div style={{ color: '#FFB4B4', marginTop: '8px', fontSize: isActive ? '12px' : '14px', lineHeight: 1.45 }}>
-            Overlay locked — add <code style={{ color: '#FFE08A' }}>?controlKey=YOUR_SECRET</code> to the browser source URL
-            (same value as <code style={{ color: '#FFE08A' }}>ELROY_CONTROL_SECRET</code> in Vercel).
+            Overlay locked — use <code style={{ color: '#FFE08A' }}>/embed/YOUR_SECRET</code> in OBS (recommended) or{' '}
+            <code style={{ color: '#FFE08A' }}>?controlKey=YOUR_SECRET</code> (same as <code style={{ color: '#FFE08A' }}>ELROY_CONTROL_SECRET</code>).
           </div>
         ) : null}
         {overlayAuthStatus === 'rejected' ? (

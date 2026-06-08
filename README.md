@@ -169,7 +169,7 @@ To test in-stream, run the overlay and trigger the matching event (sub, bits, fo
 ## 🖥️ OBS Setup
 
 1.  Add a new **Browser Source** in OBS.
-2.  Set URL to `http://localhost:3000?controlKey=your_long_random_overlay_secret`.
+2.  Set URL to `http://localhost:3000/embed/your_long_random_overlay_secret` (recommended for OBS) or `?controlKey=...` in a normal browser.
 3.  Set Width/Height to your canvas size (e.g., 1920x1080).
 4.  Check **Control Audio via OBS** if you want to mix the bot's voice separately.
 
