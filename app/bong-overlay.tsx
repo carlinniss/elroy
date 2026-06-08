@@ -61,6 +61,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const [postUpdateCheck, setPostUpdateCheck] = useState(false);
   const [overlayAuthStatus, setOverlayAuthStatus] = useState<'checking' | 'missing' | 'rejected' | 'ok' | 'open'>('checking');
   const [overlayAuthSource, setOverlayAuthSource] = useState<'path' | 'query' | 'storage' | 'none'>('none');
+  const [runtimeHud, setRuntimeHud] = useState({ stream: 'checking…', tts: 'idle' });
 
   const DEFAULT_VOLUME = 0.85;
   const clientRef = useRef<tmi.Client | null>(null);
@@ -374,6 +375,30 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     if (!Number.isFinite(cooldown)) return false;
     return Date.now() - lastElroyVoiceRef.current >= cooldown;
   };
+
+  const describeVoiceSkip = useCallback((
+    opts: {
+      chatOnly?: boolean;
+      forceVoice?: boolean;
+      bypassVoiceCooldown?: boolean;
+      voicePriority?: 'celebration' | 'normal';
+    },
+  ) => {
+    if (opts.chatOnly) return 'chat-only mode';
+    if (!streamLiveRef.current) return 'waiting for LIVE (chat only until then)';
+    if (!voiceEnabledRef.current && !opts.forceVoice) return 'voice off — !voiceon';
+    if (isSilenced() && silenceModeRef.current === 'voice') return 'silenced (voice off)';
+    if (!quotaVoiceAllowedRef.current) return 'ElevenLabs quota empty';
+    if (celebrationsVoiceOnlyRef.current && !opts.forceVoice) return 'subs/bits voice only (low quota)';
+    if (!opts.bypassVoiceCooldown && !canUseVoice(opts.voicePriority ?? (opts.forceVoice ? 'celebration' : 'normal'))) {
+      const cooldown = (opts.voicePriority ?? (opts.forceVoice ? 'celebration' : 'normal')) === 'celebration'
+        ? celebrationVoiceCooldownMsRef.current
+        : voiceCooldownMsRef.current;
+      const waitSec = Math.max(0, Math.ceil((cooldown - (Date.now() - lastElroyVoiceRef.current)) / 1000));
+      return `voice cooldown (~${waitSec}s)`;
+    }
+    return null;
+  }, []);
 
   const applyVoiceQuotaTier = useCallback((remaining: number) => {
     const tier = voiceQuotaTierFromRemaining(remaining);
@@ -865,20 +890,36 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         headers: controlHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ text }),
       });
+      if (!res.ok) {
+        console.warn('Speech API failed', res.status);
+        setRuntimeHud((prev) => ({ ...prev, tts: `speech API error ${res.status}` }));
+        return;
+      }
       const audioUrl = URL.createObjectURL(await res.blob());
       const audio = new Audio(audioUrl);
       audio.volume = volumeRef.current;
       isSpeakingRef.current = true;
+      setRuntimeHud((prev) => ({ ...prev, tts: 'speaking…' }));
       await new Promise<void>((resolve) => {
         const finish = () => {
           isSpeakingRef.current = false;
           URL.revokeObjectURL(audioUrl);
+          setRuntimeHud((prev) => ({ ...prev, tts: 'audio ready' }));
           resolve();
         };
 
         audio.onended = finish;
-        audio.onerror = finish;
-        audio.play().catch(() => {
+        audio.onerror = () => {
+          console.warn('Audio element error');
+          setRuntimeHud((prev) => ({ ...prev, tts: 'playback error — check OBS audio' }));
+          finish();
+        };
+        audio.play().catch((error) => {
+          console.warn('Audio playback blocked', error);
+          setRuntimeHud((prev) => ({
+            ...prev,
+            tts: 'playback blocked — OBS: Control audio via OBS + unmute source',
+          }));
           isSpeakingRef.current = false;
           URL.revokeObjectURL(audioUrl);
           resolve();
@@ -886,9 +927,30 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       });
     } catch (e) {
       isSpeakingRef.current = false;
-      console.warn("Audio blocked");
+      console.warn('Speech failed', e);
+      setRuntimeHud((prev) => ({ ...prev, tts: 'speech failed' }));
     }
   };
+
+  const unlockBrowserAudio = useCallback(async () => {
+    try {
+      const res = await fetch('/api/speech', {
+        method: 'POST',
+        headers: controlHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ text: 'Yo.' }),
+      });
+      if (!res.ok) return;
+      const audio = new Audio(URL.createObjectURL(await res.blob()));
+      audio.volume = volumeRef.current;
+      await audio.play();
+      setRuntimeHud((prev) => ({ ...prev, tts: 'audio ready' }));
+    } catch {
+      setRuntimeHud((prev) => ({
+        ...prev,
+        tts: 'tap IGNITE BONG + enable Control audio via OBS',
+      }));
+    }
+  }, [controlHeaders]);
 
   const speak = useCallback((text: string) => {
     speechQueueRef.current = speechQueueRef.current
@@ -1047,6 +1109,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         && voiceAllowed
         && (opts.forceVoice || voiceEnabledRef.current),
       );
+      const voiceSkip = willUseVoice ? null : describeVoiceSkip(opts);
+      if (voiceSkip) {
+        setRuntimeHud((prev) => ({ ...prev, tts: voiceSkip }));
+      }
 
       const sticky = liveDirectivesRef.current.sticky;
       const next = liveDirectivesRef.current.next;
@@ -1105,7 +1171,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         await speak(clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS));
       }
     } catch (e) { console.error(e); }
-  }, [controlHeaders, isTriviaRoundLive, playBongRip, sayChat, speak]);
+  }, [controlHeaders, describeVoiceSkip, isTriviaRoundLive, playBongRip, sayChat, speak]);
 
   const queueBongLogic = useCallback((
     input: string,
@@ -1317,6 +1383,12 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     const wasLive = streamLiveRef.current;
     const { isLive, viewerCount } = await fetchStreamStatus();
     streamLiveRef.current = isLive;
+    setRuntimeHud((prev) => ({
+      ...prev,
+      stream: isLive
+        ? `LIVE${viewerCount != null ? ` (${viewerCount})` : ''}`
+        : 'offline — voice waits for LIVE',
+    }));
 
     if (!wasLive && isLive) {
       onStreamStarted(viewerCount);
@@ -2209,6 +2281,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       startFollowerPolling();
       startQuotaPolling();
       warmupElroySfx();
+      void unlockBrowserAudio();
       startStreamMonitoring();
       void pollStreamLive().then(() => {
         if (streamLiveRef.current) {
@@ -2284,6 +2357,16 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         <div style={{ color: '#00FF00', marginTop: '5px', fontSize: isActive ? '13px' : '16px' }}>
           Quota: {diagnostics.quota}
         </div>
+        {isActive ? (
+          <>
+            <div style={{ color: '#7DD3FC', marginTop: '6px', fontSize: '12px' }}>
+              Stream: {runtimeHud.stream}
+            </div>
+            <div style={{ color: '#FDE68A', marginTop: '4px', fontSize: '12px' }}>
+              TTS: {runtimeHud.tts}
+            </div>
+          </>
+        ) : null}
         {postUpdateCheck ? (
           <div style={{ color: '#FFE08A', marginTop: '6px', fontSize: isActive ? '12px' : '14px' }}>
             Verifying Brain / Voice / Sound after auto-update…
