@@ -187,37 +187,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     || searchParams.get('secret')?.trim()
     || '';
 
-  useEffect(() => {
-    let resolved = controlSecretFromPath || controlSecretFromQuery;
-    let source: 'path' | 'query' | 'storage' | 'none' = 'none';
-
-    if (controlSecretFromPath) {
-      source = 'path';
-    } else if (controlSecretFromQuery) {
-      source = 'query';
-    } else {
-      try {
-        resolved = sessionStorage.getItem(CONTROL_SECRET_STORAGE_KEY)?.trim() || '';
-        if (resolved) source = 'storage';
-      } catch {
-        resolved = '';
-      }
-    }
-
-    if (resolved) {
-      try {
-        sessionStorage.setItem(CONTROL_SECRET_STORAGE_KEY, resolved);
-      } catch {
-        /* ignore */
-      }
-    }
-
-    controlSecretRef.current = resolved;
-    setResolvedControlSecret(resolved);
-    setOverlayAuthSource(source);
-    setControlSecretReady(true);
-  }, [controlSecretFromPath, controlSecretFromQuery]);
-
   const controlHeaders = useCallback((extra: Record<string, string> = {}): Record<string, string> => {
     return controlAuthHeaders(controlSecretRef.current, extra);
   }, []);
@@ -237,7 +206,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   }, []);
 
   useEffect(() => {
-    if (!controlSecretReady) return;
+    let cancelled = false;
 
     void (async () => {
       try {
@@ -246,50 +215,80 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         const authRequired = statusData.configured === true;
 
         if (!authRequired) {
-          setOverlayAuthStatus('open');
+          if (!cancelled) {
+            setOverlayAuthStatus('open');
+            setControlSecretReady(true);
+          }
           return;
         }
 
-        let secret = resolvedControlSecret.trim();
-        if (!secret) {
-          setOverlayAuthStatus('missing');
+        let stored = '';
+        try {
+          stored = sessionStorage.getItem(CONTROL_SECRET_STORAGE_KEY)?.trim() || '';
+        } catch {
+          stored = '';
+        }
+
+        const candidates: Array<{ secret: string; source: 'path' | 'query' | 'storage' }> = [];
+        if (controlSecretFromPath) {
+          candidates.push({ secret: controlSecretFromPath, source: 'path' });
+        }
+        if (controlSecretFromQuery && controlSecretFromQuery !== controlSecretFromPath) {
+          candidates.push({ secret: controlSecretFromQuery, source: 'query' });
+        }
+        if (stored && !candidates.some((item) => item.secret === stored)) {
+          candidates.push({ secret: stored, source: 'storage' });
+        }
+
+        if (!candidates.length) {
+          if (!cancelled) {
+            setOverlayAuthStatus('missing');
+            setControlSecretReady(true);
+          }
           return;
         }
 
-        let ok = await verifyOverlaySecret(secret);
-        if (!ok) {
+        for (const { secret, source } of candidates) {
+          const ok = await verifyOverlaySecret(secret);
+          if (cancelled) return;
+          if (!ok) continue;
+
+          controlSecretRef.current = secret;
+          setResolvedControlSecret(secret);
+          setOverlayAuthSource(source);
+          setOverlayAuthStatus('ok');
+          setControlSecretReady(true);
           try {
-            const stored = sessionStorage.getItem(CONTROL_SECRET_STORAGE_KEY)?.trim() || '';
-            if (stored && stored !== secret) {
-              ok = await verifyOverlaySecret(stored);
-              if (ok) {
-                secret = stored;
-                controlSecretRef.current = stored;
-                setResolvedControlSecret(stored);
-                setOverlayAuthSource('storage');
-              }
-            }
+            sessionStorage.setItem(CONTROL_SECRET_STORAGE_KEY, secret);
           } catch {
             /* ignore */
           }
-        }
-
-        if (ok) {
-          setOverlayAuthStatus('ok');
           return;
         }
 
-        try {
-          sessionStorage.removeItem(CONTROL_SECRET_STORAGE_KEY);
-        } catch {
-          /* ignore */
+        if (!cancelled) {
+          try {
+            sessionStorage.removeItem(CONTROL_SECRET_STORAGE_KEY);
+          } catch {
+            /* ignore */
+          }
+          controlSecretRef.current = '';
+          setResolvedControlSecret('');
+          setOverlayAuthStatus('rejected');
+          setControlSecretReady(true);
         }
-        setOverlayAuthStatus('rejected');
       } catch {
-        setOverlayAuthStatus(resolvedControlSecret ? 'rejected' : 'missing');
+        if (!cancelled) {
+          setOverlayAuthStatus('rejected');
+          setControlSecretReady(true);
+        }
       }
     })();
-  }, [controlSecretReady, resolvedControlSecret, verifyOverlaySecret]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [controlSecretFromPath, controlSecretFromQuery, verifyOverlaySecret]);
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
