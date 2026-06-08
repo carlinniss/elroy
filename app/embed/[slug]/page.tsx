@@ -1,11 +1,12 @@
-'use client';
-
-import { useParams } from 'next/navigation';
 import { BongOverlay } from '@/app/bong-overlay';
 
-/** OBS browser source — secret in URL path (same pattern as /control/slug). */
-export default function EmbedOverlayPage() {
-  const params = useParams<{ slug: string }>();
-  const slug = typeof params.slug === 'string' ? decodeURIComponent(params.slug) : '';
-  return <BongOverlay initialControlSecret={slug} />;
+type Props = {
+  params: Promise<{ slug: string }>;
+};
+
+/** OBS overlay — secret in path (same as /control/slug). Server passes slug on first paint. */
+export default async function EmbedOverlayPage({ params }: Props) {
+  const { slug } = await params;
+  const secret = decodeURIComponent(slug).trim();
+  return <BongOverlay initialControlSecret={secret} />;
 }

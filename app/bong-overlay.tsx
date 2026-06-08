@@ -20,6 +20,7 @@ import {
   MAX_VOICE_REPLY_CHARS,
 } from '@/lib/chat-reply';
 import type { UserMemoryEvent } from '@/lib/user-memory';
+import { controlAuthHeaders } from '@/lib/control-auth';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
 const CONTROL_SECRET_STORAGE_KEY = 'elroy-control-secret';
@@ -59,6 +60,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   });
   const [postUpdateCheck, setPostUpdateCheck] = useState(false);
   const [overlayAuthStatus, setOverlayAuthStatus] = useState<'checking' | 'missing' | 'rejected' | 'ok' | 'open'>('checking');
+  const [overlayAuthSource, setOverlayAuthSource] = useState<'path' | 'query' | 'storage' | 'none'>('none');
 
   const DEFAULT_VOLUME = 0.85;
   const clientRef = useRef<tmi.Client | null>(null);
@@ -178,15 +180,29 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const bundledBuildIdRef = useRef(process.env.NEXT_PUBLIC_BUILD_ID || 'dev');
   const sfxUrlCacheRef = useRef<Map<string, string>>(new Map());
 
-  const controlSecretFromUrl =
-    initialControlSecret.trim()
-    || searchParams.get('controlKey')?.trim()
+  const controlSecretFromPath = initialControlSecret.trim();
+  const controlSecretFromQuery =
+    searchParams.get('controlKey')?.trim()
     || searchParams.get('key')?.trim()
     || searchParams.get('secret')?.trim()
     || '';
 
   useEffect(() => {
-    let resolved = controlSecretFromUrl;
+    let resolved = controlSecretFromPath || controlSecretFromQuery;
+    let source: 'path' | 'query' | 'storage' | 'none' = 'none';
+
+    if (controlSecretFromPath) {
+      source = 'path';
+    } else if (controlSecretFromQuery) {
+      source = 'query';
+    } else {
+      try {
+        resolved = sessionStorage.getItem(CONTROL_SECRET_STORAGE_KEY)?.trim() || '';
+        if (resolved) source = 'storage';
+      } catch {
+        resolved = '';
+      }
+    }
 
     if (resolved) {
       try {
@@ -194,21 +210,30 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       } catch {
         /* ignore */
       }
-    } else {
-      try {
-        resolved = sessionStorage.getItem(CONTROL_SECRET_STORAGE_KEY)?.trim() || '';
-      } catch {
-        resolved = '';
-      }
     }
+
     controlSecretRef.current = resolved;
     setResolvedControlSecret(resolved);
+    setOverlayAuthSource(source);
     setControlSecretReady(true);
-  }, [controlSecretFromUrl]);
+  }, [controlSecretFromPath, controlSecretFromQuery]);
 
   const controlHeaders = useCallback((extra: Record<string, string> = {}): Record<string, string> => {
-    const secret = controlSecretRef.current;
-    return secret ? { ...extra, Authorization: `Bearer ${secret}` } : extra;
+    return controlAuthHeaders(controlSecretRef.current, extra);
+  }, []);
+
+  const verifyOverlaySecret = useCallback(async (candidate: string) => {
+    const trimmed = candidate.trim();
+    if (!trimmed) return false;
+    try {
+      const res = await fetch('/api/control/verify', {
+        headers: controlAuthHeaders(trimmed),
+        cache: 'no-store',
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }, []);
 
   useEffect(() => {
@@ -225,30 +250,46 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
           return;
         }
 
-        if (!resolvedControlSecret) {
+        let secret = resolvedControlSecret.trim();
+        if (!secret) {
           setOverlayAuthStatus('missing');
           return;
         }
 
-        const verifyRes = await fetch('/api/control/verify', {
-          headers: controlHeaders(),
-          cache: 'no-store',
-        });
-        if (verifyRes.ok) {
-          setOverlayAuthStatus('ok');
-        } else {
+        let ok = await verifyOverlaySecret(secret);
+        if (!ok) {
           try {
-            sessionStorage.removeItem(CONTROL_SECRET_STORAGE_KEY);
+            const stored = sessionStorage.getItem(CONTROL_SECRET_STORAGE_KEY)?.trim() || '';
+            if (stored && stored !== secret) {
+              ok = await verifyOverlaySecret(stored);
+              if (ok) {
+                secret = stored;
+                controlSecretRef.current = stored;
+                setResolvedControlSecret(stored);
+                setOverlayAuthSource('storage');
+              }
+            }
           } catch {
             /* ignore */
           }
-          setOverlayAuthStatus('rejected');
         }
+
+        if (ok) {
+          setOverlayAuthStatus('ok');
+          return;
+        }
+
+        try {
+          sessionStorage.removeItem(CONTROL_SECRET_STORAGE_KEY);
+        } catch {
+          /* ignore */
+        }
+        setOverlayAuthStatus('rejected');
       } catch {
         setOverlayAuthStatus(resolvedControlSecret ? 'rejected' : 'missing');
       }
     })();
-  }, [controlSecretReady, resolvedControlSecret, controlHeaders]);
+  }, [controlSecretReady, resolvedControlSecret, verifyOverlaySecret]);
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
@@ -808,9 +849,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   }, [applyVoiceQuotaTier, controlHeaders]);
 
   useEffect(() => {
-    if (!controlSecretReady) return;
+    if (!controlSecretReady || overlayAuthStatus !== 'ok' && overlayAuthStatus !== 'open') return;
     void runDiagnostics();
-  }, [controlSecretReady, runDiagnostics]);
+  }, [controlSecretReady, overlayAuthStatus, resolvedControlSecret, runDiagnostics]);
   useEffect(() => { dingEnabledRef.current = isDingOn; }, [isDingOn]);
   useEffect(() => { voiceEnabledRef.current = isVoiceOn; }, [isVoiceOn]);
   useEffect(() => {
@@ -2257,14 +2298,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         ) : null}
         {overlayAuthStatus === 'rejected' ? (
           <div style={{ color: '#FFB4B4', marginTop: '8px', fontSize: isActive ? '12px' : '14px', lineHeight: 1.45 }}>
-            Control key rejected — <code style={{ color: '#FFE08A' }}>controlKey</code> in the URL does not match{' '}
-            <code style={{ color: '#FFE08A' }}>ELROY_CONTROL_SECRET</code> on Vercel. Copy the exact value from Vercel env vars,
-            update the browser source URL, then <strong>redeploy</strong> if you changed the env var.
+            Control key rejected — must match <code style={{ color: '#FFE08A' }}>ELROY_CONTROL_SECRET</code> in Vercel.
+            Use the exact same slug as <code style={{ color: '#FFE08A' }}>/control/YOUR_SECRET</code> at{' '}
+            <code style={{ color: '#FFE08A' }}>/embed/YOUR_SECRET</code>, or open control in this browser first.
           </div>
         ) : null}
         {overlayAuthStatus === 'ok' ? (
           <div style={{ color: '#8AE68A', marginTop: '6px', fontSize: isActive ? '12px' : '14px' }}>
-            Overlay authorized
+            Overlay authorized{overlayAuthSource !== 'none' ? ` (${overlayAuthSource})` : ''}
           </div>
         ) : null}
         <div style={{ color: '#B794F6', marginTop: isActive ? '6px' : '8px', fontSize: isActive ? '12px' : '14px' }}>
