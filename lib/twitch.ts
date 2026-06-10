@@ -2,8 +2,20 @@ const TWITCH_API = 'https://api.twitch.tv/helix';
 
 let appTokenCache: { token: string; expiresAt: number } | null = null;
 
+/** Bare access token for Helix / validate (oauth: prefix optional in env). */
 export function normalizeToken(token: string) {
-  return token.replace(/^oauth:/i, '');
+  return token.trim().replace(/^oauth:/i, '');
+}
+
+/** IRC password for tmi.js — adds oauth: when env value omits it. */
+export function ircOAuthPassword(token: string) {
+  const bare = normalizeToken(token);
+  return bare ? `oauth:${bare}` : '';
+}
+
+export function readTwitchEnvToken(raw?: string) {
+  const trimmed = raw?.trim() || '';
+  return trimmed ? normalizeToken(trimmed) : '';
 }
 
 export const SHUT_ELROY_POWERUP_TITLE = /shut\s+elroy\s+up/i;
@@ -16,7 +28,8 @@ export function getBroadcasterLogin() {
 
 export function getTwitchCredentials() {
   const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL?.replace(/^#/, '').toLowerCase();
-  const token = process.env.TWITCH_BOT_OAUTH_TOKEN || process.env.TWITCH_OAUTH_TOKEN;
+  const token = readTwitchEnvToken(process.env.TWITCH_BOT_OAUTH_TOKEN)
+    || readTwitchEnvToken(process.env.TWITCH_OAUTH_TOKEN);
   const clientId = process.env.TWITCH_CLIENT_ID;
   if (!channel || !token) return null;
   return { channel, token, clientId: clientId ?? '' };
@@ -54,12 +67,13 @@ async function validateChannelToken(
   tokenSource: ValidatedUserCredentials['tokenSource'],
 ): Promise<ValidatedUserCredentials | null> {
   const channel = process.env.NEXT_PUBLIC_TWITCH_CHANNEL?.replace(/^#/, '').toLowerCase();
-  if (!channel || !token?.trim()) return null;
-  const validated = await validateOAuthToken(token);
+  const bareToken = readTwitchEnvToken(token);
+  if (!channel || !bareToken) return null;
+  const validated = await validateOAuthToken(bareToken);
   if (!validated?.clientId) return null;
   return {
     channel,
-    token,
+    token: bareToken,
     clientId: validated.clientId,
     userId: validated.userId,
     login: validated.login,
@@ -98,8 +112,8 @@ export async function getBroadcasterTwitchCredentials() {
 
 export async function resolveTwitchChatTokenCandidates(): Promise<TwitchChatTokenCandidate[]> {
   const candidates: TwitchChatTokenCandidate[] = [];
-  const botToken = process.env.TWITCH_BOT_OAUTH_TOKEN?.trim();
-  const broadcasterToken = process.env.TWITCH_OAUTH_TOKEN?.trim();
+  const botToken = readTwitchEnvToken(process.env.TWITCH_BOT_OAUTH_TOKEN);
+  const broadcasterToken = readTwitchEnvToken(process.env.TWITCH_OAUTH_TOKEN);
 
   if (botToken) {
     const validated = await validateOAuthToken(botToken);
@@ -174,8 +188,8 @@ export async function sendHelixChatMessage(message: string, candidate: TwitchCha
 
 export async function inspectTwitchChatSend(): Promise<TwitchChatSendStatus> {
   const broadcasterLogin = getBroadcasterLogin();
-  const hasBotToken = Boolean(process.env.TWITCH_BOT_OAUTH_TOKEN?.trim());
-  const hasBroadcasterToken = Boolean(process.env.TWITCH_OAUTH_TOKEN?.trim());
+  const hasBotToken = Boolean(readTwitchEnvToken(process.env.TWITCH_BOT_OAUTH_TOKEN));
+  const hasBroadcasterToken = Boolean(readTwitchEnvToken(process.env.TWITCH_OAUTH_TOKEN));
   const empty = {
     hasBotToken,
     hasBroadcasterToken,
@@ -196,7 +210,7 @@ export async function inspectTwitchChatSend(): Promise<TwitchChatSendStatus> {
       ...empty,
       ok: false,
       error: 'No Twitch chat token on server.',
-      hint: 'Add TWITCH_BOT_OAUTH_TOKEN in Vercel (generate at twitchapps.com/tmi).',
+      hint: 'Add TWITCH_BOT_OAUTH_TOKEN in Vercel (paste token only — oauth: prefix optional).',
     };
   }
 
@@ -375,7 +389,7 @@ export async function fetchShutElroyPowerUpId(): Promise<ShutElroyPowerUpLookup>
   if (!creds) {
     return debug({
       error: 'TWITCH_OAUTH_TOKEN is not set on the server. Add your broadcaster token to Vercel (not the bot token).',
-      hint: 'Vercel → Settings → Environment Variables → TWITCH_OAUTH_TOKEN = oauth:... from dtldabs with bits:read',
+      hint: 'Vercel → Settings → Environment Variables → TWITCH_OAUTH_TOKEN = token from dtldabs with bits:read (oauth: optional).',
     });
   }
 

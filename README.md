@@ -38,14 +38,17 @@ Bong Bot is a high-performance, AI-driven Twitch overlay and chat assistant. Elr
     NEXT_PUBLIC_TWITCH_CHANNEL=your_channel_name
     ELROY_CONTROL_SECRET=your_long_random_overlay_secret
     TWITCH_BOT_USERNAME=your_bot_login
-    TWITCH_BOT_OAUTH_TOKEN=oauth:your_bot_token_here
-    TWITCH_OAUTH_TOKEN=oauth:your_broadcaster_or_mod_token_here
+    TWITCH_BOT_OAUTH_TOKEN=your_bot_token_here
+    TWITCH_OAUTH_TOKEN=your_broadcaster_or_mod_token_here
     GOOGLE_GENERATIVE_AI_API_KEY=your_google_ai_studio_key
     ELEVENLABS_API_KEY=your_elevenlabs_key
     ELEVENLABS_VOICE_ID=pNInz6obpgDQGcFmaJgB
     ```
 
 ## ⚙️ Configuration Notes
+
+### Twitch tokens
+Paste the access token string only for `TWITCH_BOT_OAUTH_TOKEN` and `TWITCH_OAUTH_TOKEN` — the `oauth:` prefix is optional (we add it when needed for IRC).
 
 ### API Billing (Critical)
 Elroy uses **Google Gemini** for chat and `!aboutme` only. **Trivia is 100% curated static questions** (no Gemini) — see `lib/trivia-bank.ts`. Voice uses a separate **ElevenLabs** quota (`!quota`).

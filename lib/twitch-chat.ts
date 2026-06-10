@@ -1,14 +1,10 @@
 import tmi from 'tmi.js';
 import {
+  ircOAuthPassword,
   resolveTwitchChatTokenCandidates,
   sendHelixChatMessage,
   type TwitchChatTokenCandidate,
 } from '@/lib/twitch';
-
-function oauthPassword(token: string) {
-  const trimmed = token.trim();
-  return /^oauth:/i.test(trimmed) ? trimmed : `oauth:${trimmed}`;
-}
 
 const IRC_CONNECT_TIMEOUT_MS = 12_000;
 
@@ -87,7 +83,7 @@ async function connectIrcClient(candidate: TwitchChatTokenCandidate) {
         connection: { reconnect: true, secure: true },
         identity: {
           username: candidate.login,
-          password: oauthPassword(candidate.token),
+          password: ircOAuthPassword(candidate.token),
         },
         channels: [channel],
       });
