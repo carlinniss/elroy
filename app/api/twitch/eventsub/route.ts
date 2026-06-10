@@ -1,4 +1,5 @@
 import { getEventSubSecret, verifyEventSubSignature } from '@/lib/eventsub';
+import { recordChannelEvent } from '@/lib/channel-events';
 import { fetchShutElroyPowerUpId, SHUT_ELROY_POWERUP_TITLE } from '@/lib/twitch';
 import { recordShutElroyRedemption } from '@/lib/powerup-redemptions';
 
@@ -118,6 +119,131 @@ export async function POST(request: Request) {
           redeemedAt: new Date().toISOString(),
         });
       }
+    }
+
+    if (subType === 'channel.raid' && event) {
+      const raid = event as {
+        from_broadcaster_user_login?: string;
+        from_broadcaster_user_name?: string;
+        viewers?: number;
+      };
+      await recordChannelEvent(messageId, 'raid', {
+        login: raid.from_broadcaster_user_login ?? '',
+        displayName: raid.from_broadcaster_user_name ?? raid.from_broadcaster_user_login ?? '',
+        viewers: raid.viewers ?? 0,
+      });
+    }
+
+    if (subType === 'channel.follow' && event) {
+      const follow = event as { user_id?: string; user_login?: string; followed_at?: string };
+      await recordChannelEvent(messageId, 'follow', {
+        user_id: follow.user_id ?? '',
+        user_login: follow.user_login ?? '',
+        followed_at: follow.followed_at ?? '',
+      });
+    }
+
+    if (subType === 'channel.subscribe' && event) {
+      const sub = event as {
+        user_id?: string;
+        user_login?: string;
+        user_name?: string;
+        tier?: string;
+        is_gift?: boolean;
+        cumulative_months?: number;
+        streak_months?: number;
+      };
+      await recordChannelEvent(messageId, 'subscribe', {
+        user_id: sub.user_id ?? '',
+        user_login: sub.user_login ?? '',
+        user_name: sub.user_name ?? sub.user_login ?? '',
+        tier: sub.tier ?? '1000',
+        is_gift: Boolean(sub.is_gift),
+        cumulative_months: sub.cumulative_months ?? 1,
+        streak_months: sub.streak_months ?? 0,
+      });
+    }
+
+    if (subType === 'channel.subscription.gift' && event) {
+      const gift = event as {
+        user_id?: string;
+        user_login?: string;
+        user_name?: string;
+        total?: number;
+        tier?: string;
+        cumulative_total?: number;
+      };
+      await recordChannelEvent(messageId, 'subscription_gift', {
+        user_id: gift.user_id ?? '',
+        user_login: gift.user_login ?? '',
+        user_name: gift.user_name ?? gift.user_login ?? '',
+        total: gift.total ?? 1,
+        tier: gift.tier ?? '1000',
+        cumulative_total: gift.cumulative_total ?? gift.total ?? 1,
+      });
+    }
+
+    if (subType === 'channel.subscription.message' && event) {
+      const message = event as {
+        user_id?: string;
+        user_login?: string;
+        user_name?: string;
+        cumulative_months?: number;
+        streak_months?: number;
+        message?: { text?: string };
+        tier?: string;
+      };
+      await recordChannelEvent(messageId, 'subscription_message', {
+        user_id: message.user_id ?? '',
+        user_login: message.user_login ?? '',
+        user_name: message.user_name ?? message.user_login ?? '',
+        cumulative_months: message.cumulative_months ?? 1,
+        streak_months: message.streak_months ?? 0,
+        tier: message.tier ?? '1000',
+        text: message.message?.text ?? '',
+      });
+    }
+
+    if (subType === 'channel.cheer' && event) {
+      const cheer = event as {
+        user_id?: string;
+        user_login?: string;
+        user_name?: string;
+        bits?: number;
+        message?: string;
+      };
+      await recordChannelEvent(messageId, 'cheer', {
+        user_id: cheer.user_id ?? '',
+        user_login: cheer.user_login ?? '',
+        user_name: cheer.user_name ?? cheer.user_login ?? '',
+        bits: cheer.bits ?? 0,
+        message: cheer.message ?? '',
+      });
+    }
+
+    if (subType === 'channel.update' && event) {
+      const update = event as { title?: string; category_name?: string; category_id?: string };
+      await recordChannelEvent(messageId, 'channel_update', {
+        title: update.title ?? '',
+        game_name: update.category_name ?? '',
+        game_id: update.category_id ?? '',
+      });
+    }
+
+    if (subType === 'channel.poll.end' && event) {
+      const poll = event as {
+        id?: string;
+        title?: string;
+        winning_choice?: { title?: string; votes?: number };
+        choices?: Array<{ title?: string; votes?: number }>;
+      };
+      await recordChannelEvent(messageId, 'poll_end', {
+        poll_id: poll.id ?? '',
+        title: poll.title ?? '',
+        winner: poll.winning_choice?.title ?? '',
+        winner_votes: poll.winning_choice?.votes ?? 0,
+        choices: poll.choices ?? [],
+      });
     }
 
     return new Response(null, { status: 204 });

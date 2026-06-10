@@ -11,6 +11,7 @@ export type UserMemoryProfile = {
   firstSeenAt: number;
   lastSeenAt: number;
   mentionCount: number;
+  followedAt?: string;
   triviaWins: { cannabis: number; freaky: number; music90s: number };
   notes: string[];
   recentToElroy: string[];
@@ -19,9 +20,9 @@ export type UserMemoryProfile = {
 export type UserMemoryEvent =
   | { type: 'mention'; message?: string }
   | { type: 'trivia_win'; category: TriviaCategory; totalWins: number }
-  | { type: 'sub' }
+  | { type: 'sub'; tier?: string; months?: number; streakMonths?: number; isGift?: boolean }
   | { type: 'bits'; amount?: number }
-  | { type: 'follow' }
+  | { type: 'follow'; followedAt?: string }
   | { type: 'note'; text: string };
 
 const globalStore = globalThis as typeof globalThis & {
@@ -73,6 +74,18 @@ function pushRecentMessage(recent: string[], message: string) {
   return next.slice(0, MAX_RECENT_TO_ELROY);
 }
 
+function formatFollowTenureFromIso(followedAt: string) {
+  const ms = Date.now() - new Date(followedAt).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return 'recently';
+  const days = Math.floor(ms / 86_400_000);
+  if (days < 1) return 'less than a day';
+  if (days < 30) return `${days} day${days === 1 ? '' : 's'}`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} month${months === 1 ? '' : 's'}`;
+  const years = Math.floor(months / 12);
+  return `${years} year${years === 1 ? '' : 's'}`;
+}
+
 function applyEvent(profile: UserMemoryProfile, event: UserMemoryEvent): UserMemoryProfile {
   const now = Date.now();
   const next: UserMemoryProfile = {
@@ -101,9 +114,14 @@ function applyEvent(profile: UserMemoryProfile, event: UserMemoryEvent): UserMem
         `Won ${event.category} trivia (${event.totalWins} win${event.totalWins === 1 ? '' : 's'} in that category)`,
       );
       break;
-    case 'sub':
-      next.notes = pushUniqueNote(next.notes, 'Supported the stream with a sub.');
+    case 'sub': {
+      const tierLabel = event.tier === '3000' ? 'Tier 3' : event.tier === '2000' ? 'Tier 2' : 'sub';
+      const monthLine = event.months && event.months > 1 ? `${event.months}-month ` : '';
+      const streakLine = event.streakMonths && event.streakMonths > 1 ? ` (${event.streakMonths} streak)` : '';
+      const giftLine = event.isGift ? ' (gift sub)' : '';
+      next.notes = pushUniqueNote(next.notes, `Supported with a ${monthLine}${tierLabel}${giftLine}${streakLine}.`);
       break;
+    }
     case 'bits':
       next.notes = pushUniqueNote(
         next.notes,
@@ -113,7 +131,13 @@ function applyEvent(profile: UserMemoryProfile, event: UserMemoryEvent): UserMem
       );
       break;
     case 'follow':
-      next.notes = pushUniqueNote(next.notes, 'Followed the channel.');
+      if (event.followedAt) next.followedAt = event.followedAt;
+      next.notes = pushUniqueNote(
+        next.notes,
+        event.followedAt
+          ? `Followed the channel (${formatFollowTenureFromIso(event.followedAt)}).`
+          : 'Followed the channel.',
+      );
       break;
     case 'note':
       next.notes = pushUniqueNote(next.notes, event.text);
@@ -195,6 +219,10 @@ export function formatProfileFacts(profile: UserMemoryProfile): string {
     `- Trivia wins logged: cannabis ${profile.triviaWins.cannabis ?? 0}, freaky ${profile.triviaWins.freaky ?? 0}, music90s ${profile.triviaWins.music90s ?? 0}`,
   ];
 
+  if (profile.followedAt) {
+    lines.push(`- Twitch follow: since ${profile.followedAt} (${formatFollowTenureFromIso(profile.followedAt)} ago)`);
+  }
+
   if (profile.recentToElroy.length) {
     lines.push('- Recent things they said to me:');
     for (const message of profile.recentToElroy) {
@@ -212,17 +240,25 @@ export function formatProfileFacts(profile: UserMemoryProfile): string {
   return lines.join('\n');
 }
 
-export function buildAboutMePrompt(profile: UserMemoryProfile): string {
+export function buildAboutMePrompt(profile: UserMemoryProfile, followTenure?: string): string {
+  const followLine = followTenure
+    ? `\nIf relevant, you may mention they've been following for about ${followTenure}.`
+    : profile.followedAt
+      ? `\nIf relevant, mention how long they've been following based on the facts below.`
+      : '';
   return `A viewer named ${profile.displayName} (login: ${profile.login}) just used !aboutme in Twitch chat.
 
 Here is everything you currently know about them. Only reference facts from this list — do not invent details:
-${formatProfileFacts(profile)}
+${formatProfileFacts(profile)}${followLine}
 
 Tell them what you remember in your Elroy OG voice — direct, crusty, playful, like you've been watching them in chat. If the file is thin, be honest you're still learning them but mention what you do have. Chat-only reply, 3-4 sentences, under 480 characters.`;
 }
 
-export function buildAboutMeUnknownPrompt(username: string): string {
-  return `A viewer named ${username} used !aboutme but you have almost no file on them yet.
+export function buildAboutMeUnknownPrompt(username: string, followTenure?: string): string {
+  const followLine = followTenure
+    ? ` They have been following for about ${followTenure}, so mention that even though your file is thin.`
+    : '';
+  return `A viewer named ${username} used !aboutme but you have almost no file on them yet.${followLine}
 
 Tell them honestly you are still learning them — they should mention you, win trivia, sub, or run it up in chat so you can build a profile. Elroy OG voice, playful, 2-3 sentences, under 320 characters.`;
 }

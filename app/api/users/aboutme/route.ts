@@ -6,7 +6,9 @@ import {
   buildAboutMeUnknownPrompt,
   getUserMemoryProfile,
   profileHasMemory,
+  recordUserMemory,
 } from '@/lib/user-memory';
+import { getFollowInfo } from '@/lib/twitch-mod';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,11 +29,22 @@ export async function GET(request: Request) {
     }
 
     const profile = await getUserMemoryProfile(username);
-    const known = profileHasMemory(profile);
+    let enrichedProfile = profile;
+    const follow = await getFollowInfo(username);
+    if (follow?.followed_at && (!profile?.followedAt || profile.followedAt !== follow.followed_at)) {
+      enrichedProfile = await recordUserMemory(username, username, {
+        type: 'follow',
+        followedAt: follow.followed_at,
+      }) ?? profile;
+    } else if (follow?.followed_at && profile && !profile.followedAt) {
+      enrichedProfile = { ...profile, followedAt: follow.followed_at };
+    }
+
+    const known = profileHasMemory(enrichedProfile);
     const system = process.env.SYSTEM_PROMPT || 'You are Elroy, a wise, rhyming OG Twitch bot.';
-    const prompt = known && profile
-      ? buildAboutMePrompt(profile)
-      : buildAboutMeUnknownPrompt(username);
+    const prompt = known && enrichedProfile
+      ? buildAboutMePrompt(enrichedProfile, follow?.tenure)
+      : buildAboutMeUnknownPrompt(username, follow?.tenure);
 
     const { text } = await generateText({
       model: getGeminiModel(),

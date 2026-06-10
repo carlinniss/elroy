@@ -4,6 +4,7 @@ import {
   getAppAccessToken,
   getBroadcasterId,
   getBroadcasterTwitchCredentials,
+  getModTwitchCredentials,
   normalizeToken,
   resolveEventSubAppCredentials,
   twitchGet,
@@ -246,6 +247,162 @@ export async function ensureShutElroyRedemptionSubscription(): Promise<EnsureSub
     subscriptions,
     message: errors.length
       ? `Some subscriptions failed: ${errors.map((e) => `${e.type}: ${e.message}`).join('; ')}`
+      : undefined,
+  };
+}
+
+const CHANNEL_LIFECYCLE_SUBS: Array<{
+  type: string;
+  version: string;
+  buildCondition: (broadcasterId: string, moderatorId: string | null) => Record<string, string> | null;
+}> = [
+  {
+    type: 'channel.raid',
+    version: '1',
+    buildCondition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
+  },
+  {
+    type: 'channel.follow',
+    version: '2',
+    buildCondition: (broadcasterId, moderatorId) =>
+      moderatorId ? { broadcaster_user_id: broadcasterId, moderator_user_id: moderatorId } : null,
+  },
+  {
+    type: 'channel.subscribe',
+    version: '1',
+    buildCondition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
+  },
+  {
+    type: 'channel.subscription.gift',
+    version: '1',
+    buildCondition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
+  },
+  {
+    type: 'channel.subscription.message',
+    version: '1',
+    buildCondition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
+  },
+  {
+    type: 'channel.cheer',
+    version: '1',
+    buildCondition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
+  },
+  {
+    type: 'channel.update',
+    version: '2',
+    buildCondition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
+  },
+  {
+    type: 'channel.poll.end',
+    version: '1',
+    buildCondition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
+  },
+];
+
+export async function ensureChannelLifecycleSubscriptions(): Promise<EnsureSubscriptionResult> {
+  const secret = getEventSubSecret();
+  if (secret.length < 10) {
+    return {
+      ok: false,
+      status: 'error',
+      message: 'Set TWITCH_EVENTSUB_SECRET (10–100 chars) on Vercel for channel event webhooks.',
+    };
+  }
+
+  const appCredsResult = await resolveEventSubAppCredentials();
+  if ('error' in appCredsResult) {
+    return {
+      ok: false,
+      status: 'error',
+      message: appCredsResult.error,
+      hint: appCredsResult.hint,
+    };
+  }
+  const appCreds = appCredsResult;
+
+  const modCreds = await getModTwitchCredentials();
+  const broadcaster = await getBroadcasterTwitchCredentials();
+  const broadcasterLogin = modCreds?.broadcasterLogin || broadcaster?.channel;
+  const tokenForLookup = modCreds?.token || broadcaster?.token;
+  const clientIdForLookup = modCreds?.clientId || broadcaster?.clientId;
+
+  if (!broadcasterLogin || !tokenForLookup || !clientIdForLookup) {
+    return {
+      ok: false,
+      status: 'error',
+      message: 'Set TWITCH_BOT_OAUTH_TOKEN or TWITCH_OAUTH_TOKEN plus NEXT_PUBLIC_TWITCH_CHANNEL.',
+    };
+  }
+
+  let appToken: string;
+  try {
+    appToken = await getAppAccessToken(appCreds.clientId, appCreds.clientSecret);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'App access token failed';
+    return { ok: false, status: 'error', message };
+  }
+
+  const broadcasterId = modCreds?.broadcasterId
+    || await getBroadcasterId(broadcasterLogin, tokenForLookup, clientIdForLookup);
+  if (!broadcasterId) {
+    return { ok: false, status: 'error', message: 'Broadcaster ID lookup failed.' };
+  }
+
+  const moderatorId = modCreds?.moderatorId ?? null;
+  const callback = getEventSubCallbackUrl();
+
+  let existingSubs: ExistingSub[] = [];
+  try {
+    const existing = await twitchGet(
+      `/eventsub/subscriptions?status=enabled`,
+      appToken,
+      appCreds.clientId,
+    );
+    existingSubs = existing.data ?? [];
+  } catch {
+    /* continue */
+  }
+
+  const subscriptions = await Promise.all(
+    CHANNEL_LIFECYCLE_SUBS.map(async (spec) => {
+      const condition = spec.buildCondition(broadcasterId, moderatorId);
+      if (!condition) {
+        return { type: spec.type, status: 'error' as const, message: 'Moderator id required for follow events.' };
+      }
+      return ensureEventSubSubscription(
+        appToken,
+        appCreds.clientId,
+        callback,
+        secret,
+        spec.type,
+        spec.version,
+        condition,
+        existingSubs,
+      );
+    }),
+  );
+
+  const errors = subscriptions.filter((entry) => entry.status === 'error');
+  if (errors.length === subscriptions.length) {
+    return {
+      ok: false,
+      status: 'error',
+      message: errors[0]?.message || 'Channel EventSub subscription failed.',
+      callback,
+      subscriptions,
+    };
+  }
+
+  const created = subscriptions.some((entry) => entry.status === 'created');
+  const allExist = subscriptions.every((entry) => entry.status === 'exists');
+
+  return {
+    ok: true,
+    status: created ? 'created' : allExist ? 'exists' : 'partial',
+    callback,
+    subscriptions,
+    message: errors.length
+      ? `Some channel subscriptions failed: ${errors.map((entry) => `${entry.type}: ${entry.message}`).join('; ')}`
       : undefined,
   };
 }

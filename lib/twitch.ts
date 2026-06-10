@@ -355,9 +355,91 @@ export async function twitchGet(path: string, token: string, clientId: string) {
   return res.json();
 }
 
+export async function twitchPost(path: string, token: string, clientId: string, body: unknown) {
+  const res = await fetch(`${TWITCH_API}${path}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${normalizeToken(token)}`,
+      'Client-Id': clientId,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    /* ignore */
+  }
+  if (!res.ok) {
+    const message = typeof data === 'object' && data && 'message' in data
+      ? String((data as { message?: string }).message)
+      : text || `Twitch API ${res.status}`;
+    throw new Error(message);
+  }
+  return data;
+}
+
 export async function getBroadcasterId(channel: string, token: string, clientId: string) {
   const users = await twitchGet(`/users?login=${encodeURIComponent(channel)}`, token, clientId);
   return users.data?.[0]?.id as string | undefined;
+}
+
+export async function getUserIdByLogin(login: string, token: string, clientId: string) {
+  return getBroadcasterId(login.replace(/^@/, '').toLowerCase(), token, clientId);
+}
+
+export type ModTwitchCredentials = {
+  token: string;
+  clientId: string;
+  moderatorId: string;
+  moderatorLogin: string;
+  broadcasterId: string;
+  broadcasterLogin: string;
+};
+
+/** Mod-capable token: bot first, then broadcaster. */
+export async function getModTwitchCredentials(): Promise<ModTwitchCredentials | null> {
+  const broadcasterLogin = getBroadcasterLogin();
+  if (!broadcasterLogin) return null;
+
+  const candidates = await resolveTwitchChatTokenCandidates();
+  const broadcaster = await getBroadcasterTwitchCredentials();
+  const tokenCandidates: Array<{ token: string; clientId: string; userId: string; login: string }> = [];
+
+  for (const candidate of candidates) {
+    tokenCandidates.push({
+      token: candidate.token,
+      clientId: candidate.clientId,
+      userId: candidate.userId,
+      login: candidate.login,
+    });
+  }
+
+  if (broadcaster && !tokenCandidates.some((entry) => entry.userId === broadcaster.userId)) {
+    tokenCandidates.push({
+      token: broadcaster.token,
+      clientId: broadcaster.clientId,
+      userId: broadcaster.userId,
+      login: broadcaster.login,
+    });
+  }
+
+  for (const candidate of tokenCandidates) {
+    const broadcasterId = await getBroadcasterId(broadcasterLogin, candidate.token, candidate.clientId);
+    if (!broadcasterId) continue;
+    return {
+      token: candidate.token,
+      clientId: candidate.clientId,
+      moderatorId: candidate.userId,
+      moderatorLogin: candidate.login,
+      broadcasterId,
+      broadcasterLogin,
+    };
+  }
+
+  return null;
 }
 
 export type ShutElroyPowerUpLookup = {
@@ -450,6 +532,9 @@ export type StreamStatusResult = {
   viewer_count: number | null;
   source: 'twitch' | 'decapi';
   title?: string;
+  game_name?: string;
+  game_id?: string;
+  started_at?: string;
 };
 
 /** Helix live check — only needs Client ID + Secret (no user OAuth). */
@@ -473,6 +558,9 @@ export async function fetchStreamViaHelix(
     viewer_count: stream.viewer_count ?? 0,
     source: 'twitch',
     title: stream.title ?? '',
+    game_name: stream.game_name ?? '',
+    game_id: stream.game_id ?? '',
+    started_at: stream.started_at ?? '',
   };
 }
 

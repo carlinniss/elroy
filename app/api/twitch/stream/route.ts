@@ -25,6 +25,9 @@ export async function GET() {
         ...result,
         is_live: result.status === 'live',
         broadcaster_login: broadcasterLogin,
+        game_name: result.game_name ?? '',
+        game_id: result.game_id ?? '',
+        started_at: result.started_at ?? '',
       });
     }
   } catch (error: unknown) {

@@ -102,6 +102,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const lastElroyVoiceRef = useRef(0);
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const elroySpeakerLoginsRef = useRef<Set<string>>(new Set());
 
   const SHUT_UP_DURATION_MS = 8 * 60 * 1000;
   const POWERUP_MUTE_MS = 10 * 60 * 1000;
@@ -113,6 +114,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const FOLLOW_CELEBRATION_COOLDOWN_MS = 60_000;
   const JOIN_GREET_WARMUP_MS = 60_000;
   const FOLLOWER_POLL_MS = 45_000;
+  const CHANNEL_EVENTS_POLL_MS = 5_000;
   const STREAM_CHECKIN_MS = 15 * 60 * 1000;
   const STREAM_POLL_MS = 60_000;
   const TRIVIA_INTERVAL_MS = 10 * 60 * 1000;
@@ -159,6 +161,12 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const joinGreetWarmupUntilRef = useRef(0);
   const followersInitializedRef = useRef(false);
   const followerPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const channelEventsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastChannelEventPollRef = useRef(Date.now() - 120_000);
+  const processedChannelEventIdsRef = useRef<Set<string>>(new Set());
+  const recentCelebrationKeysRef = useRef<Map<string, number>>(new Map());
+  const streamTitleRef = useRef('');
+  const streamGameRef = useRef('');
   const streamCheckinRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const triviaPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -315,6 +323,39 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
+  const seedElroySpeakerLogins = useCallback(async (normalizedChannel: string) => {
+    const logins = new Set<string>([normalizedChannel]);
+    const envBotLogin = process.env.NEXT_PUBLIC_TWITCH_BOT_LOGIN?.trim().toLowerCase();
+    if (envBotLogin) logins.add(envBotLogin);
+
+    try {
+      const res = await fetch('/api/twitch/chat-status', {
+        headers: controlHeaders(),
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        const data = await res.json() as { tokenLogin?: string };
+        const tokenLogin = data.tokenLogin?.trim().toLowerCase();
+        if (tokenLogin) logins.add(tokenLogin);
+      }
+    } catch {
+      /* chat-status optional — channel login still ignored */
+    }
+
+    elroySpeakerLoginsRef.current = logins;
+  }, [controlHeaders]);
+
+  const isElroyChatSpeaker = useCallback((
+    userstate: tmi.ChatUserstate,
+    normalizedUser: string,
+    normalizedChannel: string,
+  ) => {
+    if (normalizedUser === normalizedChannel) return true;
+    if (elroySpeakerLoginsRef.current.has(normalizedUser)) return true;
+    if (userstate.badges?.bot === '1') return true;
+    return false;
+  }, []);
+
   /** "L Roy" / L-Roy / lroy (without "Elroy") — misname, gets roasted. */
   const misnamesElroyAsLRoy = (text: string) => {
     if (/\bl[\s.\-]?roy\b/i.test(text)) return true;
@@ -370,9 +411,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       });
       const data = await res.json();
       if (data.ok) {
-        console.info('EventSub power-up redemption listener:', data.status, data.callback);
+        console.info('EventSub listeners:', data.lifecycle?.status ?? data.power_up?.status, data.lifecycle?.callback ?? data.power_up?.callback);
       } else {
-        console.warn('EventSub power-up listener:', data.message || data.status, data.hint || '');
+        console.warn('EventSub listener setup:', data.lifecycle?.message || data.power_up?.message || data.lifecycle?.status || data.power_up?.status);
       }
     } catch (e) {
       console.warn('EventSub subscription failed', e);
@@ -567,6 +608,44 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       return false;
     }
   }, [controlHeaders]);
+
+  const postTwitchAnnounce = useCallback(async (
+    message: string,
+    color: 'primary' | 'blue' | 'green' | 'orange' | 'purple' = 'primary',
+  ) => {
+    const text = message.trim();
+    if (!text) return false;
+    try {
+      const res = await fetch('/api/twitch/announce', {
+        method: 'POST',
+        headers: controlHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ message: text, color }),
+      });
+      if (res.ok) {
+        setRuntimeHud((prev) => ({ ...prev, chat: 'announced' }));
+        return true;
+      }
+    } catch (error) {
+      console.warn('Twitch announce failed', error);
+    }
+    return sayChat(text);
+  }, [controlHeaders, sayChat]);
+
+  const shouldSkipDuplicateCelebration = useCallback((key: string, windowMs = 30_000) => {
+    const last = recentCelebrationKeysRef.current.get(key) ?? 0;
+    if (Date.now() - last < windowMs) return true;
+    recentCelebrationKeysRef.current.set(key, Date.now());
+    return false;
+  }, []);
+
+  const streamMetadataLine = useCallback(() => {
+    const title = streamTitleRef.current.trim();
+    const game = streamGameRef.current.trim();
+    if (title && game) return `Stream title: "${title}". Playing: ${game}.`;
+    if (title) return `Stream title: "${title}".`;
+    if (game) return `Currently playing: ${game}.`;
+    return '';
+  }, []);
 
   const stopMuteCountdown = useCallback(() => {
     if (muteCountdownRef.current) {
@@ -821,23 +900,31 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const fetchStreamStatus = useCallback(async () => {
     let streamStatus: 'live' | 'offline' | 'unknown' = 'unknown';
     let viewerCount: number | null = null;
+    let title = streamTitleRef.current;
+    let gameName = streamGameRef.current;
     try {
       const res = await fetch('/api/twitch/stream');
       const data = await res.json();
       if (res.ok && (data.status === 'live' || data.status === 'offline' || data.status === 'unknown')) {
         streamStatus = data.status;
         if (typeof data.viewer_count === 'number') viewerCount = data.viewer_count;
+        if (typeof data.title === 'string') title = data.title;
+        if (typeof data.game_name === 'string') gameName = data.game_name;
       } else if (res.ok && data.is_live) {
         streamStatus = 'live';
         if (typeof data.viewer_count === 'number') viewerCount = data.viewer_count;
+        if (typeof data.title === 'string') title = data.title;
+        if (typeof data.game_name === 'string') gameName = data.game_name;
       } else if (res.ok) {
         streamStatus = 'offline';
       }
     } catch (e) {
       console.warn('Stream status fetch failed', e);
     }
+    streamTitleRef.current = title;
+    streamGameRef.current = gameName;
     const isLive = streamStatus === 'live';
-    return { isLive, streamStatus, viewerCount };
+    return { isLive, streamStatus, viewerCount, title, gameName };
   }, []);
 
   const sampleSessionChat = useCallback((maxLines = 120) => {
@@ -853,8 +940,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       return "No one is chatting yet. Drop a longer, welcoming OG check-in and invite chat to ask a question.";
     }
     const lines = recent.map((entry) => `- ${entry.user}: ${entry.text}`).join("\n");
-    return `Use the recent Twitch chat for a topical comment (2-3 sentences). Reference the vibe from:\n${lines}\nDo not force a rhyme.`;
-  }, []);
+    return `Use the recent Twitch chat for a topical comment (2-3 sentences). Reference the vibe from:\n${lines}${streamMetadataLine() ? `\nStream context: ${streamMetadataLine()}` : ''}\nDo not force a rhyme.`;
+  }, [streamMetadataLine]);
 
   const runDiagnostics = useCallback(async (opts?: { afterDeploy?: boolean }) => {
     const afterDeploy = opts?.afterDeploy === true;
@@ -1030,8 +1117,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     const context = recent.length
       ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
       : '(no other recent lines)';
-    return `Someone brought you up in Twitch chat. ${user} said: "${message}"\n\nRecent chat:\n${context}\n\nReply in OG character — 2-3 sentences, enough personality to land the bit.`;
-  }, []);
+    return `Someone brought you up in Twitch chat. ${user} said: "${message}"\n\nRecent chat:\n${context}${streamMetadataLine() ? `\n\nStream context: ${streamMetadataLine()}` : ''}\n\nReply in OG character — 2-3 sentences, enough personality to land the bit.`;
+  }, [streamMetadataLine]);
 
   const buildLRoyRoastPrompt = useCallback((user: string, message: string) => {
     const recent = recentChatRef.current.slice(0, 6);
@@ -1064,6 +1151,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const buildSubPrompt = useCallback((user: string, details: string) =>
     `${user} just subscribed to the channel! ${details} One or two celebration sentences.`, []);
 
+  const buildRaidPrompt = useCallback((user: string, viewers: number) =>
+    `${user} just raided with ${viewers} viewer${viewers === 1 ? '' : 's'}! Welcome them hard — hype the raid, shout them out by name, OG energy.`, []);
+
   const buildBitsPrompt = useCallback((user: string, details: string) =>
     `${user} just cheered ${details} in chat! One or two thank-you sentences.`, []);
 
@@ -1091,13 +1181,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       viewerLine = 'Viewer count could not be verified. Do not say the stream or chat is offline — keep the energy up anyway.';
     }
 
-    return `10-minute stream check-in.\n${viewerLine}\n\nRecent chat (last ~20 minutes):\n${lines}\n\nWrite a chat check-in (2-3 sentences):\n- Mention viewer count only if provided above.\n- Optionally shout out ONE chatter by username from the list.`;
-  }, []);
+    return `10-minute stream check-in.\n${viewerLine}\n${streamMetadataLine() ? `${streamMetadataLine()}\n` : ''}\nRecent chat (last ~20 minutes):\n${lines}\n\nWrite a chat check-in (2-3 sentences):\n- Mention viewer count only if provided above.\n- You may reference the stream title or game if listed.\n- Optionally shout out ONE chatter by username from the list.`;
+  }, [streamMetadataLine]);
 
   const buildStreamGreetingPrompt = useCallback((viewerCount: number | null, cannabisFact: string) => {
     const viewers = viewerCount != null ? `About ${viewerCount} viewers are here.` : 'Stream just went live.';
-    return `The Twitch stream just went LIVE. ${viewers}\n\nGive a hype stream-start greeting with VOICE energy. You MUST open with exactly "I AM ALIVE!" as the first words, then welcome chat and weave in this cannabis fact naturally: "${cannabisFact}"\nKeep it fun, OG, and welcoming.`;
-  }, []);
+    const meta = streamMetadataLine();
+    return `The Twitch stream just went LIVE. ${viewers}${meta ? ` ${meta}` : ''}\n\nGive a hype stream-start greeting with VOICE energy. You MUST open with exactly "I AM ALIVE!" as the first words, then welcome chat and weave in this cannabis fact naturally: "${cannabisFact}"\nKeep it fun, OG, and welcoming.`;
+  }, [streamMetadataLine]);
 
   const buildStreamGoodbyePrompt = useCallback(() =>
     'The Twitch stream just ended. Give a warm, brief goodbye to chat (1-2 sentences). Chat-only, no voice.',
@@ -1344,8 +1435,12 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     syncMuteHud();
   }, [syncMuteHud]);
 
-  const canCelebrate = (kind: 'follow' | 'sub' | 'bits') => {
-    const cooldown = kind === 'follow' ? FOLLOW_CELEBRATION_COOLDOWN_MS : CELEBRATION_COOLDOWN_MS;
+  const canCelebrate = (kind: 'follow' | 'sub' | 'bits' | 'raid') => {
+    const cooldown = kind === 'follow'
+      ? FOLLOW_CELEBRATION_COOLDOWN_MS
+      : kind === 'raid'
+        ? 15_000
+        : CELEBRATION_COOLDOWN_MS;
     return Date.now() - lastCelebrationRef.current >= cooldown;
   };
 
@@ -1373,23 +1468,68 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     void queueBongLogic(buildJoinGreetingPrompt(username), username, { chatOnly: true });
   }, [buildJoinGreetingPrompt, persistStreamSession, queueBongLogic, shouldSkipJoinGreet]);
 
-  const celebrate = useCallback((kind: 'follow' | 'sub' | 'bits', username: string, extra = '', bitsAmount?: number) => {
+  const celebrate = useCallback((
+    kind: 'follow' | 'sub' | 'bits' | 'raid',
+    username: string,
+    extra = '',
+    bitsAmount?: number,
+    memoryEvent?: Record<string, unknown>,
+  ) => {
     if (!streamLiveRef.current || isFullyMuted() || !canCelebrate(kind)) return;
+    const dedupeKey = kind === 'bits'
+      ? `bits:${username.toLowerCase()}:${bitsAmount ?? 0}`
+      : `${kind}:${username.toLowerCase()}`;
+    if (shouldSkipDuplicateCelebration(dedupeKey, kind === 'raid' ? 60_000 : 30_000)) return;
+
     lastCelebrationRef.current = Date.now();
-    if (kind === 'follow') rememberUser(username, username, { type: 'follow' }, controlHeaders());
-    if (kind === 'sub') rememberUser(username, username, { type: 'sub' }, controlHeaders());
+    if (kind === 'follow') {
+      rememberUser(username, username, {
+        type: 'follow',
+        followedAt: typeof memoryEvent?.followed_at === 'string' ? memoryEvent.followed_at : undefined,
+      }, controlHeaders());
+    }
+    if (kind === 'sub') {
+      rememberUser(username, username, {
+        type: 'sub',
+        tier: typeof memoryEvent?.tier === 'string' ? memoryEvent.tier : undefined,
+        months: typeof memoryEvent?.cumulative_months === 'number' ? memoryEvent.cumulative_months : undefined,
+        streakMonths: typeof memoryEvent?.streak_months === 'number' ? memoryEvent.streak_months : undefined,
+        isGift: memoryEvent?.is_gift === true,
+      }, controlHeaders());
+    }
     if (kind === 'bits') rememberUser(username, username, { type: 'bits', amount: bitsAmount }, controlHeaders());
-    const sfxId = kind === 'sub' ? 'sub_fanfare' : kind === 'bits' ? 'bits_kaching' : 'follow_ding';
+
+    const sfxId = kind === 'sub' || kind === 'raid'
+      ? 'sub_fanfare'
+      : kind === 'bits'
+        ? 'bits_kaching'
+        : 'follow_ding';
     void playElroySfx(sfxId);
     const prompt =
       kind === 'follow' ? buildFollowPrompt(username)
       : kind === 'sub' ? buildSubPrompt(username, extra)
+      : kind === 'raid' ? buildRaidPrompt(username, Number(extra) || 0)
       : buildBitsPrompt(username, extra);
     void queueBongLogic(prompt, username, {
       forceVoice: true,
       voicePriority: kind === 'follow' ? 'normal' : 'celebration',
     });
-  }, [buildBitsPrompt, buildFollowPrompt, buildSubPrompt, controlHeaders, playElroySfx, queueBongLogic]);
+  }, [buildBitsPrompt, buildFollowPrompt, buildRaidPrompt, buildSubPrompt, controlHeaders, playElroySfx, queueBongLogic, shouldSkipDuplicateCelebration]);
+
+  const handleRaid = useCallback(async (login: string, viewers: number) => {
+    if (!login.trim()) return;
+    if (shouldSkipDuplicateCelebration(`raid:${login.toLowerCase()}`, 60_000)) return;
+    try {
+      await fetch('/api/twitch/shoutout', {
+        method: 'POST',
+        headers: controlHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ login }),
+      });
+    } catch (error) {
+      console.warn('Raid shoutout failed', error);
+    }
+    celebrate('raid', login, String(viewers));
+  }, [celebrate, controlHeaders, shouldSkipDuplicateCelebration]);
 
   const pollNewFollowers = useCallback(async () => {
     try {
@@ -1410,7 +1550,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       for (const follower of data.followers) {
         if (knownFollowerIdsRef.current.has(follower.user_id)) continue;
         knownFollowerIdsRef.current.add(follower.user_id);
-        celebrate('follow', follower.user_login);
+        celebrate('follow', follower.user_login, '', undefined, { followed_at: follower.followed_at });
       }
     } catch (e) {
       console.warn('Follower poll failed', e);
@@ -1432,6 +1572,107 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
     followersInitializedRef.current = false;
     knownFollowerIdsRef.current.clear();
+  }, []);
+
+  const pollChannelEvents = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/twitch/events?since=${lastChannelEventPollRef.current}`, {
+        headers: controlHeaders(),
+        cache: 'no-store',
+      });
+      const data = await res.json() as {
+        events?: Array<{ id: string; type: string; payload: Record<string, unknown> }>;
+        serverTime?: number;
+      };
+      if (!res.ok || !Array.isArray(data.events)) return;
+
+      for (const event of data.events) {
+        if (processedChannelEventIdsRef.current.has(event.id)) continue;
+        processedChannelEventIdsRef.current.add(event.id);
+        const payload = event.payload ?? {};
+
+        if (event.type === 'raid') {
+          const login = String(payload.login ?? '');
+          const viewers = Number(payload.viewers ?? 0);
+          void handleRaid(login, viewers);
+        } else if (event.type === 'follow') {
+          const login = String(payload.user_login ?? '');
+          const userId = String(payload.user_id ?? '');
+          if (userId) knownFollowerIdsRef.current.add(userId);
+          celebrate('follow', login, '', undefined, payload);
+        } else if (event.type === 'subscribe') {
+          const login = String(payload.user_login ?? '');
+          const months = Number(payload.cumulative_months ?? 1);
+          const tier = payload.tier === '3000' ? 'Tier 3' : payload.tier === '2000' ? 'Tier 2' : 'sub';
+          const detail = `${months} month${months === 1 ? '' : 's'} ${tier}${payload.is_gift ? ' (gift)' : ''}.`;
+          celebrate('sub', login, detail, undefined, payload);
+        } else if (event.type === 'subscription_gift') {
+          const login = String(payload.user_login ?? '');
+          const total = Number(payload.total ?? 1);
+          celebrate('sub', login, `They gifted ${total} sub${total === 1 ? '' : 's'}!`, undefined, payload);
+        } else if (event.type === 'subscription_message') {
+          const login = String(payload.user_login ?? '');
+          const months = Number(payload.cumulative_months ?? 1);
+          const text = String(payload.text ?? '').trim();
+          const detail = `${months} month resub${text ? ` — "${text}"` : ''}.`;
+          celebrate('sub', login, detail, undefined, payload);
+        } else if (event.type === 'cheer') {
+          const login = String(payload.user_login ?? '');
+          const bits = Number(payload.bits ?? 0);
+          const message = String(payload.message ?? '').trim();
+          const detail = message
+            ? `${bits} bits: "${message}"`
+            : `${bits} bits`;
+          celebrate('bits', login, detail, bits);
+        } else if (event.type === 'channel_update') {
+          const nextTitle = String(payload.title ?? '');
+          const nextGame = String(payload.game_name ?? '');
+          const titleChanged = nextTitle && nextTitle !== streamTitleRef.current;
+          const gameChanged = nextGame && nextGame !== streamGameRef.current;
+          streamTitleRef.current = nextTitle || streamTitleRef.current;
+          streamGameRef.current = nextGame || streamGameRef.current;
+          if ((titleChanged || gameChanged) && streamLiveRef.current) {
+            void postTwitchAnnounce(
+              titleChanged && gameChanged
+                ? `📺 Now streaming: "${nextTitle}" — playing ${nextGame}`
+                : titleChanged
+                  ? `📺 New title: "${nextTitle}"`
+                  : `🎮 Now playing: ${nextGame}`,
+              'blue',
+            );
+          }
+        } else if (event.type === 'poll_end') {
+          const title = String(payload.title ?? 'Poll');
+          const winner = String(payload.winner ?? 'Nobody');
+          void postTwitchAnnounce(`📊 Poll "${title}" ended — winner: ${winner}`, 'purple');
+        }
+      }
+
+      if (typeof data.serverTime === 'number') {
+        lastChannelEventPollRef.current = data.serverTime;
+      } else {
+        lastChannelEventPollRef.current = Date.now();
+      }
+    } catch (error) {
+      console.warn('Channel events poll failed', error);
+    }
+  }, [celebrate, controlHeaders, handleRaid, postTwitchAnnounce]);
+
+  const startChannelEventPolling = useCallback(() => {
+    if (channelEventsPollRef.current) return;
+    lastChannelEventPollRef.current = Date.now() - 120_000;
+    void pollChannelEvents();
+    channelEventsPollRef.current = setInterval(() => {
+      void pollChannelEvents();
+    }, CHANNEL_EVENTS_POLL_MS);
+  }, [pollChannelEvents]);
+
+  const stopChannelEventPolling = useCallback(() => {
+    if (channelEventsPollRef.current) {
+      clearInterval(channelEventsPollRef.current);
+      channelEventsPollRef.current = null;
+    }
+    processedChannelEventIdsRef.current.clear();
   }, []);
 
   const onStreamStarted = useCallback((viewerCount: number | null) => {
@@ -1469,13 +1710,16 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
   const pollStreamLive = useCallback(async () => {
     const wasLive = streamLiveRef.current;
-    const { isLive, viewerCount } = await fetchStreamStatus();
+    const { isLive, viewerCount, title, gameName } = await fetchStreamStatus();
     streamLiveRef.current = isLive;
+    const metaBits = [
+      isLive ? `LIVE${viewerCount != null ? ` (${viewerCount})` : ''}` : 'offline — voice waits for LIVE',
+      title ? `"${title}"` : '',
+      gameName || '',
+    ].filter(Boolean);
     setRuntimeHud((prev) => ({
       ...prev,
-      stream: isLive
-        ? `LIVE${viewerCount != null ? ` (${viewerCount})` : ''}`
-        : 'offline — voice waits for LIVE',
+      stream: metaBits.join(' · '),
     }));
 
     if (!wasLive && isLive) {
@@ -1491,10 +1735,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     if (Date.now() - active.askedAt < TRIVIA_ANSWER_WINDOW_MS) return;
 
     activeTriviaRef.current = null;
-    void sayChat(
+    void postTwitchAnnounce(
       `⏰ Trivia time's up! Nobody got it — the answer was ${active.displayAnswer}.`,
+      'purple',
     );
-  }, [sayChat]);
+  }, [postTwitchAnnounce]);
 
   const announceTriviaCountdown = useCallback(() => {
     const active = activeTriviaRef.current;
@@ -1519,10 +1764,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         maxLength: 500 - countdownPrefix.length,
       },
     );
-    void sayChat(
+    void postTwitchAnnounce(
       `⏳ ${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} left! ${hint}`,
+      'primary',
     );
-  }, [sayChat]);
+  }, [postTwitchAnnounce]);
 
   const askCannabisTrivia = useCallback(async () => {
     if (isFullyMuted() || !streamLiveRef.current) return;
@@ -1588,13 +1834,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       };
 
       const roundPoints = Math.max(1, Number(picked.points) || 1);
-      void sayChat(
+      void postTwitchAnnounce(
         `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer gets ${roundPoints} point${roundPoints === 1 ? '' : 's'}!`,
+        'orange',
       );
     } finally {
       triviaAskInFlightRef.current = false;
     }
-  }, [controlHeaders, persistStreamSession, sayChat]);
+  }, [controlHeaders, persistStreamSession, postTwitchAnnounce]);
 
   const runTriviaCycle = useCallback(() => {
     if (!streamLiveRef.current || isFullyMuted()) return;
@@ -1604,6 +1851,72 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       void askCannabisTrivia();
     }
   }, [announceTriviaCountdown, askCannabisTrivia, expireTriviaIfNeeded]);
+
+  const announceStreamMetadata = useCallback(async (username?: string) => {
+    try {
+      const res = await fetch('/api/twitch/channel', { headers: controlHeaders() });
+      const data = await res.json() as { title?: string; game_name?: string };
+      if (!res.ok) throw new Error('metadata unavailable');
+      streamTitleRef.current = data.title ?? streamTitleRef.current;
+      streamGameRef.current = data.game_name ?? streamGameRef.current;
+      const title = data.title?.trim() || 'Untitled stream';
+      const game = data.game_name?.trim() || 'something mysterious';
+      const line = username
+        ? `@${username} we're on "${title}" playing ${game}.`
+        : `Currently on "${title}" playing ${game}.`;
+      await postTwitchAnnounce(line, 'blue');
+    } catch (error) {
+      console.warn('Stream metadata announce failed', error);
+      const fallback = streamMetadataLine();
+      if (fallback) {
+        await sayChat(username ? `@${username} ${fallback}` : fallback);
+      } else if (username) {
+        await sayChat(`@${username} stream metadata unavailable right now.`);
+      }
+    }
+  }, [controlHeaders, postTwitchAnnounce, sayChat, streamMetadataLine]);
+
+  const handleClipCommand = useCallback(async (username: string) => {
+    try {
+      const res = await fetch('/api/twitch/clip', {
+        method: 'POST',
+        headers: controlHeaders(),
+      });
+      const data = await res.json() as { url?: string; error?: string };
+      if (!res.ok || !data.url) throw new Error(data.error || 'Clip failed');
+      await postTwitchAnnounce(`🎬 Clip that! ${data.url}`, 'green');
+    } catch (error) {
+      console.warn('Clip command failed', error);
+      await sayChat(`@${username} clip failed — make sure we're live and Elroy has clips:edit.`);
+    }
+  }, [controlHeaders, postTwitchAnnounce, sayChat]);
+
+  const handlePollCommand = useCallback(async (username: string, raw: string, isMod: boolean) => {
+    if (!isMod) {
+      await sayChat(`@${username} mods only — !poll Question? | Option A | Option B`);
+      return;
+    }
+    const body = raw.replace(/^!poll\s+/i, '').trim();
+    const parts = body.split('|').map((part) => part.trim()).filter(Boolean);
+    if (parts.length < 3) {
+      await sayChat(`@${username} use !poll Question? | Option A | Option B [| Option C]`);
+      return;
+    }
+    const [title, ...choices] = parts;
+    try {
+      const res = await fetch('/api/twitch/poll', {
+        method: 'POST',
+        headers: controlHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ title, choices, duration: 90 }),
+      });
+      const data = await res.json() as { error?: string };
+      if (!res.ok) throw new Error(data.error || 'Poll failed');
+      await postTwitchAnnounce(`📊 Poll live: ${title}`, 'purple');
+    } catch (error) {
+      console.warn('Poll command failed', error);
+      await sayChat(`@${username} poll failed — need channel:manage:polls on the bot token.`);
+    }
+  }, [controlHeaders, postTwitchAnnounce, sayChat]);
 
   const commentOnSpotifyTrack = useCallback((
     track: SpotifyTrackSnapshot,
@@ -1947,6 +2260,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
     const lower = message.toLowerCase();
     const looksLikeSongQuestion = /\b(now\s+playing|what('?s)?\s+playing|playing\s+now|song\s+playing|what\s+song|what\s+track|current\s+song|current\s+track|what\s+music|what\s+music\s+is)\b/.test(lower);
+    const looksLikeStreamQuestion = /\b(what('?s)?\s+(the\s+)?(title|stream|game|category)|what\s+are\s+we\s+playing|what\s+game|what\s+category)\b/.test(lower);
+    if (!isSilenced() && looksLikeStreamQuestion) {
+      void announceStreamMetadata(username);
+      return;
+    }
     if (!isSilenced() && looksLikeSongQuestion) {
       void requestSpotifyComment(username);
       return;
@@ -1958,7 +2276,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       return;
     }
     void queueBongLogic(buildMentionPrompt(username, message), username);
-  }, [buildComebackPrompt, buildMentionPrompt, controlHeaders, queueBongLogic, requestSpotifyComment]);
+  }, [announceStreamMetadata, buildComebackPrompt, buildMentionPrompt, controlHeaders, queueBongLogic, requestSpotifyComment]);
 
   const handleLRoyMisname = useCallback((username: string, displayName: string, message: string) => {
     if (isFullyMuted()) return;
@@ -2094,13 +2412,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       clientRef.current = null;
     }
     stopFollowerPolling();
+    stopChannelEventPolling();
     stopPowerupRedemptionPolling();
     stopQuotaPolling();
     stopStreamMonitoring();
     stopMuteCountdown();
     isActiveRef.current = false;
     setIsActive(false);
-  }, [sayChat, stopFollowerPolling, stopPowerupRedemptionPolling, stopQuotaPolling, stopStreamMonitoring, stopMuteCountdown]);
+  }, [sayChat, stopChannelEventPolling, stopFollowerPolling, stopPowerupRedemptionPolling, stopQuotaPolling, stopStreamMonitoring, stopMuteCountdown]);
 
   const stopBot = useCallback(async (announceUser?: string) => {
     try {
@@ -2146,6 +2465,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
     const chan = process.env.NEXT_PUBLIC_TWITCH_CHANNEL!;
     const normalizedChannel = chan.toLowerCase().replace(/^#/, '');
+    await seedElroySpeakerLogins(normalizedChannel);
     chatMessageCountRef.current = 0;
     setRuntimeHud((prev) => ({ ...prev, irc: 'connecting…' }));
     const client = new tmi.Client({
@@ -2168,32 +2488,33 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       const normalizedUser = username.toLowerCase();
       const isBroadcaster = normalizedUser === normalizedChannel;
 
+      if (isElroyChatSpeaker(t, normalizedUser, normalizedChannel)) return;
+
       if (isShutElroyPowerUpRedemption(m, t)) {
         enterFullMute(username);
         return;
       }
 
       const isWizebot = normalizedUser === 'wizebot';
-      const isBotAccount = normalizedUser === normalizedChannel;
 
       if (!m.startsWith('!')) {
-        if (!isBotAccount && !isWizebot) {
+        if (!isWizebot) {
           tryCompleteDareRitual(username, displayName, m);
         }
 
-        if (!isBotAccount && !isWizebot && tryRoastTriviaCheat(username, displayName, m)) {
+        if (!isWizebot && tryRoastTriviaCheat(username, displayName, m)) {
           rememberChatLine(username, m);
           return;
         }
 
-        if (!isBotAccount && !isWizebot && tryHandleTriviaAnswer(username, m)) {
+        if (!isWizebot && tryHandleTriviaAnswer(username, m)) {
           rememberChatLine(username, m);
           return;
         }
 
         rememberChatLine(username, m);
 
-        if (!isBotAccount && !isWizebot) {
+        if (!isWizebot) {
           if (isShutUpCommand(m)) {
             enterSilence();
             return;
@@ -2233,6 +2554,18 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       if (lowerCmd === '!np' || lowerCmd === '!nowplaying' || lowerCmd === '!song') {
         if (isFullyMuted()) return;
         return void requestSpotifyComment(username);
+      }
+      if (lowerCmd === '!clip' || lowerCmd === '!clipthat') {
+        if (isFullyMuted()) return;
+        return void handleClipCommand(username);
+      }
+      if (lowerCmd.startsWith('!poll')) {
+        if (isFullyMuted()) return;
+        return void handlePollCommand(username, m, t.mod === true || isBroadcaster);
+      }
+      if (lowerCmd === '!stream' || lowerCmd === '!title' || lowerCmd === '!game' || lowerCmd === '!category') {
+        if (isFullyMuted()) return;
+        return void announceStreamMetadata(username);
       }
       if (lowerCmd === '!bj' || lowerCmd === '!blackjack') {
         return handleBlackjackCommand('bj', username, displayName, normalizedChannel, t.mod === true || isBroadcaster, m);
@@ -2352,6 +2685,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       celebrate('bits', username, detail, bits);
     });
 
+    client.on('raided', (_channel: string, username: string, viewers: number) => {
+      void handleRaid(username, viewers);
+    });
+
     client.on('join', (_channel: string, username: string, self: boolean) => {
       if (self) return;
       tryGreetChatter(username, username.toLowerCase(), normalizedChannel);
@@ -2377,12 +2714,13 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         }));
       }
       restoreStreamSession();
+      void ensureEventSubSubscription();
       const foundPowerUp = await resolveShutElroyPowerUpId();
       if (foundPowerUp) {
-        void ensureEventSubSubscription();
         startPowerupRedemptionPolling();
       }
       startFollowerPolling();
+      startChannelEventPolling();
       startQuotaPolling();
       warmupElroySfx();
       void unlockBrowserAudio();
