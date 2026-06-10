@@ -118,9 +118,9 @@ async function sendIrcChatMessage(message: string, candidate: TwitchChatTokenCan
   }
 }
 
-export async function sendTwitchChatMessage(message: string) {
+export async function sendTwitchChatMessage(message: string): Promise<{ login: string }> {
   const text = message.trim();
-  if (!text) return;
+  if (!text) throw new Error('message required');
 
   const candidates = await resolveTwitchChatTokenCandidates();
   if (!candidates.length) {
@@ -139,7 +139,7 @@ export async function sendTwitchChatMessage(message: string) {
     if (!candidate.scopes.includes('user:write:chat')) continue;
     try {
       await sendHelixChatMessage(text, candidate);
-      return;
+      return { login: candidate.login };
     } catch (error) {
       errors.push(`Helix (${candidate.login}): ${error instanceof Error ? error.message : 'failed'}`);
     }
@@ -150,7 +150,7 @@ export async function sendTwitchChatMessage(message: string) {
     if (!candidate.scopes.includes('chat:write')) continue;
     try {
       await sendIrcChatMessage(text, candidate);
-      return;
+      return { login: candidate.login };
     } catch (error) {
       errors.push(`IRC (${candidate.login}): ${error instanceof Error ? error.message : 'failed'}`);
     }

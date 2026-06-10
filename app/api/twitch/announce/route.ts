@@ -1,5 +1,5 @@
 import { isControlAuthorized } from '@/lib/control-auth';
-import { sendChatAnnouncement } from '@/lib/twitch-mod';
+import { getModTwitchCredentials, sendChatAnnouncement } from '@/lib/twitch-mod';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,7 +19,8 @@ export async function POST(request: Request) {
     }
 
     await sendChatAnnouncement(message, body.color ?? 'primary');
-    return Response.json({ ok: true });
+    const creds = await getModTwitchCredentials();
+    return Response.json({ ok: true, sender_login: creds?.moderatorLogin ?? null });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Announcement failed';
     return Response.json({ error: message }, { status: 500 });

@@ -15,8 +15,8 @@ export async function POST(request: Request) {
       return Response.json({ error: 'message required' }, { status: 400 });
     }
 
-    await sendTwitchChatMessage(message.slice(0, 500));
-    return Response.json({ ok: true });
+    const sent = await sendTwitchChatMessage(message.slice(0, 500));
+    return Response.json({ ok: true, sender_login: sent.login });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Twitch send failed';
     return Response.json({ error: message }, { status: 500 });

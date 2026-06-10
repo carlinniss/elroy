@@ -103,6 +103,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
   const elroySpeakerLoginsRef = useRef<Set<string>>(new Set());
+  const recentElroyOutboundRef = useRef<Array<{ fingerprint: string; at: number }>>([]);
 
   const SHUT_UP_DURATION_MS = 8 * 60 * 1000;
   const POWERUP_MUTE_MS = 10 * 60 * 1000;
@@ -323,6 +324,36 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
   const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
 
+  const normalizeChatFingerprint = useCallback((text: string) => (
+    text.trim().toLowerCase().replace(/\s+/g, ' ')
+  ), []);
+
+  const registerElroySpeaker = useCallback((login?: string) => {
+    const normalized = login?.trim().toLowerCase();
+    if (!normalized) return;
+    elroySpeakerLoginsRef.current.add(normalized);
+  }, []);
+
+  const rememberElroyOutbound = useCallback((text: string, senderLogin?: string) => {
+    const fingerprint = normalizeChatFingerprint(text);
+    if (!fingerprint) return;
+    recentElroyOutboundRef.current.push({ fingerprint, at: Date.now() });
+    recentElroyOutboundRef.current = recentElroyOutboundRef.current
+      .filter((entry) => Date.now() - entry.at < 180_000)
+      .slice(-50);
+    registerElroySpeaker(senderLogin);
+  }, [normalizeChatFingerprint, registerElroySpeaker]);
+
+  const isEchoOfElroyOutbound = useCallback((message: string) => {
+    const fingerprint = normalizeChatFingerprint(message);
+    if (!fingerprint) return false;
+    return recentElroyOutboundRef.current.some((entry) => (
+      entry.fingerprint === fingerprint
+      || fingerprint.startsWith(entry.fingerprint.slice(0, 48))
+      || entry.fingerprint.startsWith(fingerprint.slice(0, 48))
+    ));
+  }, [normalizeChatFingerprint]);
+
   const seedElroySpeakerLogins = useCallback(async (normalizedChannel: string) => {
     const logins = new Set<string>([normalizedChannel]);
     const envBotLogin = process.env.NEXT_PUBLIC_TWITCH_BOT_LOGIN?.trim().toLowerCase();
@@ -334,9 +365,13 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         cache: 'no-store',
       });
       if (res.ok) {
-        const data = await res.json() as { tokenLogin?: string };
+        const data = await res.json() as { tokenLogin?: string; speakerLogins?: string[] };
         const tokenLogin = data.tokenLogin?.trim().toLowerCase();
         if (tokenLogin) logins.add(tokenLogin);
+        for (const login of data.speakerLogins ?? []) {
+          const normalized = login.trim().toLowerCase();
+          if (normalized) logins.add(normalized);
+        }
       }
     } catch {
       /* chat-status optional — channel login still ignored */
@@ -349,12 +384,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     userstate: tmi.ChatUserstate,
     normalizedUser: string,
     normalizedChannel: string,
+    message: string,
   ) => {
+    if (isEchoOfElroyOutbound(message)) return true;
     if (normalizedUser === normalizedChannel) return true;
     if (elroySpeakerLoginsRef.current.has(normalizedUser)) return true;
     if (userstate.badges?.bot === '1') return true;
     return false;
-  }, []);
+  }, [isEchoOfElroyOutbound]);
 
   /** "L Roy" / L-Roy / lroy (without "Elroy") — misname, gets roasted. */
   const misnamesElroyAsLRoy = (text: string) => {
@@ -585,6 +622,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const sayChat = useCallback(async (message: string): Promise<boolean> => {
     const text = message.trim();
     if (!text) return false;
+    rememberElroyOutbound(text);
 
     try {
       const res = await fetch('/api/twitch/say', {
@@ -601,13 +639,15 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         setRuntimeHud((prev) => ({ ...prev, chat: hudLine }));
         throw new Error(detail);
       }
+      const data = await res.json().catch(() => ({})) as { sender_login?: string };
+      rememberElroyOutbound(text, data.sender_login);
       setRuntimeHud((prev) => ({ ...prev, chat: 'sent' }));
       return true;
     } catch (error) {
       console.warn('Twitch say failed', error);
       return false;
     }
-  }, [controlHeaders]);
+  }, [controlHeaders, rememberElroyOutbound]);
 
   const postTwitchAnnounce = useCallback(async (
     message: string,
@@ -615,6 +655,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   ) => {
     const text = message.trim();
     if (!text) return false;
+    rememberElroyOutbound(text);
     try {
       const res = await fetch('/api/twitch/announce', {
         method: 'POST',
@@ -622,6 +663,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         body: JSON.stringify({ message: text, color }),
       });
       if (res.ok) {
+        const data = await res.json().catch(() => ({})) as { sender_login?: string };
+        rememberElroyOutbound(text, data.sender_login);
         setRuntimeHud((prev) => ({ ...prev, chat: 'announced' }));
         return true;
       }
@@ -629,7 +672,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       console.warn('Twitch announce failed', error);
     }
     return sayChat(text);
-  }, [controlHeaders, sayChat]);
+  }, [controlHeaders, rememberElroyOutbound, sayChat]);
 
   const shouldSkipDuplicateCelebration = useCallback((key: string, windowMs = 30_000) => {
     const last = recentCelebrationKeysRef.current.get(key) ?? 0;
@@ -2488,7 +2531,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       const normalizedUser = username.toLowerCase();
       const isBroadcaster = normalizedUser === normalizedChannel;
 
-      if (isElroyChatSpeaker(t, normalizedUser, normalizedChannel)) return;
+      if (isElroyChatSpeaker(t, normalizedUser, normalizedChannel, m)) return;
 
       if (isShutElroyPowerUpRedemption(m, t)) {
         enterFullMute(username);
