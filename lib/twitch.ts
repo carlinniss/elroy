@@ -98,6 +98,7 @@ export type TwitchChatSendStatus = {
   tokenLogin?: string;
   tokenSource?: string;
   speakerLogins?: string[];
+  speakerUserIds?: string[];
   configuredUsername?: string;
   scopes?: string[];
   hasBotToken: boolean;
@@ -265,12 +266,14 @@ export async function inspectTwitchChatSend(): Promise<TwitchChatSendStatus> {
   }
 
   const speakerLogins = [...new Set(candidates.map((candidate) => candidate.login.toLowerCase()))];
+  const speakerUserIds = [...new Set(candidates.map((candidate) => candidate.userId))];
 
   return {
     ok: true,
     tokenLogin: primary.login,
     tokenSource: primary.source,
     speakerLogins,
+    speakerUserIds,
     hasBotToken,
     hasBroadcasterToken,
     canHelix,

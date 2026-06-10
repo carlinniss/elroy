@@ -103,7 +103,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const responseQueueRef = useRef<Promise<void>>(Promise.resolve());
   const speechQueueRef = useRef<Promise<void>>(Promise.resolve());
   const elroySpeakerLoginsRef = useRef<Set<string>>(new Set());
+  const elroySpeakerUserIdsRef = useRef<Set<string>>(new Set());
   const recentElroyOutboundRef = useRef<Array<{ fingerprint: string; at: number }>>([]);
+
+  const ELROY_SYSTEM_BROADCAST = /^elroy initiated\./i;
 
   const SHUT_UP_DURATION_MS = 8 * 60 * 1000;
   const POWERUP_MUTE_MS = 10 * 60 * 1000;
@@ -328,10 +331,23 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     text.trim().toLowerCase().replace(/\s+/g, ' ')
   ), []);
 
-  const registerElroySpeaker = useCallback((login?: string) => {
+  const registerElroySpeaker = useCallback((login?: string, userId?: string) => {
     const normalized = login?.trim().toLowerCase();
-    if (!normalized) return;
-    elroySpeakerLoginsRef.current.add(normalized);
+    if (normalized) elroySpeakerLoginsRef.current.add(normalized);
+    const id = userId?.trim();
+    if (id) elroySpeakerUserIdsRef.current.add(id);
+  }, []);
+
+  const isElroySystemBroadcast = useCallback((message: string) => (
+    ELROY_SYSTEM_BROADCAST.test(message.trim())
+    || /^elroy is back/i.test(message.trim())
+    || /^shut elroy up/i.test(message.trim())
+  ), []);
+
+  const isKnownElroySpeakerLogin = useCallback((normalizedUser: string) => {
+    if (elroySpeakerLoginsRef.current.has(normalizedUser)) return true;
+    const tokenUsesElroyName = [...elroySpeakerLoginsRef.current].some((login) => login.includes('elroy'));
+    return tokenUsesElroyName && normalizedUser.includes('elroy');
   }, []);
 
   const rememberElroyOutbound = useCallback((text: string, senderLogin?: string) => {
@@ -356,6 +372,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
   const seedElroySpeakerLogins = useCallback(async (normalizedChannel: string) => {
     const logins = new Set<string>([normalizedChannel]);
+    const userIds = new Set<string>();
     const envBotLogin = process.env.NEXT_PUBLIC_TWITCH_BOT_LOGIN?.trim().toLowerCase();
     if (envBotLogin) logins.add(envBotLogin);
 
@@ -365,12 +382,20 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         cache: 'no-store',
       });
       if (res.ok) {
-        const data = await res.json() as { tokenLogin?: string; speakerLogins?: string[] };
+        const data = await res.json() as {
+          tokenLogin?: string;
+          speakerLogins?: string[];
+          speakerUserIds?: string[];
+        };
         const tokenLogin = data.tokenLogin?.trim().toLowerCase();
         if (tokenLogin) logins.add(tokenLogin);
         for (const login of data.speakerLogins ?? []) {
           const normalized = login.trim().toLowerCase();
           if (normalized) logins.add(normalized);
+        }
+        for (const userId of data.speakerUserIds ?? []) {
+          const normalized = userId.trim();
+          if (normalized) userIds.add(normalized);
         }
       }
     } catch {
@@ -378,6 +403,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
 
     elroySpeakerLoginsRef.current = logins;
+    elroySpeakerUserIdsRef.current = userIds;
   }, [controlHeaders]);
 
   const isElroyChatSpeaker = useCallback((
@@ -386,12 +412,15 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     normalizedChannel: string,
     message: string,
   ) => {
+    if (isElroySystemBroadcast(message)) return true;
     if (isEchoOfElroyOutbound(message)) return true;
     if (normalizedUser === normalizedChannel) return true;
-    if (elroySpeakerLoginsRef.current.has(normalizedUser)) return true;
+    if (isKnownElroySpeakerLogin(normalizedUser)) return true;
+    const userId = userstate['user-id'];
+    if (userId && elroySpeakerUserIdsRef.current.has(userId)) return true;
     if (userstate.badges?.bot === '1') return true;
     return false;
-  }, [isEchoOfElroyOutbound]);
+  }, [isEchoOfElroyOutbound, isElroySystemBroadcast, isKnownElroySpeakerLogin]);
 
   /** "L Roy" / L-Roy / lroy (without "Elroy") — misname, gets roasted. */
   const misnamesElroyAsLRoy = (text: string) => {
@@ -2299,6 +2328,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
   const handleElroyMention = useCallback((username: string, displayName: string, message: string) => {
     if (isFullyMuted()) return;
+    const normalizedUser = username.toLowerCase();
+    if (isKnownElroySpeakerLogin(normalizedUser) || isElroySystemBroadcast(message)) return;
     rememberUser(username, displayName, { type: 'mention', message }, controlHeaders());
 
     const lower = message.toLowerCase();
@@ -2319,10 +2350,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       return;
     }
     void queueBongLogic(buildMentionPrompt(username, message), username);
-  }, [announceStreamMetadata, buildComebackPrompt, buildMentionPrompt, controlHeaders, queueBongLogic, requestSpotifyComment]);
+  }, [announceStreamMetadata, buildComebackPrompt, buildMentionPrompt, controlHeaders, isElroySystemBroadcast, isKnownElroySpeakerLogin, queueBongLogic, requestSpotifyComment]);
 
   const handleLRoyMisname = useCallback((username: string, displayName: string, message: string) => {
     if (isFullyMuted()) return;
+    if (isKnownElroySpeakerLogin(username.toLowerCase()) || isElroySystemBroadcast(message)) return;
     rememberUser(username, displayName, { type: 'mention', message }, controlHeaders());
     if (isSilenced()) {
       if (!streamLiveRef.current || Math.random() >= COMEBACK_CHANCE) return;
@@ -2331,7 +2363,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
     void playElroySfx('roast_sting');
     void queueBongLogic(buildLRoyRoastPrompt(username, message), username);
-  }, [buildLRoyRoastPrompt, controlHeaders, playElroySfx, queueBongLogic]);
+  }, [buildLRoyRoastPrompt, controlHeaders, isElroySystemBroadcast, isKnownElroySpeakerLogin, playElroySfx, queueBongLogic]);
 
   const toggleDing = useCallback((user?: string) => {
     const nextState = !dingEnabledRef.current;
@@ -2749,7 +2781,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         /* ignore */
       }
       startBotSessionHeartbeat();
-      const initiated = await sayChat(`Elroy initiated. ${randomCannabisFact()}`);
+      const opener = `Elroy initiated. ${randomCannabisFact()}`;
+      rememberElroyOutbound(opener);
+      const initiated = await sayChat(opener);
+      await seedElroySpeakerLogins(normalizedChannel);
       if (!initiated) {
         setRuntimeHud((prev) => ({
           ...prev,
