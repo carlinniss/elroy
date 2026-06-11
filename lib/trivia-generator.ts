@@ -1,6 +1,11 @@
 import { generateObject } from 'ai';
 import { z } from 'zod';
-import type { ElroyTriviaQuestion, TriviaCategory } from '@/lib/cannabis-trivia';
+import {
+  alignTriviaQuestionCategory,
+  triviaCategoryMatchesContent,
+  type ElroyTriviaQuestion,
+  type TriviaCategory,
+} from '@/lib/cannabis-trivia';
 import { getGeminiModel } from '@/lib/gemini-model';
 import { passesTriviaDifficultyGate } from '@/lib/trivia-quality';
 
@@ -81,11 +86,19 @@ function buildPrompt(category: TriviaCategory, recentQuestions: string[], attemp
         ? 'EXPERT — obscure proper noun, year, or technical term; not a Google featured snippet'
         : 'OBSCURE — deep cut a dedicated hobbyist might know, not a meme answer';
 
+  const categoryFence =
+    category === 'freaky'
+      ? 'TOPIC FENCE: Sexology, kink history, queer rights, erotica — NEVER cannabis, marijuana, hemp, THC, CBD, terpenes, or weed culture.'
+      : category === 'cannabis'
+        ? 'TOPIC FENCE: Cannabis history, policy, chemistry, cultivation — NEVER sex, kink, BDSM, or erotica.'
+        : 'TOPIC FENCE: 1990s hip-hop and R&B only — NEVER cannabis or sex/kink topics.';
+
   return `Generate ONE ${category} trivia question for a savvy adult Twitch chat that already knows the basics.
 
 Angle: ${primaryAngle}
 Secondary angle: ${secondaryAngle}
 Difficulty: ${difficulty}
+${categoryFence}
 Generation salt: ${Date.now()}-${attempt}-${Math.random().toString(36).slice(2, 8)}
 
 HARD RULES:
@@ -124,17 +137,21 @@ Return exactly one question object.`,
     if (!answers.length) return null;
 
     const question = object.question.trim();
+    const displayAnswer = object.displayAnswer.trim();
     if (!passesTriviaDifficultyGate(question, answers)) {
       return null;
     }
+    if (!triviaCategoryMatchesContent(category, question, answers, displayAnswer)) {
+      return null;
+    }
 
-    return {
+    return alignTriviaQuestionCategory({
       id: `gen-${category}-${Date.now()}-${attempt}`,
       category,
       question,
       answers,
-      displayAnswer: object.displayAnswer.trim(),
-    };
+      displayAnswer,
+    });
   } catch (error) {
     console.error('Trivia generation failed', error);
     return null;

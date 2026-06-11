@@ -1,4 +1,9 @@
-import { listAvailableElroyTrivia, type TriviaCategory } from '@/lib/cannabis-trivia';
+import {
+  alignTriviaQuestionCategory,
+  listAvailableElroyTrivia,
+  triviaCategoryMatchesContent,
+  type TriviaCategory,
+} from '@/lib/cannabis-trivia';
 import { isControlAuthorized } from '@/lib/control-auth';
 import { pickStaticTriviaQuestion } from '@/lib/pick-static-trivia';
 import { generateTriviaQuestion } from '@/lib/trivia-generator';
@@ -24,9 +29,12 @@ function triviaGeminiEnabled(): boolean {
 
 async function acceptQuestion(
   category: TriviaCategory,
-  question: { question: string; answers: string[] },
+  question: { question: string; answers: string[]; displayAnswer?: string },
   recentQuestions: string[],
 ) {
+  if (!triviaCategoryMatchesContent(category, question.question, question.answers, question.displayAnswer)) {
+    return false;
+  }
   if (!passesTriviaDifficultyGate(question.question, question.answers)) return false;
   if (isNearDuplicateTriviaQuestion(question.question, recentQuestions)) return false;
   if (await hasSeenTriviaQuestion(question.question, category)) return false;
@@ -39,24 +47,7 @@ async function tryStaticFallback(
   recentIds: string[],
   recentQuestions: string[],
 ) {
-  let picked = await pickStaticTriviaQuestion(category, recentIds, recentQuestions);
-
-  if (!picked) {
-    const fallbackCategories: TriviaCategory[] =
-      category === 'music90s'
-        ? ['cannabis', 'freaky']
-        : category === 'cannabis'
-          ? ['music90s', 'freaky']
-          : ['music90s', 'cannabis'];
-
-    for (const alt of fallbackCategories) {
-      const altRecent = await getRecentTriviaQuestions(alt);
-      picked = await pickStaticTriviaQuestion(alt, recentIds, altRecent);
-      if (picked) break;
-    }
-  }
-
-  return picked;
+  return pickStaticTriviaQuestion(category, recentIds, recentQuestions);
 }
 
 export async function POST(request: Request) {
@@ -90,7 +81,11 @@ export async function POST(request: Request) {
       for (let attempt = 0; attempt < GENERATION_ATTEMPTS; attempt += 1) {
         const generated = await generateTriviaQuestion(category, recentQuestions, attempt);
         if (!generated) continue;
-        if (!(await acceptQuestion(category, generated, recentQuestions))) {
+        if (!(await acceptQuestion(category, {
+          question: generated.question,
+          answers: generated.answers,
+          displayAnswer: generated.displayAnswer,
+        }, recentQuestions))) {
           recentQuestions = mergeRecentTriviaQuestions([generated.question], recentQuestions);
           continue;
         }
@@ -128,7 +123,7 @@ export async function POST(request: Request) {
       source: 'static',
       recycled: picked.recycled,
       remainingInCategory: availableCount,
-      question: picked.question,
+      question: alignTriviaQuestionCategory(picked.question),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Trivia pick failed';

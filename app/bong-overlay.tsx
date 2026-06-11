@@ -5,7 +5,14 @@ import { useSearchParams } from 'next/navigation';
 import tmi from 'tmi.js';
 import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
 import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
-import { matchesTriviaAnswer, triviaIntroFor, type ElroyTriviaQuestion, type TriviaCategory, detectElroyTriviaCheat } from '@/lib/cannabis-trivia';
+import {
+  alignTriviaQuestionCategory,
+  matchesTriviaAnswer,
+  triviaIntroFor,
+  type ElroyTriviaQuestion,
+  type TriviaCategory,
+  detectElroyTriviaCheat,
+} from '@/lib/cannabis-trivia';
 import { formatTriviaLeaderboardChatMessage } from '@/lib/trivia-scores';
 import { buildTriviaProgressHint } from '@/lib/trivia-hints';
 import { buildSpotifyTrackPrompt } from '@/lib/spotify-prompt';
@@ -121,8 +128,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const CHANNEL_EVENTS_POLL_MS = 5_000;
   const STREAM_CHECKIN_MS = 15 * 60 * 1000;
   const STREAM_POLL_MS = 60_000;
-  const TRIVIA_INTERVAL_MS = 20 * 60 * 1000;
-  const TRIVIA_FIRST_DELAY_MS = 8 * 60 * 1000;
+  const TRIVIA_INTERVAL_MS = 30 * 60 * 1000;
+  const TRIVIA_FIRST_DELAY_MS = 12 * 60 * 1000;
   const TRIVIA_ANSWER_WINDOW_MS = 5 * 60 * 1000;
   const TRIVIA_CHECK_MS = 60_000;
   const BLACKJACK_TICK_MS = 4_000;
@@ -1866,7 +1873,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
     try {
       const roll = Math.random();
-      const category: TriviaCategory = roll < 0.4 ? 'music90s' : roll < 0.7 ? 'cannabis' : 'freaky';
+      const category: TriviaCategory = roll < 0.4 ? 'music90s' : roll < 0.8 ? 'cannabis' : 'freaky';
       let picked: ElroyTriviaQuestion | null = null;
 
       const categoryHistory = recentTriviaHistoryRef.current.filter((entry) => entry.category === category);
@@ -1884,7 +1891,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         if (generateRes.ok) {
           const data = await generateRes.json();
           if (data.question?.question && Array.isArray(data.question.answers)) {
-            picked = data.question as ElroyTriviaQuestion;
+            picked = alignTriviaQuestionCategory(data.question as ElroyTriviaQuestion);
           }
         } else {
           console.warn('Trivia generation unavailable', generateRes.status);

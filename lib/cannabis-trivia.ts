@@ -27,6 +27,126 @@ export function triviaIntroFor(category: ElroyTriviaQuestion['category']): strin
   return category === 'freaky' ? '😈 Freaky sex trivia!' : '🌿 Cannabis trivia!';
 }
 
+const CANNABIS_TOPIC_PATTERNS = [
+  /\bcannabis\b/i,
+  /\bmarijuana\b/i,
+  /\bhemp\b/i,
+  /\bthc\b/i,
+  /\bthca\b/i,
+  /\bcbd\b/i,
+  /\bcbda\b/i,
+  /\bcannabinoid/i,
+  /\bterpene/i,
+  /\bindica\b/i,
+  /\bsativa\b/i,
+  /\bprop\s*215\b/i,
+  /\bfarm bill\b/i,
+  /\bdecarb/i,
+  /\brosin\b/i,
+  /\bhash(ish)?\b/i,
+  /\bdispensar/i,
+  /\bedible/i,
+  /\blandrace\b/i,
+  /\bmyrcene\b/i,
+  /\b420\b/,
+  /\b710\b/,
+  /\bstrain\b/i,
+  /\bschedul(e|ing)\b.*\b(cannabis|marijuana|drug)/i,
+];
+
+const FREAKY_TOPIC_PATTERNS = [
+  /\bsex\b/i,
+  /\berotic/i,
+  /\bkink\b/i,
+  /\bbdsm\b/i,
+  /\bqueer\b/i,
+  /\bstonewall/i,
+  /\bfetish/i,
+  /\bkinsey\b/i,
+  /\bmasoch/i,
+  /\bsadis/i,
+  /\bsexolog/i,
+  /\borgasm/i,
+  /\bbondage/i,
+  /\bsodomy/i,
+  /\bobscene/i,
+  /\bhomosex/i,
+  /\blesbian/i,
+  /\btransvest/i,
+  /\bkama sutra/i,
+  /\bplanned parenthood\b/i,
+  /\bcontracept/i,
+  /\bvenus in furs/i,
+  /\blady chatterley/i,
+];
+
+const MUSIC90S_TOPIC_PATTERNS = [
+  /\bhip.?hop\b/i,
+  /\brap\b/i,
+  /\balbum\b/i,
+  /\bbillboard\b/i,
+  /\b199\d\b/,
+  /\bmtv\b/i,
+  /\bgrammy/i,
+  /\br&b\b/i,
+  /\bdeath row\b/i,
+  /\bbad boy\b/i,
+  /\bdiss track/i,
+  /\bno limit\b/i,
+  /\btupac\b/i,
+  /\bbiggie\b/i,
+  /\bdr\.?\s*dre\b/i,
+  /\btimbaland\b/i,
+  /\b90s\b/i,
+];
+
+function scoreTopicPatterns(text: string, patterns: RegExp[]): number {
+  return patterns.reduce((score, pattern) => score + (pattern.test(text) ? 1 : 0), 0);
+}
+
+/** Infer the real trivia lane from question text — fixes Gemini mis-tagging. */
+export function inferTriviaCategory(
+  question: string,
+  answers: string[] = [],
+  displayAnswer?: string,
+): TriviaCategory {
+  const blob = [question, displayAnswer ?? '', ...answers].join(' ');
+  const scores: Record<TriviaCategory, number> = {
+    cannabis: scoreTopicPatterns(blob, CANNABIS_TOPIC_PATTERNS),
+    freaky: scoreTopicPatterns(blob, FREAKY_TOPIC_PATTERNS),
+    music90s: scoreTopicPatterns(blob, MUSIC90S_TOPIC_PATTERNS),
+  };
+
+  const ranked = (Object.entries(scores) as [TriviaCategory, number][])
+    .sort((a, b) => b[1] - a[1]);
+  const [topCategory, topScore] = ranked[0] ?? ['cannabis', 0];
+  const secondScore = ranked[1]?.[1] ?? 0;
+
+  if (topScore <= 0) return 'cannabis';
+  if (topScore === secondScore) {
+    if (scores.music90s >= scores.cannabis && scores.music90s >= scores.freaky) return 'music90s';
+    if (scores.cannabis >= scores.freaky) return 'cannabis';
+    return 'freaky';
+  }
+  return topCategory;
+}
+
+export function triviaCategoryMatchesContent(
+  category: TriviaCategory,
+  question: string,
+  answers: string[] = [],
+  displayAnswer?: string,
+): boolean {
+  return inferTriviaCategory(question, answers, displayAnswer) === category;
+}
+
+/** Re-tag a question so intro/scoring match what it is actually about. */
+export function alignTriviaQuestionCategory(question: ElroyTriviaQuestion): ElroyTriviaQuestion {
+  const inferred = inferTriviaCategory(question.question, question.answers, question.displayAnswer);
+  if (inferred === question.category) return question;
+  return { ...question, category: inferred };
+}
+
 export function normalizeTriviaAnswer(text: string): string {
   return text
     .toLowerCase()
