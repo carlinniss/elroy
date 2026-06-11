@@ -80,10 +80,13 @@ Ensure your file structure is exact for Next.js routing:
 ### Useful Chat Commands
 
 * Mention **Elroy** in chat: get a chat reply (voice too, when enabled and quota allows).
-* **Trivia:** while live, curated cannabis / freaky / 90s music questions every **10 minutes** (first round ~5 min after go-live). **175+ hand-written questions** in `lib/trivia-bank.ts` + `lib/trivia-bank-extra.ts`; they shuffle and cycle so repeats are spaced out (recent-window dedup in Redis). Add more by editing those files. Leaderboard scores persist; Elroy roasts leaders before each round.
-* `!aboutme`: Elroy tells you what he remembers about you in chat (trivia wins, subs, mentions, etc.).
-* **Blackjack (single table, play-money):** `!bj` open/sit → `!bet 10+` or `!bet all` → `!hit` / `!stand` / `!double` on your turn (double on first two cards only). You can still `!bj` during the betting window if you missed seating. Everyone starts with **1000 OG chips**. `!chips` balance, `!table` status, `!bjtop` high rollers (only players who have bet at least once). Need help: `!dare` (assigns a shame ritual — type the line + embarrassing emotes in chat to earn +120 chips; 20m cooldown), `!loan` (big bailout with debt), `!debt` (what you owe). Mods: `!bjstop`.
+* **Trivia:** while live, curated cannabis / freaky / 90s music questions every **20 minutes** (first round ~8 min after go-live). **175+ hand-written questions** in `lib/trivia-bank.ts` + `lib/trivia-bank-extra.ts`; they shuffle and cycle so repeats are spaced out (recent-window dedup in Redis). Add more by editing those files. Leaderboard scores persist; Elroy roasts leaders before each round.
+* `!aboutme`: Elroy tells you what he remembers about you in chat (trivia wins, subs, mentions, follow tenure, etc.).
+* **Blackjack (single table, play-money):** `!bj` open/sit → `!bet 10+` or `!bet all` → `!hit` / `!stand` / `!double` on your turn (double on first two cards only). You can still `!bj` during the betting window if you missed seating. Everyone starts with **1000 OG chips**. `!chips` balance, `!table` status, `!bjtop` high rollers (only players who have bet at least once). Need help: `!dare` (assigns a shame ritual — type the line + embarrassing emotes in chat to earn +120 chips; 20m cooldown), `!loan` (+400 chips, stacks debt — can borrow again while in debt; Elroy roasts you in chat each time), `!debt` (what you owe). Mods: `!bjstop`.
+* **Roulette (shared chips):** `!roulette` opens 45s betting → `!rbet red/black/odd/even/0-36 <amount>` (one bet per round). `!rtable` status. Mods: `!rstop`.
+* **Pick 3 / Pick 4 (shared chips):** `!pick3` or `!pick4` opens 60s betting → `!p3bet` / `!p4bet <type> <number> <amount>`. Types: **straight** (exact order), **box** (any order), **combo** (straight+box, costs 2×), **front** / **back** pair (2 digits), **mid** pair (Pick 4 only). Up to 5 bets per player per round. `!p3table` / `!p4table` status. Mods: `!p3stop` / `!p4stop`.
 * `!leaderboard` (alias: `!lb`): Show current trivia leaders in chat.
+* Elroy periodically posts command reminders for games, `!aboutme`, and leaderboards while live.
 * `!np` / `!nowplaying` / `!song`: Elroy reacts to the current Spotify track (when connected).
 * `!quota`: Show remaining ElevenLabs character quota.
 * `!ding` (alias: `!gong`): Toggle bong rip sound before voice (broadcaster/mod only).

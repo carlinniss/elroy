@@ -25,8 +25,27 @@ const DISPLAY_NAMES_KEY = 'elroy:bj:display-names';
 const DARE_LAST_KEY = 'elroy:bj:dare:last';
 const DARE_PENDING_KEY = 'elroy:bj:dare:pending';
 const LOAN_DEBT_KEY = 'elroy:bj:loan:debt';
+const LOAN_COUNT_KEY = 'elroy:bj:loan:count';
 
 const SANDBOX_LOGINS = new Set(['testuser']);
+
+const LOAN_SHAME_FIRST = [
+  (name: string) => `😬 @${name} just crawled to the loan shark. Desperation has entered the chat.`,
+  (name: string) => `🦈 LOAN ALERT: @${name} borrowed OG chips because the table ate their lunch.`,
+  (name: string) => `📉 @${name} hit !loan — the house smells weakness and likes it.`,
+];
+
+const LOAN_SHAME_REPEAT = [
+  (name: string, debt: number) => `🚨 @${name} ALREADY owed ${debt} chips and borrowed AGAIN. Chat, witness this financial war crime.`,
+  (name: string) => `🫣 @${name} came back for another loan while still in debt. Brazen. Pathetic. Iconic.`,
+  (name: string) => `💸 @${name} doubled down on being broke — new chips, same shame.`,
+];
+
+const LOAN_SHAME_DEGEN = [
+  (name: string, count: number, debt: number) => `💀 @${name} has taken ${count} loans and now owes ${debt} chips. Elroy is filing this under "cautionary tale."`,
+  (name: string, count: number) => `🪦 Loan #${count} for @${name}. The bailout button is sweating.`,
+  (name: string, debt: number) => `🔥 @${name} owes ${debt} chips to the house. At this point it's a lifestyle choice.`,
+];
 
 export type Suit = 's' | 'h' | 'd' | 'c';
 export type Rank = 'A' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | 'J' | 'Q' | 'K';
@@ -123,6 +142,7 @@ type MemoryStore = {
   dareLastAt: Map<string, number>;
   darePending: Map<string, BjPendingDare>;
   loanDebt: Map<string, number>;
+  loanCount: Map<string, number>;
 };
 
 const globalStore = globalThis as typeof globalThis & { __elroyBlackjack?: MemoryStore };
@@ -137,6 +157,7 @@ function mem(): MemoryStore {
       dareLastAt: new Map(),
       darePending: new Map(),
       loanDebt: new Map(),
+      loanCount: new Map(),
     };
   }
   return globalStore.__elroyBlackjack;
@@ -392,6 +413,44 @@ async function setPlayerChips(login: string, chips: number, displayName?: string
   mem().chips.set(login, value);
 }
 
+/** Deduct a bet and sync leaderboard — shared by blackjack and roulette. */
+export async function deductBetChips(
+  login: string,
+  displayName: string,
+  amount: number,
+): Promise<number> {
+  const chips = await getPlayerChips(login);
+  const next = Math.max(0, chips - amount);
+  await setPlayerChips(login, next, displayName);
+  await markPlayerPlayed(login, displayName, next);
+  await syncLeaderboard(login, next);
+  return next;
+}
+
+/** Credit winnings, collect loan debt, sync leaderboard — shared by blackjack and roulette. */
+export async function settlePlayerChips(
+  login: string,
+  displayName: string,
+  chips: number,
+): Promise<{ chips: number; debtMessage?: string }> {
+  let balance = Math.max(0, Math.floor(chips));
+  await setPlayerChips(login, balance, displayName);
+  let debtMessage: string | undefined;
+  const debt = await getLoanDebt(login);
+  if (debt > 0) {
+    const collected = Math.min(debt, balance);
+    if (collected > 0) {
+      balance -= collected;
+      await setPlayerChips(login, balance, displayName);
+      await setLoanDebt(login, debt - collected);
+      debtMessage = `💸 @${displayName}: house collected ${collected} toward loan (${Math.max(0, debt - collected)} debt left).`;
+    }
+  }
+  await markPlayerPlayed(login, displayName, balance);
+  await syncLeaderboard(login, balance);
+  return { chips: balance, debtMessage };
+}
+
 async function getLoanDebt(login: string): Promise<number> {
   if (hasRedisStorage()) {
     try {
@@ -407,12 +466,43 @@ async function getLoanDebt(login: string): Promise<number> {
   return mem().loanDebt.get(login) ?? 0;
 }
 
+async function getLoanCount(login: string): Promise<number> {
+  if (hasRedisStorage()) {
+    try {
+      const raw = await redisCommand(['HGET', LOAN_COUNT_KEY, login]);
+      if (raw !== null && raw !== undefined) {
+        const count = Number.parseInt(String(raw), 10);
+        if (Number.isFinite(count) && count > 0) return count;
+      }
+    } catch {
+      /* fallback */
+    }
+  }
+  return mem().loanCount.get(login) ?? 0;
+}
+
+async function incrementLoanCount(login: string): Promise<number> {
+  const next = (await getLoanCount(login)) + 1;
+  if (hasRedisStorage()) {
+    try {
+      await redisCommand(['HSET', LOAN_COUNT_KEY, login, String(next)]);
+    } catch {
+      /* fallback */
+    }
+  }
+  mem().loanCount.set(login, next);
+  return next;
+}
+
 async function setLoanDebt(login: string, debt: number) {
   const value = Math.max(0, Math.floor(debt));
   if (hasRedisStorage()) {
     try {
       if (value <= 0) {
-        await redisCommand(['HDEL', LOAN_DEBT_KEY, login]);
+        await redisPipeline([
+          ['HDEL', LOAN_DEBT_KEY, login],
+          ['HDEL', LOAN_COUNT_KEY, login],
+        ]);
       } else {
         await redisCommand(['HSET', LOAN_DEBT_KEY, login, String(value)]);
       }
@@ -420,8 +510,36 @@ async function setLoanDebt(login: string, debt: number) {
       /* fallback */
     }
   }
-  if (value <= 0) mem().loanDebt.delete(login);
-  else mem().loanDebt.set(login, value);
+  if (value <= 0) {
+    mem().loanDebt.delete(login);
+    mem().loanCount.delete(login);
+  } else {
+    mem().loanDebt.set(login, value);
+  }
+}
+
+function pickRandom<T>(items: T[]): T {
+  return items[Math.floor(Math.random() * items.length)]!;
+}
+
+function buildLoanShameMessages(
+  displayName: string,
+  loanCount: number,
+  totalDebt: number,
+  priorDebt: number,
+): string[] {
+  const shame: string[] = [];
+  if (loanCount >= 3) {
+    shame.push(pickRandom(LOAN_SHAME_DEGEN)(displayName, loanCount, totalDebt));
+  } else if (priorDebt > 0) {
+    shame.push(pickRandom(LOAN_SHAME_REPEAT)(displayName, priorDebt));
+  } else {
+    shame.push(pickRandom(LOAN_SHAME_FIRST)(displayName));
+  }
+  if (loanCount >= 2 && priorDebt > 0) {
+    shame.push(`🃏 @${displayName} total debt: ${totalDebt} chips (${loanCount} loans deep). The whole chat saw this.`);
+  }
+  return shame;
 }
 
 async function getLastDareAt(login: string): Promise<number> {
@@ -1234,27 +1352,26 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
   }
 
   if (req.action === 'loan') {
-    const debt = await getLoanDebt(login);
-    if (debt > 0) {
-      return {
-        ok: false,
-        messages: [`@${displayName} you already owe ${debt} chips. No new loan till that's repaid.`],
-        error: 'existing debt',
-      };
-    }
-
+    const priorDebt = await getLoanDebt(login);
+    const loanCount = await incrementLoanCount(login);
     const chips = await getPlayerChips(login);
     const nextChips = chips + LOAN_AMOUNT;
+    const nextDebt = priorDebt + LOAN_REPAY_AMOUNT;
+
     await setPlayerChips(login, nextChips, displayName);
-    await setLoanDebt(login, LOAN_REPAY_AMOUNT);
+    await setLoanDebt(login, nextDebt);
     await markPlayerPlayed(login, displayName, nextChips);
     await syncLeaderboard(login, nextChips);
+
+    const shame = buildLoanShameMessages(displayName, loanCount, nextDebt, priorDebt);
+    const loanLabel = priorDebt > 0 ? 'ANOTHER LOAN' : 'LOAN SHARK SPECIAL';
 
     return {
       ok: true,
       messages: [
-        `🃏 @${displayName} LOAN SHARK SPECIAL: +${LOAN_AMOUNT} chips now.`,
-        `🃏 Debt set to ${LOAN_REPAY_AMOUNT}. House auto-collects from future round results until paid. Stack: ${nextChips}.`,
+        `🃏 @${displayName} ${loanLabel}: +${LOAN_AMOUNT} chips (stack: ${nextChips}).`,
+        `🃏 Total debt: ${nextDebt} chips — house auto-collects from wins until paid.`,
+        ...shame,
       ],
     };
   }

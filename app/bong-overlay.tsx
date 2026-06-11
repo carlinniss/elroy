@@ -121,11 +121,19 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const CHANNEL_EVENTS_POLL_MS = 5_000;
   const STREAM_CHECKIN_MS = 15 * 60 * 1000;
   const STREAM_POLL_MS = 60_000;
-  const TRIVIA_INTERVAL_MS = 10 * 60 * 1000;
-  const TRIVIA_FIRST_DELAY_MS = 5 * 60 * 1000;
+  const TRIVIA_INTERVAL_MS = 20 * 60 * 1000;
+  const TRIVIA_FIRST_DELAY_MS = 8 * 60 * 1000;
   const TRIVIA_ANSWER_WINDOW_MS = 5 * 60 * 1000;
   const TRIVIA_CHECK_MS = 60_000;
   const BLACKJACK_TICK_MS = 4_000;
+  const ROULETTE_TICK_MS = 4_000;
+  const PICK_TICK_MS = 4_000;
+  const COMMAND_HELP_INTERVAL_MS = 7 * 60 * 1000;
+  const COMMAND_HELP_MESSAGES = [
+    '🎮 !bj !bet !hit !stand | !roulette !rbet | !pick3 !p3bet / !pick4 !p4bet straight/box/combo/front/back <num> <amt>',
+    '📊 !aboutme | !leaderboard / !lb (trivia) | !bjtop (chips) | !chips !dare !loan',
+    '🎬 !stream !clip !np — 1000 OG chips to start. !pick3 and !pick4 use the same bankroll.',
+  ];
   const CHAT_ACTIVITY_MESSAGE_THRESHOLD = 90;
   const CHAT_ACTIVITY_CHANCE = 0.75;
   const chatActivityThresholdRef = useRef(CHAT_ACTIVITY_MESSAGE_THRESHOLD);
@@ -175,6 +183,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const streamPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const triviaPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const blackjackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const roulettePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pickPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastCommandHelpAtRef = useRef(0);
+  const commandHelpIndexRef = useRef(0);
   const spotifyPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSpotifyTrackIdRef = useRef<string | null>(null);
   const streamLiveRef = useRef(false);
@@ -1754,6 +1766,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       sessionChatRef.current = [];
       greetedThisSessionRef.current.clear();
       lastTriviaAtRef.current = Date.now() - (TRIVIA_INTERVAL_MS - TRIVIA_FIRST_DELAY_MS);
+      lastCommandHelpAtRef.current = Date.now();
+      commandHelpIndexRef.current = 0;
       activeTriviaRef.current = null;
       recentTriviaHistoryRef.current = [];
       void playElroySfx('go_live');
@@ -2193,6 +2207,83 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     void postBlackjackAction({ action: 'tick', username: 'elroy', displayName: 'Elroy' });
   }, [postBlackjackAction]);
 
+  const postRouletteAction = useCallback(async (payload: {
+    action: string;
+    username: string;
+    displayName?: string;
+    betInput?: string;
+    choice?: string;
+    isMod?: boolean;
+  }) => {
+    try {
+      const res = await fetch('/api/roulette/action', {
+        method: 'POST',
+        headers: controlHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (Array.isArray(data.messages) && data.messages.length) {
+        sayBlackjackLines(data.messages);
+      }
+      return data;
+    } catch (error) {
+      console.warn('Roulette action failed', error);
+      return null;
+    }
+  }, [controlHeaders, sayBlackjackLines]);
+
+  const tickRouletteTable = useCallback(() => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+    void postRouletteAction({ action: 'tick', username: 'elroy', displayName: 'Elroy' });
+  }, [postRouletteAction]);
+
+  const postPickAction = useCallback(async (payload: {
+    action: string;
+    game: 'pick3' | 'pick4';
+    username: string;
+    displayName?: string;
+    betType?: string;
+    digits?: string;
+    betInput?: string;
+    isMod?: boolean;
+  }) => {
+    try {
+      const res = await fetch('/api/pick-numbers/action', {
+        method: 'POST',
+        headers: controlHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (Array.isArray(data.messages) && data.messages.length) {
+        sayBlackjackLines(data.messages);
+      }
+      return data;
+    } catch (error) {
+      console.warn('Pick numbers action failed', error);
+      return null;
+    }
+  }, [controlHeaders, sayBlackjackLines]);
+
+  const tickPickGames = useCallback(() => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+    void postPickAction({ action: 'tick', game: 'pick3', username: 'elroy', displayName: 'Elroy' });
+    void postPickAction({ action: 'tick', game: 'pick4', username: 'elroy', displayName: 'Elroy' });
+  }, [postPickAction]);
+
+  const announceCommandHelp = useCallback(() => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+    const message = COMMAND_HELP_MESSAGES[commandHelpIndexRef.current % COMMAND_HELP_MESSAGES.length]!;
+    commandHelpIndexRef.current += 1;
+    void sayChat(message);
+  }, [sayChat]);
+
+  const maybeAnnounceCommandHelp = useCallback(() => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+    if (Date.now() - lastCommandHelpAtRef.current < COMMAND_HELP_INTERVAL_MS) return;
+    lastCommandHelpAtRef.current = Date.now();
+    announceCommandHelp();
+  }, [announceCommandHelp]);
+
   const handleBlackjackCommand = useCallback((
     cmd: string,
     username: string,
@@ -2269,6 +2360,88 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
   }, [postBlackjackAction, sayChat]);
 
+  const handleRouletteCommand = useCallback((
+    cmd: string,
+    username: string,
+    displayName: string,
+    isMod: boolean,
+    rawMessage: string,
+  ) => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+
+    if (cmd === 'roulette' || cmd === 'spin') {
+      void postRouletteAction({ action: 'open', username, displayName });
+      return;
+    }
+    if (cmd === 'rtable' || cmd === 'rstatus') {
+      void postRouletteAction({ action: 'status', username, displayName });
+      return;
+    }
+    if (cmd === 'rstop' && isMod) {
+      void postRouletteAction({ action: 'stop', username, displayName, isMod: true });
+      return;
+    }
+    if (cmd === 'rbet') {
+      const match = rawMessage.trim().match(/^!rbet\s+(\S+)\s+(\S+)$/i);
+      if (!match) {
+        void sayChat(`@${username} use !rbet red/black/odd/even/0-36 <amount>`);
+        return;
+      }
+      void postRouletteAction({
+        action: 'bet',
+        username,
+        displayName,
+        choice: match[1],
+        betInput: match[2],
+      });
+    }
+  }, [postRouletteAction, sayChat]);
+
+  const handlePickCommand = useCallback((
+    game: 'pick3' | 'pick4',
+    cmd: string,
+    username: string,
+    displayName: string,
+    isMod: boolean,
+    rawMessage: string,
+  ) => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+
+    const openCmd = game === 'pick3' ? 'pick3' : 'pick4';
+    const betPrefix = game === 'pick3' ? '!p3bet' : '!p4bet';
+
+    if (cmd === openCmd || cmd === (game === 'pick3' ? 'p3' : 'p4')) {
+      void postPickAction({ action: 'open', game, username, displayName });
+      return;
+    }
+    if (cmd === `${game}table` || cmd === (game === 'pick3' ? 'p3table' : 'p4table')) {
+      void postPickAction({ action: 'status', game, username, displayName });
+      return;
+    }
+    if (cmd === `${game}stop` || cmd === (game === 'pick3' ? 'p3stop' : 'p4stop')) {
+      if (!isMod) return;
+      void postPickAction({ action: 'stop', game, username, displayName, isMod: true });
+      return;
+    }
+    if (cmd === (game === 'pick3' ? 'p3bet' : 'p4bet')) {
+      const match = rawMessage.trim().match(new RegExp(`^${betPrefix}\\s+(\\S+)\\s+(\\d+)\\s+(\\S+)$`, 'i'));
+      if (!match) {
+        const pairHint = game === 'pick4' ? '/mid' : '';
+        void sayChat(`@${username} use ${betPrefix} straight/box/combo/front${pairHint}/back <num> <amt>`);
+        return;
+      }
+      void postPickAction({
+        action: 'bet',
+        game,
+        username,
+        displayName,
+        betType: match[1],
+        digits: match[2],
+        betInput: match[3],
+      });
+    }
+  }, [postPickAction, sayChat]);
+
   const startStreamMonitoring = useCallback(() => {
     if (!streamPollRef.current) {
       void pollStreamLive();
@@ -2284,6 +2457,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     if (!triviaPollRef.current) {
       triviaPollRef.current = setInterval(() => {
         runTriviaCycle();
+        maybeAnnounceCommandHelp();
       }, TRIVIA_CHECK_MS);
     }
     if (!blackjackPollRef.current) {
@@ -2291,13 +2465,23 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         tickBlackjackTable();
       }, BLACKJACK_TICK_MS);
     }
+    if (!roulettePollRef.current) {
+      roulettePollRef.current = setInterval(() => {
+        tickRouletteTable();
+      }, ROULETTE_TICK_MS);
+    }
+    if (!pickPollRef.current) {
+      pickPollRef.current = setInterval(() => {
+        tickPickGames();
+      }, PICK_TICK_MS);
+    }
     if (!spotifyPollRef.current) {
       void pollSpotifyNowPlaying();
       spotifyPollRef.current = setInterval(() => {
         void pollSpotifyNowPlaying();
       }, SPOTIFY_POLL_MS);
     }
-  }, [pollStreamLive, pollSpotifyNowPlaying, runStreamCheckin, runTriviaCycle, tickBlackjackTable]);
+  }, [maybeAnnounceCommandHelp, pollStreamLive, pollSpotifyNowPlaying, runStreamCheckin, runTriviaCycle, tickBlackjackTable, tickPickGames, tickRouletteTable]);
 
   const stopStreamMonitoring = useCallback(() => {
     if (streamPollRef.current) {
@@ -2315,6 +2499,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     if (blackjackPollRef.current) {
       clearInterval(blackjackPollRef.current);
       blackjackPollRef.current = null;
+    }
+    if (roulettePollRef.current) {
+      clearInterval(roulettePollRef.current);
+      roulettePollRef.current = null;
+    }
+    if (pickPollRef.current) {
+      clearInterval(pickPollRef.current);
+      pickPollRef.current = null;
     }
     if (spotifyPollRef.current) {
       clearInterval(spotifyPollRef.current);
@@ -2677,6 +2869,42 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       }
       if (lowerCmd === '!bjstop') {
         return handleBlackjackCommand('bjstop', username, displayName, normalizedChannel, t.mod === true || isBroadcaster, m);
+      }
+      if (lowerCmd === '!roulette' || lowerCmd === '!spin') {
+        return handleRouletteCommand('roulette', username, displayName, t.mod === true || isBroadcaster, m);
+      }
+      if (lowerCmd === '!rtable' || lowerCmd === '!rstatus') {
+        return handleRouletteCommand('rtable', username, displayName, t.mod === true || isBroadcaster, m);
+      }
+      if (lowerCmd === '!rstop') {
+        return handleRouletteCommand('rstop', username, displayName, t.mod === true || isBroadcaster, m);
+      }
+      if (/^!rbet\s+\S+\s+\S+$/i.test(lowerCmd)) {
+        return handleRouletteCommand('rbet', username, displayName, t.mod === true || isBroadcaster, m);
+      }
+      if (lowerCmd === '!pick3' || lowerCmd === '!p3') {
+        return handlePickCommand('pick3', 'pick3', username, displayName, t.mod === true || isBroadcaster, m);
+      }
+      if (lowerCmd === '!p3table' || lowerCmd === '!pick3table') {
+        return handlePickCommand('pick3', 'pick3table', username, displayName, t.mod === true || isBroadcaster, m);
+      }
+      if (lowerCmd === '!p3stop' || lowerCmd === '!pick3stop') {
+        return handlePickCommand('pick3', 'pick3stop', username, displayName, t.mod === true || isBroadcaster, m);
+      }
+      if (/^!p3bet\s+\S+\s+\d+\s+\S+$/i.test(lowerCmd)) {
+        return handlePickCommand('pick3', 'p3bet', username, displayName, t.mod === true || isBroadcaster, m);
+      }
+      if (lowerCmd === '!pick4' || lowerCmd === '!p4') {
+        return handlePickCommand('pick4', 'pick4', username, displayName, t.mod === true || isBroadcaster, m);
+      }
+      if (lowerCmd === '!p4table' || lowerCmd === '!pick4table') {
+        return handlePickCommand('pick4', 'pick4table', username, displayName, t.mod === true || isBroadcaster, m);
+      }
+      if (lowerCmd === '!p4stop' || lowerCmd === '!pick4stop') {
+        return handlePickCommand('pick4', 'pick4stop', username, displayName, t.mod === true || isBroadcaster, m);
+      }
+      if (/^!p4bet\s+\S+\s+\d+\s+\S+$/i.test(lowerCmd)) {
+        return handlePickCommand('pick4', 'p4bet', username, displayName, t.mod === true || isBroadcaster, m);
       }
       if (m.toLowerCase() === '!ding' || m.toLowerCase() === '!gong') {
         const isModerator = t.mod === true;
