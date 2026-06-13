@@ -1,183 +1,267 @@
-# Bong Bot: The Wise OG 710 Twitch Bot
+# Elroy — The Wise OG Twitch Bot
 
-Bong Bot is a high-performance, AI-driven Twitch overlay and chat assistant. Elroy listens to your Twitch chat, responds when mentioned, generates rhyming "OG" street-smart advice using Google Gemini, speaks via ElevenLabs, and provides a sleek visual overlay for OBS—complete with timed sound effects.
+Elroy is an AI-driven Twitch chat bot and OBS overlay. He listens for mentions, subs, bits, raids, and follows; responds in chat (and voice when quota allows) via Google Gemini + ElevenLabs; runs trivia and casino games on shared play-money chips; and ships a transparent browser overlay for stream production.
 
-## 🚀 Features
+## Features
 
-* **Twitch Integration:** Uses `tmi.js` to listen for chat mentions, subs, bits, follows, and mod commands.
-* **AI Brain:** Powered by Google Gemini (Stable 2026 Production Tier) for sassy, rhyming responses.
-* **Vocal Chords:** Real-time text-to-speech using ElevenLabs (Flash v2.5 model).
-* **Visual Overlay:** A transparent Next.js frontend designed for OBS Browser Sources.
-* **SFX:** ElevenLabs-generated effects (cached after first play) plus bundled sounds for key stream moments.
-* **Built-in Diagnostics:** Real-time system check panel to verify API connectivity and sound files.
+* **Twitch chat** — `tmi.js` IRC plus Helix for sends, announcements, and mod actions.
+* **AI personality** — Google Gemini (`gemini-2.5-flash-lite` by default) for mentions, check-ins, celebrations, and `!aboutme`.
+* **Voice** — ElevenLabs TTS with quota-aware pacing and bundled SFX.
+* **Trivia** — Cannabis, freaky, and 90s music rounds every **30 minutes** while live (first round ~12 min after go-live). Curated bank + optional Gemini generation; category intros always match the question topic.
+* **Casino games** — Blackjack, roulette, and Pick 3 / Pick 4 on one **1000 OG chip** bankroll (Redis-backed in production).
+* **Viewer memory** — `!aboutme` recalls trivia wins, subs, mentions, and **how long you've been following**.
+* **Stream awareness** — Title, game/category, viewer count; reacts to Spotify track changes; periodic command reminders every **7 minutes**.
+* **Mod tools** — Raid shoutouts, `!clip`, `!poll`, colored chat announcements (trivia, games, hints).
+* **Events** — Follows, subs, gifts, bits, raids, highlighted messages, channel updates (EventSub + IRC where applicable).
+* **Overlay** — Transparent Next.js page for OBS; live prompt control panel for the broadcaster.
 
-## 🛠️ Tech Stack
+## Tech stack
 
-* **Framework:** Next.js 14.2 (App Router)
+* **Framework:** Next.js 15 (App Router)
 * **Language:** TypeScript
-* **AI:** Google Generative AI (Gemini 1.5 Flash / Gemini 3)
-* **Audio:** ElevenLabs API
-* **Chat:** TMI.js
+* **AI:** Google Generative AI via `@ai-sdk/google`
+* **Voice / SFX:** ElevenLabs
+* **Chat:** TMI.js + Twitch Helix
+* **State:** Upstash Redis (trivia scores, games, user memory, live directives) — in-memory fallback locally
 
-## 📦 Installation
+## Installation
 
-1.  **Clone the repository:**
-    ```powershell
-    git clone https://github.com/YOUR_USERNAME/elroy.git
-    cd elroy
-    ```
+1. **Clone and install**
+   ```powershell
+   git clone https://github.com/carlinniss/elroy.git
+   cd elroy
+   npm install
+   ```
 
-2.  **Install dependencies:**
-    ```powershell
-    npm install
-    ```
+2. **Environment** — create `.env.local` (see [Environment variables](#environment-variables)).
 
-3.  **Setup Environment Variables:**
-    Create a `.env.local` file in the root directory and add your keys:
-    ```text
-    NEXT_PUBLIC_TWITCH_CHANNEL=your_channel_name
-    ELROY_CONTROL_SECRET=your_long_random_overlay_secret
-    TWITCH_BOT_USERNAME=your_bot_login
-    TWITCH_BOT_OAUTH_TOKEN=your_bot_token_here
-    TWITCH_OAUTH_TOKEN=your_broadcaster_or_mod_token_here
-    GOOGLE_GENERATIVE_AI_API_KEY=your_google_ai_studio_key
-    ELEVENLABS_API_KEY=your_elevenlabs_key
-    ELEVENLABS_VOICE_ID=pNInz6obpgDQGcFmaJgB
-    ```
+3. **Run**
+   ```powershell
+   npm run dev
+   ```
 
-## ⚙️ Configuration Notes
+4. Open `http://localhost:3000?controlKey=YOUR_ELROY_CONTROL_SECRET`, click **IGNITE BONG**, and mention `@elroy` in chat.
+
+## Environment variables
+
+### Required (core)
+
+| Variable | Purpose |
+| --- | --- |
+| `NEXT_PUBLIC_TWITCH_CHANNEL` | Your Twitch channel login (no `#`) |
+| `ELROY_CONTROL_SECRET` | Long random string — overlay URL + API auth |
+| `TWITCH_BOT_OAUTH_TOKEN` | Bot account OAuth token (chat send/read) |
+| `TWITCH_OAUTH_TOKEN` | Broadcaster or mod token (Helix, EventSub, follows) |
+| `TWITCH_CLIENT_ID` | Twitch application Client ID |
+| `TWITCH_CLIENT_SECRET` | Twitch application Client Secret |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | [AI Studio](https://aistudio.google.com/) key for chat / aboutme / optional trivia generation |
+| `ELEVENLABS_API_KEY` | Voice + generated SFX |
+| `ELEVENLABS_VOICE_ID` | ElevenLabs voice ID (e.g. `pNInz6obpgDQGcFmaJgB`) |
+
+### Recommended (production)
+
+| Variable | Purpose |
+| --- | --- |
+| `TWITCH_BOT_USERNAME` | Bot login (defaults from token validation if omitted) |
+| `TWITCH_EVENTSUB_SECRET` | 10–100 char secret for EventSub HMAC (raids, follows, subs, polls, etc.) |
+| `KV_REST_API_URL` + `KV_REST_API_TOKEN` | Upstash Redis (or `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`) |
+
+Without Redis, trivia scores, casino tables, and user memory reset when the serverless instance cold-starts.
+
+### Optional
+
+| Variable | Purpose |
+| --- | --- |
+| `GOOGLE_GENERATIVE_AI_MODEL` | Override Gemini model (default `gemini-2.5-flash-lite`) |
+| `TRIVIA_DISABLE_GEMINI` | Set `true` to use only the static trivia bank |
+| `TWITCH_EVENTSUB_CALLBACK` | Public HTTPS URL for EventSub (defaults to `https://<VERCEL_URL>/api/twitch/eventsub`) |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` / `SPOTIFY_REDIRECT_URI` | Spotify now-playing integration |
 
 ### Twitch tokens
-Paste the access token string only for `TWITCH_BOT_OAUTH_TOKEN` and `TWITCH_OAUTH_TOKEN` — the `oauth:` prefix is optional (we add it when needed for IRC).
 
-### API Billing (Critical)
-Elroy uses **Google Gemini** for chat and `!aboutme` only. **Trivia is 100% curated static questions** (no Gemini) — see `lib/trivia-bank.ts`. Voice uses a separate **ElevenLabs** quota (`!quota`).
+Paste the access token only — the `oauth:` prefix is optional.
 
-**Google AI Pro ($20/mo) does not refill API credits.** Chat uses `GOOGLE_GENERATIVE_AI_API_KEY` from [AI Studio](https://aistudio.google.com/).
+**Bot account** (`TWITCH_BOT_OAUTH_TOKEN`): needs chat read/write scopes. Elroy should be **modded on your channel** so he can send announcements, shoutouts, clips, and polls.
 
-Default model is **`gemini-2.5-flash-lite`**. Override in Vercel: `GOOGLE_GENERATIVE_AI_MODEL=gemini-2.5-flash-lite`
+**Broadcaster/mod token** (`TWITCH_OAUTH_TOKEN`): used for follows, bits, EventSub, and mod Helix calls. Typical scopes include `chat:read`, `chat:edit`, `moderator:read:followers`, `channel:manage:polls`, `clips:edit`, `moderator:manage:announcements`, `moderator:manage:shoutouts`, `bits:read`.
 
-To avoid `429 Quota Exceeded` on the free tier, stay under ~15 requests/minute. On prepaid, add credits at AI Studio → Billing.
+## Configuration notes
 
-### Audio Files
-Bundled sound effects live in `public/sounds/elroy/` (e.g. `bong_rip.mp3`, `sub_fanfare.mp3`). Optional fallback: `public/sounds/bong.mp3`.
+### Gemini billing
 
-### API Routes
-Ensure your file structure is exact for Next.js routing:
-* `app/api/chat/route.ts`
-* `app/api/speech/route.ts`
+Chat and `!aboutme` use Gemini. Default model is **`gemini-2.5-flash-lite`**. Override with `GOOGLE_GENERATIVE_AI_MODEL`.
 
-## 🏃 Running the Bot
+Trivia draws from **`lib/trivia-bank.ts`** + **`lib/trivia-bank-extra.ts`** (175+ curated questions). When `TRIVIA_DISABLE_GEMINI` is not set, Gemini may generate fresh questions with category validation so intros match content.
 
-1.  Start the development server:
-    ```powershell
-    npm run dev
-    ```
-2.  Open `http://localhost:3000?controlKey=your_long_random_overlay_secret` in your browser.
-3.  Click **IGNITE BONG** to initialize the Twitch connection.
-4.  Mention Elroy in chat (e.g. `@elroy what's good?`) or trigger a sub/bits/follow to hear the celebration sounds.
+Stay under provider rate limits on free tier (~15 req/min). Prepaid: add credits in AI Studio → Billing.
 
-### Useful Chat Commands
+### Audio
 
-* Mention **Elroy** in chat: get a chat reply (voice too, when enabled and quota allows).
-* **Trivia:** while live, curated cannabis / freaky / 90s music questions every **30 minutes** (first round ~12 min after go-live). Category intros always match the question topic. **175+ hand-written questions** in `lib/trivia-bank.ts` + `lib/trivia-bank-extra.ts`; they shuffle and cycle so repeats are spaced out (recent-window dedup in Redis). Add more by editing those files. Leaderboard scores persist; Elroy roasts leaders before each round.
-* `!aboutme`: Elroy tells you what he remembers about you in chat (trivia wins, subs, mentions, follow tenure, etc.).
-* **Blackjack (single table, play-money):** `!bj` open/sit → `!bet 10+` or `!bet all` → `!hit` / `!stand` / `!double` on your turn (double on first two cards only). You can still `!bj` during the betting window if you missed seating. Everyone starts with **1000 OG chips**. `!chips` balance, `!table` status, `!bjtop` high rollers (only players who have bet at least once). Need help: `!dare` (assigns a shame ritual — type the line + embarrassing emotes in chat to earn +120 chips; 20m cooldown), `!loan` (+400 chips, stacks debt — can borrow again while in debt; Elroy roasts you in chat each time), `!debt` (what you owe). Mods: `!bjstop`.
-* **Roulette (shared chips):** `!roulette` opens 45s betting → `!rbet red/black/odd/even/0-36 <amount>` (one bet per round). `!rtable` status. Mods: `!rstop`.
-* **Pick 3 / Pick 4 (shared chips):** `!pick3` or `!pick4` opens 60s betting → `!p3bet` / `!p4bet <type> <number> <amount>`. Types: **straight** (exact order), **box** (any order), **combo** (straight+box, costs 2×), **front** / **back** pair (2 digits), **mid** pair (Pick 4 only). Up to 5 bets per player per round. `!p3table` / `!p4table` status. Mods: `!p3stop` / `!p4stop`.
-* `!leaderboard` (alias: `!lb`): Show current trivia leaders in chat.
-* Elroy periodically posts command reminders for games, `!aboutme`, and leaderboards while live.
-* `!np` / `!nowplaying` / `!song`: Elroy reacts to the current Spotify track (when connected).
-* `!quota`: Show remaining ElevenLabs character quota.
-* `!ding` (alias: `!gong`): Toggle bong rip sound before voice (broadcaster/mod only).
-* `!voiceoff`: Disable voice playback but keep chat replies on (broadcaster/mod only).
-* `!voiceon`: Re-enable voice playback (broadcaster/mod only).
-* `!voicestatus`: Report whether voice playback is currently on or off (broadcaster/mod only).
-* `!elroyoff`: Disconnect Elroy from chat entirely (broadcaster/mod only).
+Bundled SFX live in `public/sounds/elroy/`. Optional fallback bong: `public/sounds/bong.mp3`.
 
-## 🎛️ Live prompt control (broadcaster)
+### API surface
 
-Steer Elroy's spontaneous content during a stream without redeploying:
+Key routes under `app/api/`: `chat`, `speech`, `trivia/*`, `blackjack/*`, `roulette/*`, `pick-numbers/*`, `twitch/*`, `spotify/*`, `users/aboutme`, `bot/session`.
 
-1. Set `ELROY_CONTROL_SECRET` in Vercel (any long random string).
-2. Open **`/control/your-secret`** on your Elroy site (e.g. `https://elroy-zeta.vercel.app/control/dtl` if your secret is `dtl`) on your phone or a second monitor.
-3. The secret in the URL must match `ELROY_CONTROL_SECRET` in Vercel — the page auto-loads it.
+---
+
+## Chat commands
+
+### Talk to Elroy
+
+| Command | Who | What |
+| --- | --- | --- |
+| `@elroy …` | Everyone | Chat reply (+ voice when enabled). Ask about the stream title/game or what's playing on Spotify. |
+| `!aboutme` | Everyone | Elroy reads what he remembers (trivia wins, subs, mentions, follow tenure). |
+| `!quota` | Everyone | Remaining ElevenLabs character quota. |
+
+Elroy ignores his own messages and won't reply to his opening lines or system broadcasts.
+
+### Trivia & leaderboards
+
+| Command | Who | What |
+| --- | --- | --- |
+| *(automatic)* | — | Trivia every **30 min** while live; **5 min** answer window with progressive hints. |
+| `!leaderboard` / `!lb` | Everyone | Trivia leaders (cannabis / freaky / 90s). |
+
+Categories: **cannabis**, **freaky**, **90s music** — intro emoji/text matches the actual question.
+
+### Casino — shared OG chips
+
+Everyone starts with **1000 chips**. Blackjack, roulette, and Pick 3/4 share the same balance and leaderboard (`!bjtop` / `!bjlb`). Loan debt auto-collects from future winnings.
+
+#### Blackjack
+
+| Command | What |
+| --- | --- |
+| `!bj` / `!blackjack` | Open table / take a seat |
+| `!bet <amount>` / `!bet all` | Bet during betting window (min 10) |
+| `!hit` / `!h` · `!stand` / `!s` · `!double` / `!dd` | Play your hand |
+| `!table` / `!bjtable` | Table status |
+| `!chips` | Your balance |
+| `!dare` | Shame ritual for +120 chips (20m cooldown) |
+| `!loan` | +400 chips, +600 debt (stackable — Elroy roasts you each time) |
+| `!debt` | Outstanding loan |
+| `!bjtop` / `!bjlb` | Chip high rollers |
+| `!bjstop` | **Mod** — cancel table, refund bets |
+
+#### Roulette
+
+| Command | What |
+| --- | --- |
+| `!roulette` / `!spin` | Open 45s betting |
+| `!rbet <choice> <amount>` | One bet per round: `red`, `black`, `odd`, `even`, `0`–`36` |
+| `!rtable` / `!rstatus` | Status |
+| `!rstop` | **Mod** — cancel and refund |
+
+Payouts: **2×** on color/odd/even, **36×** on a single number.
+
+#### Pick 3 / Pick 4
+
+| Command | What |
+| --- | --- |
+| `!pick3` / `!p3` · `!pick4` / `!p4` | Open 60s betting |
+| `!p3bet` / `!p4bet <type> <num> <amt>` | Place a bet (up to **5** per player per round) |
+| `!p3table` · `!p4table` | Status |
+| `!p3stop` · `!p4stop` | **Mod** — cancel and refund |
+
+**Bet types:** `straight` (exact order) · `box` (any order) · `combo` (straight+box, costs **2×**) · `front` / `back` pair (2 digits) · `mid` pair (**Pick 4 only**)
+
+Aliases: `s`, `b`, `c`, `fp`, `bp`, `mp`.
+
+Example: `!p3bet straight 420 50` · `!p4bet box 1234 25`
+
+### Stream info & Spotify
+
+| Command | Who | What |
+| --- | --- | --- |
+| `!stream` / `!title` / `!game` / `!category` | Everyone | Current title and game |
+| `!np` / `!nowplaying` / `!song` | Everyone | Elroy reacts to the current Spotify track |
+
+### Mod & production
+
+| Command | Who | What |
+| --- | --- | --- |
+| `!clip` / `!clipthat` | Everyone | Create a Twitch clip (needs live + `clips:edit`) |
+| `!poll Question? \| A \| B [| C]` | **Mod** | Start a 90s channel poll |
+| `!ding` / `!gong` | Broadcaster/mod | Toggle bong rip before voice |
+| `!voice` | Broadcaster/mod | Toggle voice on/off (chat stays on) |
+| `!volume` · `!volume 50` · `!volume +10` | Broadcaster/mod | Read or set playback volume |
+| `!elroyoff` | Broadcaster/mod | Disconnect bot from chat |
+
+### Automatic (no command)
+
+* **Raids** — Elroy hypes the raider and sends a **raid shoutout** when mod credentials allow.
+* **Follows / subs / bits** — Celebrations with SFX; richer sub/follow data when available.
+* **Highlighted messages** — Treated as notable chat (not spam).
+* **Command reminders** — Every **7 minutes** while live, rotating hints for games, `!aboutme`, and leaderboards.
+* **Stream check-ins** — Periodic banter about viewer count and stream status (~15 min).
+
+---
+
+## Live prompt control (broadcaster)
+
+1. Set `ELROY_CONTROL_SECRET` in Vercel.
+2. Open **`/control/your-secret`** on your Elroy site (same secret as the overlay).
+3. Keep the OBS browser source open — directives poll Redis every ~12s.
 
 | Mode | What it does |
 | --- | --- |
-| **Sticky** | Stays active until removed. Elroy weaves it into banter, check-ins, mentions, etc. |
-| **Next response** | Injected once on Elroy's very next AI line, then cleared. |
-| **Push now** | Elroy responds immediately (within ~12s). Optional chat-only or force-voice. |
+| **Sticky** | Stays active until removed; woven into banter and check-ins. |
+| **Next response** | Injected once on Elroy's next AI line, then cleared. |
+| **Push now** | Immediate response (~12s). Optional chat-only or force-voice. |
 
-The overlay polls Redis every ~12 seconds. Keep the OBS browser source running so push/next directives take effect.
+---
 
-## 🎵 Spotify (now playing)
+## Spotify (now playing)
 
-Elroy can read what is playing on the broadcaster's Spotify account and react in chat when tracks change (trivia, 1–10 smoke/sex ratings, hot takes).
+1. Create a [Spotify Developer app](https://developer.spotify.com/dashboard) with redirect URI `https://your-site.vercel.app/api/spotify/callback`.
+2. Set `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, and optional `SPOTIFY_REDIRECT_URI`.
+3. On **`/control/your-secret`**, click **Connect Spotify account**.
+4. While live, Elroy polls every ~5s and comments when the track changes (smoke/sex ratings, hot takes).
 
-1. Create a [Spotify Developer app](https://developer.spotify.com/dashboard) and add redirect URI: `https://your-elroy-site.vercel.app/api/spotify/callback`
-2. In Vercel, set:
-   - `SPOTIFY_CLIENT_ID`
-   - `SPOTIFY_CLIENT_SECRET`
-   - Optional: `SPOTIFY_REDIRECT_URI` (defaults to `https://<VERCEL_URL>/api/spotify/callback`)
-3. Open **`/control/your-secret`** and click **Connect Spotify account** (uses the same `ELROY_CONTROL_SECRET` as live control).
-4. Play music from that Spotify account while live. Elroy polls every ~5s and comments when the track changes (no chat cooldown — voice lines still respect quota/cooldowns).
+Chat: `!np`, `!nowplaying`, or `!song` for an on-demand take.
 
-Chat: `!np`, `!nowplaying`, or `!song` — force a take on the current track (if something is playing).
+---
 
-## 🔊 Sound Effects
+## Sound effects
 
-Elroy plays these sounds automatically during stream events. Most are generated once via ElevenLabs and cached; `sub_fanfare` is a bundled MP3.
-
-| ID | Sound | When it plays |
+| ID | Sound | When |
 | --- | --- | --- |
-| `bong_rip` | Glass bong rip (bundled MP3) | Before Elroy speaks (when ding is on) |
-| `sub_fanfare` | La Cucaracha car horn | Sub, resub, or gift sub |
-| `bits_kaching` | Cash register kaching | Bits/cheers |
-| `follow_ding` | Bright notification ding | New follower |
-| `go_live` | Dramatic go-live whoosh | Stream goes live |
-| `mute_zip` | Comedy zipper | "Shut Elroy Up" power-up redeemed |
-| `roast_sting` | Rimshot sting | Someone calls him "L Roy" |
-| `cough` | Short chest cough (bundled MP3) | After every voice line |
+| `bong_rip` | Glass bong rip | Before Elroy speaks (when ding is on) |
+| `sub_fanfare` | La Cucaracha horn | Sub / resub / gift sub / raid |
+| `bits_kaching` | Cash register | Bits |
+| `follow_ding` | Notification ding | New follower |
+| `go_live` | Whoosh | Stream goes live |
+| `mute_zip` | Zipper | "Shut Elroy Up" channel point redeemed |
+| `roast_sting` | Rimshot | Someone calls him "L Roy" |
+| `cough` | Short cough | After voice lines |
 
-Elroy polls ElevenLabs character quota every **2 minutes** and adjusts voice frequency automatically — more credits = more voice (but still paced so you do not burn the budget in one stream):
+Elroy polls ElevenLabs quota every **2 minutes** and throttles voice automatically:
 
 | Characters left | Voice behavior |
 | --- | --- |
-| 250,000+ | Abundant — voice ~every 40s, ambient check-ins/banter use TTS |
-| 100,000–249,999 | Plentiful — ~every 50s, ambient voice on |
-| 50,000–99,999 | Full — ~every 70s, ambient voice on |
-| 15,000–49,999 | Comfortable — ~every 2 min, chat banter text-only |
-| 5,000–14,999 | Moderate — ~every 3 min |
-| 1,000–4,999 | Low — subs/bits celebrations only |
+| 250,000+ | ~every 40s; ambient check-ins use TTS |
+| 100,000–249,999 | ~every 50s |
+| 50,000–99,999 | ~every 70s |
+| 15,000–49,999 | ~every 2 min; ambient text-only |
+| 5,000–14,999 | ~every 3 min |
+| 1,000–4,999 | Subs/bits/raids mainly |
 | Under 1,000 | Voice off until credits added |
 
-Type `!quota` in chat to see the current count. After you add credits, give it up to 2 minutes (or refresh the overlay) for the tier to update.
+Test: `https://your-site.vercel.app/api/sfx/<id>` · Chat: `!quota`
 
-**Fallback:** If `bong_rip` is unavailable, Elroy falls back to `public/sounds/bong.mp3` when ding is enabled.
+---
 
-### Testing sounds
+## OBS setup
 
-Open any sound directly in your browser (plays inline):
+1. Add a **Browser Source**.
+2. URL: `https://your-site.vercel.app/embed/YOUR_ELROY_CONTROL_SECRET` (or local `http://localhost:3000/embed/...`).
+3. Match canvas size (e.g. 1920×1080).
+4. Enable **Control audio via OBS** to mix voice separately.
 
-* **Production:** `https://elroy-zeta.vercel.app/api/sfx/<id>`
-* **Local dev:** `http://localhost:3000/api/sfx/<id>`
+---
 
-Examples:
+## License
 
-* `https://elroy-zeta.vercel.app/api/sfx/sub_fanfare`
-* `https://elroy-zeta.vercel.app/api/sfx/bong_rip`
-
-Replace `<id>` with any ID from the table above. The first request for an uncached ElevenLabs sound generates it on the server; after that it is served from cache.
-
-To test in-stream, run the overlay and trigger the matching event (sub, bits, follow, go live, etc.). Sounds are warmed up when the bot starts.
-
-## 🖥️ OBS Setup
-
-1.  Add a new **Browser Source** in OBS.
-2.  Set URL to `http://localhost:3000/embed/your_long_random_overlay_secret` (recommended for OBS) or `?controlKey=...` in a normal browser.
-3.  Set Width/Height to your canvas size (e.g., 1920x1080).
-4.  Check **Control Audio via OBS** if you want to mix the bot's voice separately.
-
-## 📜 License
-MIT - Use it, flip it, rip it.
+MIT — use it, flip it, rip it.
