@@ -14,6 +14,7 @@ import {
   detectElroyTriviaCheat,
 } from '@/lib/cannabis-trivia';
 import { formatTriviaLeaderboardChatMessage } from '@/lib/trivia-scores';
+import { buildPeriodicCommandHelpMessage, buildCommandsChatReply, buildCommandsPageUrl } from '@/lib/bot-commands';
 import { buildTriviaProgressHint } from '@/lib/trivia-hints';
 import { buildSpotifyTrackPrompt } from '@/lib/spotify-prompt';
 import type { SpotifyTrackSnapshot } from '@/lib/spotify';
@@ -136,11 +137,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const ROULETTE_TICK_MS = 4_000;
   const PICK_TICK_MS = 4_000;
   const COMMAND_HELP_INTERVAL_MS = 7 * 60 * 1000;
-  const COMMAND_HELP_MESSAGES = [
-    '🎮 !bj !bet !hit !stand | !roulette !rbet | !pick3 !p3bet / !pick4 !p4bet straight/box/combo/front/back <num> <amt>',
-    '📊 !aboutme | !leaderboard / !lb (trivia) | !bjtop (chips) | !chips !dare !loan',
-    '🎬 !stream !clip !np — 1000 OG chips to start. !pick3 and !pick4 use the same bankroll.',
-  ];
   const CHAT_ACTIVITY_MESSAGE_THRESHOLD = 90;
   const CHAT_ACTIVITY_CHANCE = 0.75;
   const chatActivityThresholdRef = useRef(CHAT_ACTIVITY_MESSAGE_THRESHOLD);
@@ -194,6 +190,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const pickPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastCommandHelpAtRef = useRef(0);
   const commandHelpIndexRef = useRef(0);
+  const commandsPageUrlRef = useRef('');
   const spotifyPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSpotifyTrackIdRef = useRef<string | null>(null);
   const streamLiveRef = useRef(false);
@@ -256,6 +253,12 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       return res.ok;
     } catch {
       return false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      commandsPageUrlRef.current = buildCommandsPageUrl(window.location.origin);
     }
   }, []);
 
@@ -2279,9 +2282,20 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
   const announceCommandHelp = useCallback(() => {
     if (!streamLiveRef.current || isFullyMuted()) return;
-    const message = COMMAND_HELP_MESSAGES[commandHelpIndexRef.current % COMMAND_HELP_MESSAGES.length]!;
+    const url = commandsPageUrlRef.current || buildCommandsPageUrl(
+      typeof window !== 'undefined' ? window.location.origin : undefined,
+    );
+    const message = buildPeriodicCommandHelpMessage(url, commandHelpIndexRef.current);
     commandHelpIndexRef.current += 1;
     void sayChat(message);
+  }, [sayChat]);
+
+  const announceCommandsLink = useCallback((username: string) => {
+    if (isFullyMuted()) return;
+    const url = commandsPageUrlRef.current || buildCommandsPageUrl(
+      typeof window !== 'undefined' ? window.location.origin : undefined,
+    );
+    void sayChat(buildCommandsChatReply(username, url));
   }, [sayChat]);
 
   const maybeAnnounceCommandHelp = useCallback(() => {
@@ -2825,6 +2839,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         return void announceAboutMe(username);
       }
       const lowerCmd = m.toLowerCase().trim();
+      if (lowerCmd === '!commands' || lowerCmd === '!cmds' || lowerCmd === '!help') {
+        if (isFullyMuted()) return;
+        return void announceCommandsLink(username);
+      }
       if (lowerCmd === '!np' || lowerCmd === '!nowplaying' || lowerCmd === '!song') {
         if (isFullyMuted()) return;
         return void requestSpotifyComment(username);

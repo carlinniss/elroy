@@ -113,7 +113,7 @@ Key routes under `app/api/`: `chat`, `speech`, `trivia/*`, `blackjack/*`, `roule
 | --- | --- | --- |
 | `@elroy …` | Everyone | Chat reply (+ voice when enabled). Ask about the stream title/game or what's playing on Spotify. |
 | `!aboutme` | Everyone | Elroy reads what he remembers (trivia wins, subs, mentions, follow tenure). |
-| `!quota` | Everyone | Remaining ElevenLabs character quota. |
+| `!commands` / `!cmds` / `!help` | Everyone | Link to the full command list page (`/commands`). |
 
 Elroy ignores his own messages and won't reply to his opening lines or system broadcasts.
 
@@ -194,7 +194,7 @@ Example: `!p3bet straight 420 50` · `!p4bet box 1234 25`
 * **Raids** — Elroy hypes the raider and sends a **raid shoutout** when mod credentials allow.
 * **Follows / subs / bits** — Celebrations with SFX; richer sub/follow data when available.
 * **Highlighted messages** — Treated as notable chat (not spam).
-* **Command reminders** — Every **7 minutes** while live, rotating hints for games, `!aboutme`, and leaderboards.
+* **Command list** — Live docs at **`/commands`** (mobile-friendly). Elroy posts the link every **7 minutes** while live; type `!commands` anytime for the URL.
 * **Stream check-ins** — Periodic banter about viewer count and stream status (~15 min).
 
 ---
