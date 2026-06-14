@@ -116,8 +116,8 @@ function applyEvent(profile: UserMemoryProfile, event: UserMemoryEvent): UserMem
       break;
     case 'sub': {
       const tierLabel = event.tier === '3000' ? 'Tier 3' : event.tier === '2000' ? 'Tier 2' : 'sub';
-      const monthLine = event.months && event.months > 1 ? `${event.months}-month ` : '';
-      const streakLine = event.streakMonths && event.streakMonths > 1 ? ` (${event.streakMonths} streak)` : '';
+      const monthLine = event.months && event.months > 0 ? `${event.months}-month ` : '';
+      const streakLine = event.streakMonths && event.streakMonths > 0 ? ` (${event.streakMonths}-month streak)` : '';
       const giftLine = event.isGift ? ' (gift sub)' : '';
       next.notes = pushUniqueNote(next.notes, `Supported with a ${monthLine}${tierLabel}${giftLine}${streakLine}.`);
       break;

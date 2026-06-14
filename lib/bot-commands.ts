@@ -21,12 +21,12 @@ export const BOT_COMMAND_SECTIONS: BotCommandSection[] = [
   {
     id: 'elroy',
     title: 'Talk to Elroy',
-    summary: 'Mention @elroy in chat for banter. Voice plays when quota and settings allow.',
+    summary: 'Say his name in chat — Elroy is listening and will respond. Voice plays when quota and settings allow.',
     commands: [
       {
-        command: '@elroy',
-        description: 'Get a chat reply (and voice when enabled). Ask about the stream title, game, or Spotify.',
-        example: '@elroy what game are we on?',
+        command: 'Mention Elroy',
+        description: 'Any time you mention Elroy in chat, he responds (voice too when enabled). Ask about the stream title, game, or Spotify.',
+        example: 'Elroy what game are we on?',
       },
       {
         command: '!aboutme',

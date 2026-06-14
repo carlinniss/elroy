@@ -102,8 +102,9 @@ export default function CommandsPage() {
           Chat commands
         </h1>
         <p style={{ margin: 0, lineHeight: 1.55, color: 'rgba(255,255,255,0.65)', fontSize: 15 }}>
-          {total} commands — updated live from the bot. Mention <strong style={{ color: '#fff' }}>@elroy</strong>{' '}
-          anytime, or type <strong style={{ color: '#fff' }}>!commands</strong> in chat for this link.
+          {total} commands — updated live from the bot. Mention <strong style={{ color: '#fff' }}>Elroy</strong>{' '}
+          anytime and he&apos;ll respond — he&apos;s listening. Or type{' '}
+          <strong style={{ color: '#fff' }}>!commands</strong> in chat for this link.
         </p>
       </header>
 

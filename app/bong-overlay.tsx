@@ -14,6 +14,11 @@ import {
   detectElroyTriviaCheat,
 } from '@/lib/cannabis-trivia';
 import { formatTriviaLeaderboardChatMessage } from '@/lib/trivia-scores';
+import {
+  formatSubCelebrationDetail,
+  subTenureFromEventPayload,
+  subTenureFromTmiUserstate,
+} from '@/lib/sub-tenure';
 import { buildPeriodicCommandHelpMessage, buildCommandsChatReply, buildCommandsPageUrl } from '@/lib/bot-commands';
 import { buildTriviaProgressHint } from '@/lib/trivia-hints';
 import { buildSpotifyTrackPrompt } from '@/lib/spotify-prompt';
@@ -1243,7 +1248,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   }, []);
 
   const buildSubPrompt = useCallback((user: string, details: string) =>
-    `${user} just subscribed to the channel! ${details} One or two celebration sentences.`, []);
+    `${user} just subscribed or resubbed! ${details} Celebrate them — use total months subscribed when given, not streak alone. One or two sentences.`, []);
 
   const buildRaidPrompt = useCallback((user: string, viewers: number) =>
     `${user} just raided with ${viewers} viewer${viewers === 1 ? '' : 's'}! Welcome them hard — hype the raid, shout them out by name, OG energy.`, []);
@@ -1583,12 +1588,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       }, controlHeaders());
     }
     if (kind === 'sub') {
+      const payload = memoryEvent ?? {};
+      const tenure = subTenureFromEventPayload(payload as Record<string, unknown>);
       rememberUser(username, username, {
         type: 'sub',
-        tier: typeof memoryEvent?.tier === 'string' ? memoryEvent.tier : undefined,
-        months: typeof memoryEvent?.cumulative_months === 'number' ? memoryEvent.cumulative_months : undefined,
-        streakMonths: typeof memoryEvent?.streak_months === 'number' ? memoryEvent.streak_months : undefined,
-        isGift: memoryEvent?.is_gift === true,
+        tier: typeof payload.tier === 'string' ? payload.tier : undefined,
+        months: tenure.cumulativeMonths ?? undefined,
+        streakMonths: tenure.streakMonths ?? undefined,
+        isGift: payload.is_gift === true,
       }, controlHeaders());
     }
     if (kind === 'bits') rememberUser(username, username, { type: 'bits', amount: bitsAmount }, controlHeaders());
@@ -1696,19 +1703,34 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
           celebrate('follow', login, '', undefined, payload);
         } else if (event.type === 'subscribe') {
           const login = String(payload.user_login ?? '');
-          const months = Number(payload.cumulative_months ?? 1);
-          const tier = payload.tier === '3000' ? 'Tier 3' : payload.tier === '2000' ? 'Tier 2' : 'sub';
-          const detail = `${months} month${months === 1 ? '' : 's'} ${tier}${payload.is_gift ? ' (gift)' : ''}.`;
+          const tenure = subTenureFromEventPayload(payload);
+          const detail = formatSubCelebrationDetail({
+            cumulativeMonths: tenure.cumulativeMonths ?? 1,
+            streakMonths: tenure.streakMonths,
+            tier: String(payload.tier ?? '1000'),
+            isGift: payload.is_gift === true,
+            kind: (tenure.cumulativeMonths ?? 1) <= 1 ? 'new' : 'resub',
+          });
           celebrate('sub', login, detail, undefined, payload);
         } else if (event.type === 'subscription_gift') {
           const login = String(payload.user_login ?? '');
           const total = Number(payload.total ?? 1);
-          celebrate('sub', login, `They gifted ${total} sub${total === 1 ? '' : 's'}!`, undefined, payload);
+          celebrate('sub', login, formatSubCelebrationDetail({
+            kind: 'mystery_gift',
+            giftCount: total,
+            tier: String(payload.tier ?? '1000'),
+          }), undefined, payload);
         } else if (event.type === 'subscription_message') {
           const login = String(payload.user_login ?? '');
-          const months = Number(payload.cumulative_months ?? 1);
+          const tenure = subTenureFromEventPayload(payload);
           const text = String(payload.text ?? '').trim();
-          const detail = `${months} month resub${text ? ` — "${text}"` : ''}.`;
+          const detail = formatSubCelebrationDetail({
+            cumulativeMonths: tenure.cumulativeMonths,
+            streakMonths: tenure.streakMonths,
+            tier: String(payload.tier ?? '1000'),
+            message: text,
+            kind: 'resub',
+          });
           celebrate('sub', login, detail, undefined, payload);
         } else if (event.type === 'cheer') {
           const login = String(payload.user_login ?? '');
@@ -2985,22 +3007,55 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       },
     );
 
-    client.on('subscription', (_channel: string, username: string, _method: unknown, message: string) => {
-      const detail = message?.trim() ? `They said: "${message.trim()}"` : 'Brand new sub!';
-      celebrate('sub', username, detail);
+    client.on('subscription', (_channel, username, _method, message, userstate) => {
+      const tenure = subTenureFromTmiUserstate(userstate as Record<string, unknown>);
+      const detail = formatSubCelebrationDetail({
+        cumulativeMonths: tenure.cumulativeMonths ?? 1,
+        streakMonths: tenure.streakMonths,
+        tier: String(userstate['msg-param-sub-plan'] ?? ''),
+        message: message?.trim(),
+        kind: 'new',
+      });
+      celebrate('sub', username, detail, undefined, {
+        cumulative_months: tenure.cumulativeMonths ?? 1,
+        streak_months: tenure.streakMonths ?? 0,
+        tier: userstate['msg-param-sub-plan'],
+        is_gift: userstate['msg-param-sub-plan'] === 'Prime',
+      });
     });
 
-    client.on('resub', (_channel: string, username: string, months: number, message: string) => {
-      const detail = `${months} month streak.${message?.trim() ? ` They said: "${message.trim()}"` : ''}`;
-      celebrate('sub', username, detail);
+    client.on('resub', (_channel, username, _streakMonths, message, userstate) => {
+      const tenure = subTenureFromTmiUserstate(userstate as Record<string, unknown>);
+      const detail = formatSubCelebrationDetail({
+        cumulativeMonths: tenure.cumulativeMonths,
+        streakMonths: tenure.streakMonths,
+        tier: String(userstate['msg-param-sub-plan'] ?? ''),
+        message: message?.trim(),
+        kind: 'resub',
+      });
+      celebrate('sub', username, detail, undefined, {
+        cumulative_months: tenure.cumulativeMonths ?? 0,
+        streak_months: tenure.streakMonths ?? 0,
+        tier: userstate['msg-param-sub-plan'],
+      });
     });
 
-    client.on('subgift', (_channel: string, username: string, _streakMonths: number, recipient: string) => {
-      celebrate('sub', username, `They gifted a sub to ${recipient}!`);
+    client.on('subgift', (_channel, username, _streakMonths, recipient, _methods, userstate) => {
+      celebrate('sub', username, formatSubCelebrationDetail({
+        kind: 'gift',
+        giftRecipient: recipient,
+        tier: String(userstate['msg-param-sub-plan'] ?? ''),
+      }), undefined, {
+        tier: userstate['msg-param-sub-plan'],
+        is_gift: true,
+      });
     });
 
     client.on('submysterygift', (_channel: string, username: string, numbOfSubs: number) => {
-      celebrate('sub', username, `They dropped ${numbOfSubs} gift subs on the community!`);
+      celebrate('sub', username, formatSubCelebrationDetail({
+        kind: 'mystery_gift',
+        giftCount: numbOfSubs,
+      }));
     });
 
     client.on('cheer', (_channel: string, userstate: tmi.ChatUserstate, message: string) => {

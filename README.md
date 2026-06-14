@@ -40,7 +40,7 @@ Elroy is an AI-driven Twitch chat bot and OBS overlay. He listens for mentions, 
    npm run dev
    ```
 
-4. Open `http://localhost:3000?controlKey=YOUR_ELROY_CONTROL_SECRET`, click **IGNITE BONG**, and mention `@elroy` in chat.
+4. Open `http://localhost:3000?controlKey=YOUR_ELROY_CONTROL_SECRET`, click **IGNITE BONG**, and mention Elroy in chat — he's listening.
 
 ## Environment variables
 
@@ -111,7 +111,7 @@ Key routes under `app/api/`: `chat`, `speech`, `trivia/*`, `blackjack/*`, `roule
 
 | Command | Who | What |
 | --- | --- | --- |
-| `@elroy …` | Everyone | Chat reply (+ voice when enabled). Ask about the stream title/game or what's playing on Spotify. |
+| Mention Elroy | Everyone | Say his name in chat — he responds (+ voice when enabled). Ask about the stream title/game or Spotify. |
 | `!aboutme` | Everyone | Elroy reads what he remembers (trivia wins, subs, mentions, follow tenure). |
 | `!commands` / `!cmds` / `!help` | Everyone | Link to the full command list page (`/commands`). |
 
