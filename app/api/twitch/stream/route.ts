@@ -4,6 +4,12 @@ import {
   getBroadcasterLogin,
 } from '@/lib/twitch';
 
+export const dynamic = 'force-dynamic';
+
+const NO_CACHE_HEADERS = {
+  'Cache-Control': 'no-store, max-age=0',
+};
+
 export async function GET() {
   const broadcasterLogin = getBroadcasterLogin();
   if (!broadcasterLogin) {
@@ -12,7 +18,7 @@ export async function GET() {
       is_live: false,
       viewer_count: null,
       error: 'Set NEXT_PUBLIC_TWITCH_CHANNEL or TWITCH_BROADCASTER_LOGIN to your stream username.',
-    }, { status: 503 });
+    }, { status: 503, headers: NO_CACHE_HEADERS });
   }
 
   const clientId = process.env.TWITCH_CLIENT_ID;
@@ -28,7 +34,7 @@ export async function GET() {
         game_name: result.game_name ?? '',
         game_id: result.game_id ?? '',
         started_at: result.started_at ?? '',
-      });
+      }, { headers: NO_CACHE_HEADERS });
     }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Helix stream fetch failed';
@@ -41,7 +47,7 @@ export async function GET() {
       ...result,
       is_live: result.status === 'live',
       broadcaster_login: broadcasterLogin,
-    });
+    }, { headers: NO_CACHE_HEADERS });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Stream fetch failed';
     console.error('STREAM ERROR:', message);
@@ -51,6 +57,6 @@ export async function GET() {
       viewer_count: null,
       error: message,
       broadcaster_login: broadcasterLogin,
-    }, { status: 500 });
+    }, { status: 500, headers: NO_CACHE_HEADERS });
   }
 }

@@ -46,8 +46,13 @@ export const BOT_COMMAND_SECTIONS: BotCommandSection[] = [
   {
     id: 'trivia',
     title: 'Trivia & leaderboards',
-    summary: 'Automatic trivia every 30 minutes while live (first round ~12 min after go-live). 5-minute answer window with hints.',
+    summary: 'Trivia is off by default — type !trivia in chat to start a round (5-minute answer window with hints).',
     commands: [
+      {
+        command: '!trivia',
+        description: 'Start a trivia round while live. Optional category: cannabis, freaky, or music90s.',
+        example: '!trivia · !trivia music90s',
+      },
       {
         command: '!leaderboard',
         aliases: ['!lb'],
@@ -198,7 +203,7 @@ const CHAT_HELP_TEASERS = [
   (url: string) => `📖 Full Elroy command list (${countBotCommands()} cmds): ${url}`,
   (url: string) => `🎮 Games, trivia, chips & mod tools — see every command at ${url}`,
   (url: string) => `📋 New here? Type !commands or open ${url}`,
-  (url: string) => `🃏 Blackjack · roulette · Pick 3/4 · trivia — all commands: ${url}`,
+  (url: string) => `🃏 Blackjack · roulette · Pick 3/4 · !trivia on demand — all commands: ${url}`,
 ];
 
 export function buildPeriodicCommandHelpMessage(url: string, index: number): string {

@@ -133,11 +133,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const FOLLOWER_POLL_MS = 45_000;
   const CHANNEL_EVENTS_POLL_MS = 5_000;
   const STREAM_CHECKIN_MS = 15 * 60 * 1000;
-  const STREAM_POLL_MS = 60_000;
-  const TRIVIA_INTERVAL_MS = 30 * 60 * 1000;
-  const TRIVIA_FIRST_DELAY_MS = 12 * 60 * 1000;
+  const STREAM_POLL_MS = 15_000;
   const TRIVIA_ANSWER_WINDOW_MS = 5 * 60 * 1000;
-  const TRIVIA_CHECK_MS = 60_000;
+  const TRIVIA_CHECK_MS = 30_000;
   const BLACKJACK_TICK_MS = 4_000;
   const ROULETTE_TICK_MS = 4_000;
   const PICK_TICK_MS = 4_000;
@@ -1002,7 +1000,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     let title = streamTitleRef.current;
     let gameName = streamGameRef.current;
     try {
-      const res = await fetch('/api/twitch/stream');
+      const res = await fetch(`/api/twitch/stream?t=${Date.now()}`, { cache: 'no-store' });
       const data = await res.json();
       if (res.ok && (data.status === 'live' || data.status === 'offline' || data.status === 'unknown')) {
         streamStatus = data.status;
@@ -1269,10 +1267,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
     let viewerLine: string;
     if (streamStatus === 'live' && viewerCount != null) {
-      viewerLine = `The stream is LIVE with ${viewerCount} viewers right now.`;
+      viewerLine = `The stream is LIVE with about ${viewerCount} viewers (latest Twitch API poll — may differ slightly from the player UI).`;
     } else if (chatActive) {
       viewerLine = streamStatus === 'live' && viewerCount != null
-        ? `The stream is live with about ${viewerCount} viewers. Chat is active.`
+        ? `The stream is live with about ${viewerCount} viewers (API snapshot). Chat is active.`
         : 'Chat is active — the stream is clearly live. Viewer count could not be fetched; hype the room without inventing a number.';
     } else if (streamStatus === 'offline') {
       viewerLine = 'Twitch reports the channel is not live and chat has been quiet.';
@@ -1797,7 +1795,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       streamStartedAtRef.current = Date.now();
       sessionChatRef.current = [];
       greetedThisSessionRef.current.clear();
-      lastTriviaAtRef.current = Date.now() - (TRIVIA_INTERVAL_MS - TRIVIA_FIRST_DELAY_MS);
       lastCommandHelpAtRef.current = Date.now();
       commandHelpIndexRef.current = 0;
       activeTriviaRef.current = null;
@@ -1831,7 +1828,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     const { isLive, viewerCount, title, gameName } = await fetchStreamStatus();
     streamLiveRef.current = isLive;
     const metaBits = [
-      isLive ? `LIVE${viewerCount != null ? ` (${viewerCount})` : ''}` : 'offline — voice waits for LIVE',
+      isLive && viewerCount != null ? `LIVE (~${viewerCount})` : isLive ? 'LIVE' : 'offline — voice waits for LIVE',
       title ? `"${title}"` : '',
       gameName || '',
     ].filter(Boolean);
@@ -1888,7 +1885,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     );
   }, [postTwitchAnnounce]);
 
-  const askCannabisTrivia = useCallback(async () => {
+  const askCannabisTrivia = useCallback(async (options?: {
+    category?: TriviaCategory;
+    requestedBy?: string;
+  }) => {
     if (isFullyMuted() || !streamLiveRef.current) return;
     if (activeTriviaRef.current && !activeTriviaRef.current.answered) return;
     if (triviaAskInFlightRef.current) return;
@@ -1898,7 +1898,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
     try {
       const roll = Math.random();
-      const category: TriviaCategory = roll < 0.4 ? 'music90s' : roll < 0.8 ? 'cannabis' : 'freaky';
+      const category: TriviaCategory = options?.category
+        ?? (roll < 0.4 ? 'music90s' : roll < 0.8 ? 'cannabis' : 'freaky');
       let picked: ElroyTriviaQuestion | null = null;
 
       const categoryHistory = recentTriviaHistoryRef.current.filter((entry) => entry.category === category);
@@ -1926,9 +1927,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       }
 
       if (!picked) {
-        lastTriviaAtRef.current = Date.now() - TRIVIA_INTERVAL_MS + 2 * 60 * 1000;
         void sayChat(
-          '🌿 Trivia round skipped — every curated question in the deck was asked recently. Elroy will reshuffle soon.',
+          options?.requestedBy
+            ? `@${options.requestedBy} trivia deck is tapped out — every question was asked recently. Try again in a bit.`
+            : '🌿 Trivia round skipped — every curated question in the deck was asked recently.',
         );
         return;
       }
@@ -1952,8 +1954,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       };
 
       const roundPoints = Math.max(1, Number(picked.points) || 1);
+      const requestNote = options?.requestedBy ? ` (requested by @${options.requestedBy})` : '';
       void postTwitchAnnounce(
-        `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer gets ${roundPoints} point${roundPoints === 1 ? '' : 's'}!`,
+        `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer gets ${roundPoints} point${roundPoints === 1 ? '' : 's'}!${requestNote}`,
         'orange',
       );
     } finally {
@@ -1965,10 +1968,35 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     if (!streamLiveRef.current || isFullyMuted()) return;
     announceTriviaCountdown();
     expireTriviaIfNeeded();
-    if (Date.now() - lastTriviaAtRef.current >= TRIVIA_INTERVAL_MS) {
-      void askCannabisTrivia();
+  }, [announceTriviaCountdown, expireTriviaIfNeeded]);
+
+  const parseTriviaCategoryRequest = useCallback((raw: string): TriviaCategory | undefined => {
+    const token = raw.replace(/^!trivia\b/i, '').trim().toLowerCase();
+    if (!token) return undefined;
+    if (token === 'cannabis' || token === 'weed' || token === '420') return 'cannabis';
+    if (token === 'freaky') return 'freaky';
+    if (token === 'music' || token === 'music90s' || token === '90s') return 'music90s';
+    return undefined;
+  }, []);
+
+  const handleTriviaRequest = useCallback((username: string, rawMessage: string) => {
+    if (isFullyMuted()) return;
+    if (!streamLiveRef.current) {
+      void sayChat(`@${username} trivia only runs while we're live — type !trivia when we're on air.`);
+      return;
     }
-  }, [announceTriviaCountdown, askCannabisTrivia, expireTriviaIfNeeded]);
+    if (activeTriviaRef.current && !activeTriviaRef.current.answered) {
+      void sayChat(`@${username} trivia's already live — jump in!`);
+      return;
+    }
+    const category = parseTriviaCategoryRequest(rawMessage);
+    const token = rawMessage.replace(/^!trivia\b/i, '').trim().toLowerCase();
+    if (token && !category) {
+      void sayChat(`@${username} use !trivia or !trivia cannabis / freaky / music90s`);
+      return;
+    }
+    void askCannabisTrivia({ category, requestedBy: username });
+  }, [askCannabisTrivia, parseTriviaCategoryRequest, sayChat]);
 
   const announceStreamMetadata = useCallback(async (username?: string) => {
     try {
@@ -2865,6 +2893,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         if (isFullyMuted()) return;
         return void announceCommandsLink(username);
       }
+      if (lowerCmd === '!trivia' || lowerCmd.startsWith('!trivia ')) {
+        if (isFullyMuted()) return;
+        return void handleTriviaRequest(username, m);
+      }
       if (lowerCmd === '!np' || lowerCmd === '!nowplaying' || lowerCmd === '!song') {
         if (isFullyMuted()) return;
         return void requestSpotifyComment(username);
@@ -3111,11 +3143,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       warmupElroySfx();
       void unlockBrowserAudio();
       startStreamMonitoring();
-      void pollStreamLive().then(() => {
-        if (streamLiveRef.current) {
-          lastTriviaAtRef.current = Date.now() - TRIVIA_INTERVAL_MS;
-        }
-      });
+      void pollStreamLive();
     } catch (error) {
       console.error('Elroy failed to connect', error);
       await releaseBotSessionLock();

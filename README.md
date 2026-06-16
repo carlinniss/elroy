@@ -7,10 +7,10 @@ Elroy is an AI-driven Twitch chat bot and OBS overlay. He listens for mentions, 
 * **Twitch chat** — `tmi.js` IRC plus Helix for sends, announcements, and mod actions.
 * **AI personality** — Google Gemini (`gemini-2.5-flash-lite` by default) for mentions, check-ins, celebrations, and `!aboutme`.
 * **Voice** — ElevenLabs TTS with quota-aware pacing and bundled SFX.
-* **Trivia** — Cannabis, freaky, and 90s music rounds every **30 minutes** while live (first round ~12 min after go-live). Curated bank + optional Gemini generation; category intros always match the question topic.
+* **Trivia** — On demand only: chat types **`!trivia`** to start a round (cannabis / freaky / 90s music). Curated bank + optional Gemini generation; category intros match the question topic.
 * **Casino games** — Blackjack, roulette, and Pick 3 / Pick 4 on one **1000 OG chip** bankroll (Redis-backed in production).
 * **Viewer memory** — `!aboutme` recalls trivia wins, subs, mentions, and **how long you've been following**.
-* **Stream awareness** — Title, game/category, viewer count; reacts to Spotify track changes; periodic command reminders every **7 minutes**.
+* **Stream awareness** — Title, game/category, viewer count (polled every **15s** from Twitch API); reacts to Spotify track changes; periodic command reminders every **7 minutes**.
 * **Mod tools** — Raid shoutouts, `!clip`, `!poll`, colored chat announcements (trivia, games, hints).
 * **Events** — Follows, subs, gifts, bits, raids, highlighted messages, channel updates (EventSub + IRC where applicable).
 * **Overlay** — Transparent Next.js page for OBS; live prompt control panel for the broadcaster.
@@ -121,7 +121,7 @@ Elroy ignores his own messages and won't reply to his opening lines or system br
 
 | Command | Who | What |
 | --- | --- | --- |
-| *(automatic)* | — | Trivia every **30 min** while live; **5 min** answer window with progressive hints. |
+| `!trivia` | Everyone | Start a trivia round (optional: `cannabis`, `freaky`, `music90s`). Off until someone asks. |
 | `!leaderboard` / `!lb` | Everyone | Trivia leaders (cannabis / freaky / 90s). |
 
 Categories: **cannabis**, **freaky**, **90s music** — intro emoji/text matches the actual question.
