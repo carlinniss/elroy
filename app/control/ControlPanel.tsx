@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import type { DirectiveKind, LiveDirective } from '@/lib/live-directives';
+import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
 
 const SECRET_STORAGE_KEY = 'elroy-control-secret';
 
@@ -14,6 +15,16 @@ type DirectiveSnapshot = {
 };
 
 type AuthState = 'checking' | 'authorized' | 'missing' | 'unauthorized';
+
+type QuotaSnapshot = {
+  remaining: number;
+  resetDate?: string;
+  label: string;
+  tier: string;
+  error?: boolean;
+};
+
+const QUOTA_POLL_MS = 2 * 60_000;
 
 function authHeaders(secret: string) {
   return {
@@ -46,6 +57,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     playing?: boolean;
     track?: { name: string; artists: string[] } | null;
   } | null>(null);
+  const [quotaStatus, setQuotaStatus] = useState<QuotaSnapshot | null>(null);
 
   const verifySecret = useCallback(async (candidate: string) => {
     const trimmed = candidate.trim();
@@ -147,6 +159,48 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     const timer = setInterval(() => { void refreshSpotify(); }, 15_000);
     return () => clearInterval(timer);
   }, [authState, refreshSpotify]);
+
+  const refreshQuota = useCallback(async () => {
+    if (!savedSecret) return;
+    try {
+      const res = await fetch(`/api/quota?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: authHeaders(savedSecret),
+      });
+      const data = await res.json() as { remaining?: number; resetDate?: string; error?: boolean };
+      if (!res.ok || data.error) {
+        setQuotaStatus({
+          remaining: 0,
+          label: 'Quota lookup failed — check ELEVENLABS_API_KEY in Vercel.',
+          tier: 'error',
+          error: true,
+        });
+        return;
+      }
+      const remaining = Number(data.remaining) || 0;
+      const tier = voiceQuotaTierFromRemaining(remaining);
+      setQuotaStatus({
+        remaining,
+        resetDate: data.resetDate,
+        label: describeVoiceQuotaTier(tier, remaining),
+        tier: tier.tier,
+      });
+    } catch {
+      setQuotaStatus({
+        remaining: 0,
+        label: 'Could not reach quota API.',
+        tier: 'error',
+        error: true,
+      });
+    }
+  }, [savedSecret]);
+
+  useEffect(() => {
+    if (authState !== 'authorized') return;
+    void refreshQuota();
+    const timer = setInterval(() => { void refreshQuota(); }, QUOTA_POLL_MS);
+    return () => clearInterval(timer);
+  }, [authState, refreshQuota]);
 
   const disconnectSpotify = async () => {
     if (!savedSecret) return;
@@ -354,6 +408,39 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
           </button>
         ))}
       </nav>
+
+      <section style={quotaPanelStyle(quotaStatus?.tier, quotaStatus?.error)}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+          <h2 style={{ ...headingStyle, marginBottom: 0 }}>Voice quota</h2>
+          <button
+            type="button"
+            onClick={() => { void refreshQuota(); }}
+            disabled={busy || !savedSecret}
+            style={ghostButtonStyle}
+          >
+            Refresh
+          </button>
+        </div>
+        {!quotaStatus ? (
+          <p style={{ ...hintStyle, marginTop: '10px', marginBottom: 0 }}>Loading ElevenLabs quota…</p>
+        ) : quotaStatus.error ? (
+          <p style={{ ...warnStyle, marginTop: '10px', marginBottom: 0 }}>{quotaStatus.label}</p>
+        ) : (
+          <>
+            <p style={quotaNumberStyle(quotaStatus.tier)}>
+              {quotaStatus.remaining.toLocaleString()} characters left
+            </p>
+            <p style={{ ...hintStyle, marginBottom: quotaStatus.resetDate ? '6px' : 0 }}>
+              {quotaStatus.label}
+            </p>
+            {quotaStatus.resetDate ? (
+              <p style={{ ...hintStyle, marginBottom: 0, fontSize: '13px' }}>
+                Resets {quotaStatus.resetDate}
+              </p>
+            ) : null}
+          </>
+        )}
+      </section>
 
       {tab === 'setup' && (
         <section style={panelStyle}>
@@ -831,3 +918,33 @@ const footerStyle: React.CSSProperties = {
   textAlign: 'center',
   lineHeight: 1.45,
 };
+
+function quotaPanelStyle(tier?: string, error?: boolean): React.CSSProperties {
+  const border =
+    error || tier === 'depleted' || tier === 'critical'
+      ? 'rgba(252, 165, 165, 0.45)'
+      : tier === 'low' || tier === 'moderate'
+        ? 'rgba(252, 211, 77, 0.45)'
+        : 'rgba(134, 239, 172, 0.35)';
+  return {
+    ...panelStyle,
+    borderColor: border,
+    marginBottom: '14px',
+  };
+}
+
+function quotaNumberStyle(tier: string): React.CSSProperties {
+  const color =
+    tier === 'depleted' || tier === 'critical'
+      ? '#fca5a5'
+      : tier === 'low' || tier === 'moderate'
+        ? '#fcd34d'
+        : '#86efac';
+  return {
+    margin: '10px 0 6px',
+    fontSize: '22px',
+    fontWeight: 700,
+    color,
+    lineHeight: 1.2,
+  };
+}

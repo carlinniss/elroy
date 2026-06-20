@@ -550,7 +550,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   ) => {
     if (opts.chatOnly) return 'chat-only mode';
     if (!streamLiveRef.current) return 'waiting for LIVE (chat only until then)';
-    if (!voiceEnabledRef.current && !opts.forceVoice) return 'voice off — !voiceon';
+    if (!voiceEnabledRef.current && !opts.forceVoice) return 'voice off — !voice to toggle on';
     if (isSilenced() && silenceModeRef.current === 'voice') return 'silenced (voice off)';
     if (!quotaVoiceAllowedRef.current) return 'ElevenLabs quota empty';
     if (celebrationsVoiceOnlyRef.current && !opts.forceVoice) return 'subs/bits voice only (low quota)';
@@ -1040,6 +1040,31 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     return `Use the recent Twitch chat for a topical comment (2-3 sentences). Reference the vibe from:\n${lines}${streamMetadataLine() ? `\nStream context: ${streamMetadataLine()}` : ''}\nDo not force a rhyme.`;
   }, [streamMetadataLine]);
 
+  const formatSpeechHudError = useCallback((status: number, message: string) => {
+    const lower = message.toLowerCase();
+    if (lower.includes('payment')) {
+      quotaVoiceAllowedRef.current = false;
+      setDiagnostics((prev) => ({
+        ...prev,
+        speech: '❌ billing',
+        quota: 'ElevenLabs payment failed — fix billing to restore voice',
+      }));
+      return 'ElevenLabs payment issue — complete billing at elevenlabs.io';
+    }
+    if (status === 401) return 'speech unauthorized — check overlay control key';
+    if (status === 503 && lower.includes('api_key')) return 'ELEVENLABS_API_KEY missing on server';
+    return message ? `speech: ${message.slice(0, 120)}` : `speech API error ${status}`;
+  }, []);
+
+  const parseSpeechApiError = useCallback(async (res: Response) => {
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json().catch(() => ({})) as { error?: string };
+      return typeof data.error === 'string' ? data.error : '';
+    }
+    return (await res.text().catch(() => '')).trim();
+  }, []);
+
   const runDiagnostics = useCallback(async (opts?: { afterDeploy?: boolean }) => {
     const afterDeploy = opts?.afterDeploy === true;
     setDiagnostics((prev) => ({
@@ -1072,6 +1097,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         headers: controlHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ text: 'ping' }),
       });
+      const speechContentType = speech.headers.get('content-type') || '';
+      const speechOk = speech.ok && speechContentType.includes('audio');
       const sound = await fetch('/api/sfx/bong_rip');
       const quotaRes = await fetch('/api/quota', {
         headers: controlHeaders(),
@@ -1082,9 +1109,16 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         applyVoiceQuotaTier(Number(qData.remaining) || 0);
       }
 
-      const quotaLabel = quotaRes.ok && !qData.error
+      let quotaLabel = quotaRes.ok && !qData.error
         ? `${Number(qData.remaining || 0).toLocaleString()} left`
         : '❌';
+      if (!speechOk) {
+        const speechErr = await parseSpeechApiError(speech);
+        if (speechErr.toLowerCase().includes('payment')) {
+          quotaVoiceAllowedRef.current = false;
+          quotaLabel = 'ElevenLabs payment failed — fix billing to restore voice';
+        }
+      }
 
       const twitchLabel = twitchStatus.ok && twitchData.ok
         ? `✅ ${twitchData.tokenLogin || 'ready'}`
@@ -1100,7 +1134,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         ...prev,
         chat: chat.status === 200 ? '✅' : '❌',
         twitch: twitchLabel,
-        speech: speech.status === 200 ? '✅' : '❌',
+        speech: speechOk ? '✅' : '❌',
         sound: sound.ok ? '✅' : '❌',
         quota: afterDeploy ? quotaLabel : (prev.quota !== '...' ? prev.quota : quotaLabel),
         update: afterDeploy ? 'updated · systems checked' : prev.update,
@@ -1119,7 +1153,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         }));
       }
     }
-  }, [applyVoiceQuotaTier, controlHeaders]);
+  }, [applyVoiceQuotaTier, controlHeaders, parseSpeechApiError]);
 
   useEffect(() => {
     if (!controlSecretReady || overlayAuthStatus !== 'ok' && overlayAuthStatus !== 'open') return;
@@ -1139,9 +1173,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         headers: controlHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ text }),
       });
-      if (!res.ok) {
-        console.warn('Speech API failed', res.status);
-        setRuntimeHud((prev) => ({ ...prev, tts: `speech API error ${res.status}` }));
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || contentType.includes('application/json')) {
+        const errMsg = await parseSpeechApiError(res);
+        console.warn('Speech API failed', res.status, errMsg);
+        setRuntimeHud((prev) => ({
+          ...prev,
+          tts: formatSpeechHudError(res.status, errMsg),
+        }));
         return;
       }
       const audioUrl = URL.createObjectURL(await res.blob());
@@ -1188,7 +1227,15 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         headers: controlHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ text: 'Yo.' }),
       });
-      if (!res.ok) return;
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok || contentType.includes('application/json')) {
+        const errMsg = await parseSpeechApiError(res);
+        setRuntimeHud((prev) => ({
+          ...prev,
+          tts: formatSpeechHudError(res.status, errMsg),
+        }));
+        return;
+      }
       const audio = new Audio(URL.createObjectURL(await res.blob()));
       audio.volume = volumeRef.current;
       await audio.play();
@@ -1199,7 +1246,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         tts: 'tap IGNITE BONG + enable Control audio via OBS',
       }));
     }
-  }, [controlHeaders]);
+  }, [controlHeaders, formatSpeechHudError, parseSpeechApiError]);
 
   const speak = useCallback((text: string) => {
     speechQueueRef.current = speechQueueRef.current
@@ -1530,6 +1577,13 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     voiceEnabledRef.current = false;
     setIsVoiceOn(false);
     syncMuteHud();
+    window.setTimeout(() => {
+      if (silenceModeRef.current !== 'voice') return;
+      if (Date.now() < silencedUntilRef.current) return;
+      voiceEnabledRef.current = true;
+      setIsVoiceOn(true);
+      syncMuteHud();
+    }, SHUT_UP_DURATION_MS + 250);
   }, [syncMuteHud]);
 
   const canCelebrate = (kind: 'follow' | 'sub' | 'bits' | 'raid') => {
