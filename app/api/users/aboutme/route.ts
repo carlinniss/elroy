@@ -1,5 +1,7 @@
 import { generateText } from 'ai';
+import { sanitizeElroyModLore } from '@/lib/chat-reply';
 import { isControlAuthorized } from '@/lib/control-auth';
+import { getElroySystemPrompt } from '@/lib/elroy-system-prompt';
 import { getGeminiModel } from '@/lib/gemini-model';
 import {
   buildAboutMePrompt,
@@ -41,7 +43,7 @@ export async function GET(request: Request) {
     }
 
     const known = profileHasMemory(enrichedProfile);
-    const system = process.env.SYSTEM_PROMPT || 'You are Elroy, a wise, rhyming OG Twitch bot.';
+    const system = getElroySystemPrompt();
     const prompt = known && enrichedProfile
       ? buildAboutMePrompt(enrichedProfile, follow?.tenure)
       : buildAboutMeUnknownPrompt(username, follow?.tenure);
@@ -52,7 +54,7 @@ export async function GET(request: Request) {
       prompt,
     });
 
-    return Response.json({ known, text: text.trim() });
+    return Response.json({ known, text: sanitizeElroyModLore(text.trim()) });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'About me failed';
     return Response.json({ error: message }, { status: 500 });

@@ -16,6 +16,12 @@ export type ElroyTriviaQuestion = {
 export type CannabisTriviaQuestion = ElroyTriviaQuestion;
 
 import { ELROY_TRIVIA_BANK } from '@/lib/trivia-bank';
+import {
+  mentionsElroy,
+  stripElroyFromMessage,
+} from '@/lib/elroy-mention';
+
+export { mentionsElroy, stripElroyFromMessage };
 
 export const ELROY_TRIVIA = ELROY_TRIVIA_BANK;
 
@@ -187,14 +193,6 @@ export function matchesTriviaAnswer(message: string, acceptable: string[]): bool
   }
 
   return false;
-}
-
-export function mentionsElroy(text: string) {
-  return /\belroy\b/i.test(text);
-}
-
-export function stripElroyFromMessage(text: string) {
-  return text.replace(/@?\belroy\b/gi, ' ').replace(/\s+/g, ' ').trim();
 }
 
 export function isAskingElroyForTriviaHelp(message: string) {

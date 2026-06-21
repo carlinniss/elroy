@@ -1,7 +1,8 @@
 import { generateText } from 'ai';
-import { clampReplyLength, mapBrainErrorMessage, MAX_TWITCH_CHAT_CHARS } from '@/lib/chat-reply';
+import { clampReplyLength, mapBrainErrorMessage, MAX_TWITCH_CHAT_CHARS, sanitizeElroyModLore } from '@/lib/chat-reply';
 import { isControlAuthorized } from '@/lib/control-auth';
 import { getGeminiModel } from '@/lib/gemini-model';
+import { getElroySystemPrompt } from '@/lib/elroy-system-prompt';
 
 export async function POST(req: Request) {
   if (!isControlAuthorized(req)) {
@@ -18,7 +19,7 @@ export async function POST(req: Request) {
 
     const { text } = await generateText({
       model: getGeminiModel(),
-      system: process.env.SYSTEM_PROMPT || 'You are Bong, a wise, rhyming OG. Always rhyme.',
+      system: getElroySystemPrompt(),
       prompt: prompt || 'Say hello.',
     });
 

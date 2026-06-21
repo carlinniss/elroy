@@ -35,6 +35,7 @@ import {
 import type { UserMemoryEvent } from '@/lib/user-memory';
 import { controlAuthHeaders } from '@/lib/control-auth';
 import { isOffensiveUsername } from '@/lib/offensive-username';
+import { mentionsElroy, misnamesElroyAsLRoy } from '@/lib/elroy-mention';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
 const CONTROL_SECRET_STORAGE_KEY = 'elroy-control-secret';
@@ -353,8 +354,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     };
   }, [controlSecretFromPath, controlSecretFromQuery, verifyOverlaySecret]);
 
-  const mentionsElroy = (text: string) => /\belroy\b/i.test(text);
-
   const normalizeChatFingerprint = useCallback((text: string) => (
     text.trim().toLowerCase().replace(/\s+/g, ' ')
   ), []);
@@ -449,13 +448,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     if (userstate.badges?.bot === '1') return true;
     return false;
   }, [isEchoOfElroyOutbound, isElroySystemBroadcast, isKnownElroySpeakerLogin]);
-
-  /** "L Roy" / L-Roy / lroy (without "Elroy") — misname, gets roasted. */
-  const misnamesElroyAsLRoy = (text: string) => {
-    if (/\bl[\s.\-]?roy\b/i.test(text)) return true;
-    if (/\belroy\b/i.test(text)) return false;
-    return /\blroy\b/i.test(text);
-  };
 
   const isShutUpCommand = (text: string) => {
     const lower = text.toLowerCase();

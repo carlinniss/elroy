@@ -1,8 +1,23 @@
 export const MAX_TWITCH_CHAT_CHARS = 480;
 export const MAX_VOICE_REPLY_CHARS = 480;
 
+/** Fix Gemini hallucinations — Twitch mods have swords, not wrenches. */
+export function sanitizeElroyModLore(text: string): string {
+  return text
+    .replace(/\bwrench[-\s]?wielding mods?\b/gi, (match) => (
+      /\bmods\b/i.test(match) ? 'sword-wielding mods' : 'sword-wielding mod'
+    ))
+    .replace(/\bmods?\s+with\s+wrenches\b/gi, (match) => (
+      /\bmods\b/i.test(match) ? 'mods with swords' : 'mod with a sword'
+    ))
+    .replace(/\bwielding\s+wrenches\b/gi, 'wielding swords')
+    .replace(/\bwielding\s+a\s+wrench\b/gi, 'wielding a sword')
+    .replace(/\btheir\s+wrenches\b/gi, 'their swords')
+    .replace(/\btheir\s+wrench\b/gi, 'their sword');
+}
+
 export function clampReplyLength(text: string, maxChars: number): string {
-  const cleaned = text.replace(/\s+/g, ' ').trim();
+  const cleaned = sanitizeElroyModLore(text).replace(/\s+/g, ' ').trim();
   if (!cleaned) return '...';
   if (cleaned.length <= maxChars) return cleaned;
 
