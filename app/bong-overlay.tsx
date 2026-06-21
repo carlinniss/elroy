@@ -34,6 +34,7 @@ import {
 } from '@/lib/chat-reply';
 import type { UserMemoryEvent } from '@/lib/user-memory';
 import { controlAuthHeaders } from '@/lib/control-auth';
+import { isOffensiveUsername } from '@/lib/offensive-username';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
 const CONTROL_SECRET_STORAGE_KEY = 'elroy-control-secret';
@@ -222,6 +223,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const voiceCooldownMsRef = useRef(VOICE_COOLDOWN_MS);
   const celebrationVoiceCooldownMsRef = useRef(CELEBRATION_VOICE_COOLDOWN_MS);
   const quotaVoiceAllowedRef = useRef(true);
+  const voiceBlockReasonRef = useRef('');
   const celebrationsVoiceOnlyRef = useRef(false);
   const elevenLabsRemainingRef = useRef<number | null>(null);
   const lastQuotaTierRef = useRef<string | null>(null);
@@ -233,6 +235,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const pendingDeployReloadRef = useRef(false);
   const bundledBuildIdRef = useRef(process.env.NEXT_PUBLIC_BUILD_ID || 'dev');
   const sfxUrlCacheRef = useRef<Map<string, string>>(new Map());
+  const offensiveBanAttemptedRef = useRef<Set<string>>(new Set());
 
   const controlSecretFromPath = initialControlSecret.trim();
   const controlSecretFromQuery =
@@ -552,7 +555,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     if (!streamLiveRef.current) return 'waiting for LIVE (chat only until then)';
     if (!voiceEnabledRef.current && !opts.forceVoice) return 'voice off — !voice to toggle on';
     if (isSilenced() && silenceModeRef.current === 'voice') return 'silenced (voice off)';
-    if (!quotaVoiceAllowedRef.current) return 'ElevenLabs quota empty';
+    if (!quotaVoiceAllowedRef.current) {
+      return voiceBlockReasonRef.current || 'ElevenLabs quota empty';
+    }
     if (celebrationsVoiceOnlyRef.current && !opts.forceVoice) return 'subs/bits voice only (low quota)';
     if (!opts.bypassVoiceCooldown && !canUseVoice(opts.voicePriority ?? (opts.forceVoice ? 'celebration' : 'normal'))) {
       const cooldown = (opts.voicePriority ?? (opts.forceVoice ? 'celebration' : 'normal')) === 'celebration'
@@ -591,6 +596,25 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
   }, []);
 
+  const applySubscriptionVoiceBlock = useCallback((data: {
+    voiceBlocked?: boolean;
+    voiceBlockReason?: string;
+    subscriptionStatus?: string;
+  }) => {
+    if (!data.voiceBlocked) {
+      voiceBlockReasonRef.current = '';
+      return;
+    }
+    quotaVoiceAllowedRef.current = false;
+    voiceBlockReasonRef.current = data.voiceBlockReason
+      || `ElevenLabs subscription ${data.subscriptionStatus || 'blocked'} — voice disabled until billing is fixed`;
+    setDiagnostics((prev) => ({
+      ...prev,
+      speech: '❌ billing',
+      quota: voiceBlockReasonRef.current,
+    }));
+  }, []);
+
   const pollElevenLabsQuota = useCallback(async () => {
     try {
       const res = await fetch('/api/quota', {
@@ -599,10 +623,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       const data = await res.json();
       if (!res.ok || data.error) throw new Error('Quota lookup failed');
       applyVoiceQuotaTier(Number(data.remaining) || 0);
+      applySubscriptionVoiceBlock(data);
     } catch (e) {
       console.warn('ElevenLabs quota poll failed', e);
     }
-  }, [applyVoiceQuotaTier, controlHeaders]);
+  }, [applySubscriptionVoiceBlock, applyVoiceQuotaTier, controlHeaders]);
 
   const startQuotaPolling = useCallback(() => {
     if (quotaPollRef.current) return;
@@ -1107,10 +1132,13 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
       if (quotaRes.ok && !qData.error) {
         applyVoiceQuotaTier(Number(qData.remaining) || 0);
+        applySubscriptionVoiceBlock(qData);
       }
 
       let quotaLabel = quotaRes.ok && !qData.error
-        ? `${Number(qData.remaining || 0).toLocaleString()} left`
+        ? (qData.voiceBlocked && qData.voiceBlockReason
+          ? String(qData.voiceBlockReason)
+          : `${Number(qData.remaining || 0).toLocaleString()} left`)
         : '❌';
       if (!speechOk) {
         const speechErr = await parseSpeechApiError(speech);
@@ -1153,7 +1181,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         }));
       }
     }
-  }, [applyVoiceQuotaTier, controlHeaders, parseSpeechApiError]);
+  }, [applySubscriptionVoiceBlock, applyVoiceQuotaTier, controlHeaders, parseSpeechApiError]);
 
   useEffect(() => {
     if (!controlSecretReady || overlayAuthStatus !== 'ok' && overlayAuthStatus !== 'open') return;
@@ -1221,6 +1249,31 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   };
 
   const unlockBrowserAudio = useCallback(async () => {
+    const playUnlockClip = async (blob: Blob) => {
+      const audioUrl = URL.createObjectURL(blob);
+      try {
+        const audio = new Audio(audioUrl);
+        audio.volume = volumeRef.current;
+        await audio.play();
+        setRuntimeHud((prev) => ({ ...prev, tts: 'audio ready' }));
+        return true;
+      } finally {
+        URL.revokeObjectURL(audioUrl);
+      }
+    };
+
+    const playBundledUnlockSfx = async () => {
+      if (await playElroySfx('bong_rip', volumeRef.current)) return true;
+      try {
+        const rip = new Audio('/sounds/bong.mp3');
+        rip.volume = volumeRef.current;
+        await rip.play();
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
     try {
       const res = await fetch('/api/speech', {
         method: 'POST',
@@ -1228,25 +1281,30 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         body: JSON.stringify({ text: 'Yo.' }),
       });
       const contentType = res.headers.get('content-type') || '';
-      if (!res.ok || contentType.includes('application/json')) {
-        const errMsg = await parseSpeechApiError(res);
-        setRuntimeHud((prev) => ({
-          ...prev,
-          tts: formatSpeechHudError(res.status, errMsg),
-        }));
+      if (res.ok && !contentType.includes('application/json')) {
+        await playUnlockClip(await res.blob());
         return;
       }
-      const audio = new Audio(URL.createObjectURL(await res.blob()));
-      audio.volume = volumeRef.current;
-      await audio.play();
-      setRuntimeHud((prev) => ({ ...prev, tts: 'audio ready' }));
-    } catch {
+
+      const errMsg = await parseSpeechApiError(res);
+      const voiceHud = formatSpeechHudError(res.status, errMsg);
+      const sfxOk = await playBundledUnlockSfx();
       setRuntimeHud((prev) => ({
         ...prev,
-        tts: 'tap IGNITE BONG + enable Control audio via OBS',
+        tts: sfxOk
+          ? `${voiceHud} — bong rip played (Yo needs voice working)`
+          : voiceHud,
+      }));
+    } catch {
+      const sfxOk = await playBundledUnlockSfx();
+      setRuntimeHud((prev) => ({
+        ...prev,
+        tts: sfxOk
+          ? 'voice unavailable — bong rip played, OBS audio unlocked'
+          : 'tap IGNITE BONG + enable Control audio via OBS',
       }));
     }
-  }, [controlHeaders, formatSpeechHudError, parseSpeechApiError]);
+  }, [controlHeaders, formatSpeechHudError, parseSpeechApiError, playElroySfx]);
 
   const speak = useCallback((text: string) => {
     speechQueueRef.current = speechQueueRef.current
@@ -1606,7 +1664,43 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     return false;
   }, []);
 
+  const moderateOffensiveChatter = useCallback((
+    username: string,
+    displayName?: string,
+    userId?: string,
+  ) => {
+    const login = username.trim();
+    const display = displayName?.trim();
+    const offensive = isOffensiveUsername(login) || Boolean(display && isOffensiveUsername(display));
+    if (!offensive) return false;
+
+    const key = login.toLowerCase();
+    if (!offensiveBanAttemptedRef.current.has(key)) {
+      offensiveBanAttemptedRef.current.add(key);
+      void fetch('/api/twitch/ban', {
+        method: 'POST',
+        headers: controlHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          login: key,
+          userId: userId?.trim() || undefined,
+          reason: 'Auto-ban: offensive username',
+        }),
+      }).then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({})) as { error?: string };
+          console.warn('Auto-ban failed', key, data.error || res.status);
+        } else {
+          console.info('Auto-banned', key);
+        }
+      }).catch((error) => {
+        console.warn('Auto-ban request failed', error);
+      });
+    }
+    return true;
+  }, [controlHeaders]);
+
   const tryGreetChatter = useCallback((username: string, normalizedUser: string, normalizedChannel: string) => {
+    if (moderateOffensiveChatter(username)) return;
     if (!streamLiveRef.current || isFullyMuted() || isSilenced()) return;
     if (Date.now() < joinGreetWarmupUntilRef.current) return;
     if (shouldSkipJoinGreet(normalizedUser, normalizedChannel)) return;
@@ -1617,7 +1711,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       persistStreamSession();
     }
     void queueBongLogic(buildJoinGreetingPrompt(username), username, { chatOnly: true });
-  }, [buildJoinGreetingPrompt, persistStreamSession, queueBongLogic, shouldSkipJoinGreet]);
+  }, [buildJoinGreetingPrompt, moderateOffensiveChatter, persistStreamSession, queueBongLogic, shouldSkipJoinGreet]);
 
   const celebrate = useCallback((
     kind: 'follow' | 'sub' | 'bits' | 'raid',
@@ -1627,6 +1721,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     memoryEvent?: Record<string, unknown>,
   ) => {
     if (!streamLiveRef.current || isFullyMuted() || !canCelebrate(kind)) return;
+    if (kind === 'follow' && moderateOffensiveChatter(
+      username,
+      username,
+      typeof memoryEvent?.user_id === 'string' ? memoryEvent.user_id : undefined,
+    )) return;
     const dedupeKey = kind === 'bits'
       ? `bits:${username.toLowerCase()}:${bitsAmount ?? 0}`
       : `${kind}:${username.toLowerCase()}`;
@@ -1667,7 +1766,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       forceVoice: true,
       voicePriority: kind === 'follow' ? 'normal' : 'celebration',
     });
-  }, [buildBitsPrompt, buildFollowPrompt, buildRaidPrompt, buildSubPrompt, controlHeaders, playElroySfx, queueBongLogic, shouldSkipDuplicateCelebration]);
+  }, [buildBitsPrompt, buildFollowPrompt, buildRaidPrompt, buildSubPrompt, controlHeaders, moderateOffensiveChatter, playElroySfx, queueBongLogic, shouldSkipDuplicateCelebration]);
 
   const handleRaid = useCallback(async (login: string, viewers: number) => {
     if (!login.trim()) return;
@@ -2646,6 +2745,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const handleElroyMention = useCallback((username: string, displayName: string, message: string) => {
     if (isFullyMuted()) return;
     const normalizedUser = username.toLowerCase();
+    if (moderateOffensiveChatter(username, displayName, undefined)) return;
     if (isKnownElroySpeakerLogin(normalizedUser) || isElroySystemBroadcast(message)) return;
     rememberUser(username, displayName, { type: 'mention', message }, controlHeaders());
 
@@ -2667,10 +2767,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       return;
     }
     void queueBongLogic(buildMentionPrompt(username, message), username);
-  }, [announceStreamMetadata, buildComebackPrompt, buildMentionPrompt, controlHeaders, isElroySystemBroadcast, isKnownElroySpeakerLogin, queueBongLogic, requestSpotifyComment]);
+  }, [announceStreamMetadata, buildComebackPrompt, buildMentionPrompt, controlHeaders, isElroySystemBroadcast, isKnownElroySpeakerLogin, moderateOffensiveChatter, queueBongLogic, requestSpotifyComment]);
 
   const handleLRoyMisname = useCallback((username: string, displayName: string, message: string) => {
     if (isFullyMuted()) return;
+    if (moderateOffensiveChatter(username, displayName, undefined)) return;
     if (isKnownElroySpeakerLogin(username.toLowerCase()) || isElroySystemBroadcast(message)) return;
     rememberUser(username, displayName, { type: 'mention', message }, controlHeaders());
     if (isSilenced()) {
@@ -2680,7 +2781,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
     void playElroySfx('roast_sting');
     void queueBongLogic(buildLRoyRoastPrompt(username, message), username);
-  }, [buildLRoyRoastPrompt, controlHeaders, isElroySystemBroadcast, isKnownElroySpeakerLogin, playElroySfx, queueBongLogic]);
+  }, [buildLRoyRoastPrompt, controlHeaders, isElroySystemBroadcast, isKnownElroySpeakerLogin, moderateOffensiveChatter, playElroySfx, queueBongLogic]);
 
   const toggleDing = useCallback((user?: string) => {
     const nextState = !dingEnabledRef.current;
@@ -2879,6 +2980,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       const displayName = t['display-name'] || username;
       const normalizedUser = username.toLowerCase();
       const isBroadcaster = normalizedUser === normalizedChannel;
+
+      if (moderateOffensiveChatter(username, displayName, t['user-id'])) return;
 
       if (isElroyChatSpeaker(t, normalizedUser, normalizedChannel, m)) return;
 

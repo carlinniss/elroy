@@ -22,6 +22,8 @@ type QuotaSnapshot = {
   label: string;
   tier: string;
   error?: boolean;
+  subscriptionStatus?: string;
+  voiceBlocked?: boolean;
 };
 
 const QUOTA_POLL_MS = 2 * 60_000;
@@ -167,7 +169,14 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
         cache: 'no-store',
         headers: authHeaders(savedSecret),
       });
-      const data = await res.json() as { remaining?: number; resetDate?: string; error?: boolean };
+      const data = await res.json() as {
+        remaining?: number;
+        resetDate?: string;
+        error?: boolean;
+        subscriptionStatus?: string;
+        voiceBlocked?: boolean;
+        voiceBlockReason?: string;
+      };
       if (!res.ok || data.error) {
         setQuotaStatus({
           remaining: 0,
@@ -179,11 +188,16 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
       }
       const remaining = Number(data.remaining) || 0;
       const tier = voiceQuotaTierFromRemaining(remaining);
+      const voiceBlocked = data.voiceBlocked === true;
       setQuotaStatus({
         remaining,
         resetDate: data.resetDate,
-        label: describeVoiceQuotaTier(tier, remaining),
-        tier: tier.tier,
+        label: voiceBlocked
+          ? (data.voiceBlockReason || `Subscription ${data.subscriptionStatus || 'blocked'} — TTS disabled`)
+          : describeVoiceQuotaTier(tier, remaining),
+        tier: voiceBlocked ? 'depleted' : tier.tier,
+        subscriptionStatus: data.subscriptionStatus,
+        voiceBlocked,
       });
     } catch {
       setQuotaStatus({
@@ -429,6 +443,11 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
           <>
             <p style={quotaNumberStyle(quotaStatus.tier)}>
               {quotaStatus.remaining.toLocaleString()} characters left
+              {quotaStatus.subscriptionStatus && quotaStatus.subscriptionStatus !== 'active' ? (
+                <span style={{ display: 'block', fontSize: '14px', fontWeight: 600, color: '#fca5a5', marginTop: '4px' }}>
+                  Subscription: {quotaStatus.subscriptionStatus.replace(/_/g, ' ')}
+                </span>
+              ) : null}
             </p>
             <p style={{ ...hintStyle, marginBottom: quotaStatus.resetDate ? '6px' : 0 }}>
               {quotaStatus.label}

@@ -181,6 +181,35 @@ export async function createChannelPoll(title: string, choices: string[], durati
   return poll;
 }
 
+export async function banUserFromChannel(
+  login: string,
+  options: { userId?: string; reason?: string } = {},
+) {
+  const creds = await getModTwitchCredentials();
+  if (!creds) throw new Error('No mod Twitch credentials configured.');
+
+  const normalizedLogin = login.trim().replace(/^@/, '').toLowerCase();
+  if (!normalizedLogin) throw new Error('login required');
+
+  const userId = options.userId?.trim()
+    || await getUserIdByLogin(normalizedLogin, creds.token, creds.clientId);
+  if (!userId) throw new Error(`Could not find Twitch user: ${normalizedLogin}`);
+
+  await twitchPost(
+    `/moderation/bans?broadcaster_id=${creds.broadcasterId}&moderator_id=${creds.moderatorId}`,
+    creds.token,
+    creds.clientId,
+    {
+      data: {
+        user_id: userId,
+        reason: (options.reason || 'Auto-ban: offensive username').slice(0, 500),
+      },
+    },
+  );
+
+  return { login: normalizedLogin, userId };
+}
+
 export async function getModeratorIdForEventSub() {
   const creds = await getModTwitchCredentials();
   return creds?.moderatorId ?? null;
