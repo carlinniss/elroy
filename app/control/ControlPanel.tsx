@@ -2,11 +2,13 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import type { DirectiveKind, LiveDirective } from '@/lib/live-directives';
+import type { BotControlsSnapshot } from '@/lib/bot-controls';
+import { BOT_COMMAND_SECTIONS } from '@/lib/bot-commands';
 import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
 
 const SECRET_STORAGE_KEY = 'elroy-control-secret';
 
-type TabId = 'prompts' | 'spotify' | 'setup';
+type TabId = 'prompts' | 'bot' | 'spotify' | 'setup';
 
 type DirectiveSnapshot = {
   sticky: LiveDirective[];
@@ -27,6 +29,10 @@ type QuotaSnapshot = {
 };
 
 const QUOTA_POLL_MS = 2 * 60_000;
+const CONTROLS_POLL_MS = 12_000;
+const CONTROL_PANEL_ACTOR = 'control-panel';
+
+const MOD_COMMAND_SECTION = BOT_COMMAND_SECTIONS.find((section) => section.id === 'mod');
 
 function authHeaders(secret: string) {
   return {
@@ -60,6 +66,13 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     track?: { name: string; artists: string[] } | null;
   } | null>(null);
   const [quotaStatus, setQuotaStatus] = useState<QuotaSnapshot | null>(null);
+  const [botControls, setBotControls] = useState({
+    voiceEnabled: true,
+    dingEnabled: true,
+    volume: 85,
+  });
+  const [pollTitle, setPollTitle] = useState('');
+  const [pollChoices, setPollChoices] = useState(['', '']);
 
   const verifySecret = useCallback(async (candidate: string) => {
     const trimmed = candidate.trim();
@@ -215,6 +228,174 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     const timer = setInterval(() => { void refreshQuota(); }, QUOTA_POLL_MS);
     return () => clearInterval(timer);
   }, [authState, refreshQuota]);
+
+  const applyBotControlsSnapshot = useCallback((snapshot: BotControlsSnapshot) => {
+    setBotControls({
+      voiceEnabled: snapshot.settings.voiceEnabled ?? true,
+      dingEnabled: snapshot.settings.dingEnabled ?? true,
+      volume: Math.round((snapshot.settings.volume ?? 0.85) * 100),
+    });
+  }, []);
+
+  const refreshBotControls = useCallback(async () => {
+    if (!savedSecret) return;
+    try {
+      const res = await fetch(`/api/bot/controls?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: authHeaders(savedSecret),
+      });
+      if (!res.ok) return;
+      applyBotControlsSnapshot(await res.json() as BotControlsSnapshot);
+    } catch {
+      /* ignore */
+    }
+  }, [applyBotControlsSnapshot, savedSecret]);
+
+  useEffect(() => {
+    if (authState !== 'authorized') return;
+    void refreshBotControls();
+    const timer = setInterval(() => { void refreshBotControls(); }, CONTROLS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [authState, refreshBotControls]);
+
+  const patchBotControls = useCallback(async (
+    settings: Partial<{ voiceEnabled: boolean; dingEnabled: boolean; volume: number }>,
+  ) => {
+    if (!savedSecret) return false;
+    setBusy(true);
+    try {
+      const payload: Record<string, boolean | number> = {};
+      if (typeof settings.voiceEnabled === 'boolean') payload.voiceEnabled = settings.voiceEnabled;
+      if (typeof settings.dingEnabled === 'boolean') payload.dingEnabled = settings.dingEnabled;
+      if (typeof settings.volume === 'number') {
+        payload.volume = Math.min(1, Math.max(0, settings.volume / 100));
+      }
+      const res = await fetch('/api/bot/controls', {
+        method: 'POST',
+        headers: authHeaders(savedSecret),
+        body: JSON.stringify({ settings: payload }),
+      });
+      const data = await res.json() as BotControlsSnapshot & { error?: string };
+      if (!res.ok) {
+        setStatus(data.error || 'Bot controls update failed');
+        return false;
+      }
+      applyBotControlsSnapshot(data);
+      setStatus('Bot controls updated — overlay applies within ~12s.');
+      return true;
+    } catch {
+      setStatus('Could not update bot controls');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [applyBotControlsSnapshot, savedSecret]);
+
+  const queueBotDisconnect = useCallback(async () => {
+    if (!savedSecret) return;
+    if (!window.confirm('Disconnect Elroy from chat? (Same as !elroyoff)')) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/bot/controls', {
+        method: 'POST',
+        headers: authHeaders(savedSecret),
+        body: JSON.stringify({ command: 'disconnect' }),
+      });
+      const data = await res.json() as BotControlsSnapshot & { error?: string };
+      if (!res.ok) {
+        setStatus(data.error || 'Disconnect command failed');
+        return;
+      }
+      applyBotControlsSnapshot(data);
+      setStatus('Disconnect queued — overlay should stop within ~12s.');
+    } catch {
+      setStatus('Could not queue disconnect');
+    } finally {
+      setBusy(false);
+    }
+  }, [applyBotControlsSnapshot, savedSecret]);
+
+  const createClip = useCallback(async () => {
+    if (!savedSecret) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/twitch/clip', {
+        method: 'POST',
+        headers: authHeaders(savedSecret),
+      });
+      const data = await res.json() as { ok?: boolean; url?: string; error?: string };
+      if (!res.ok || !data.ok) {
+        setStatus(data.error || 'Clip failed');
+        return;
+      }
+      setStatus(data.url ? `Clip created: ${data.url}` : 'Clip created.');
+    } catch {
+      setStatus('Clip request failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [savedSecret]);
+
+  const createPoll = useCallback(async () => {
+    if (!savedSecret) return;
+    const title = pollTitle.trim();
+    const choices = pollChoices.map((choice) => choice.trim()).filter(Boolean);
+    if (!title) {
+      setStatus('Poll needs a question.');
+      return;
+    }
+    if (choices.length < 2) {
+      setStatus('Poll needs at least two choices.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch('/api/twitch/poll', {
+        method: 'POST',
+        headers: authHeaders(savedSecret),
+        body: JSON.stringify({ title, choices, duration: 90 }),
+      });
+      const data = await res.json() as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        setStatus(data.error || 'Poll failed');
+        return;
+      }
+      setPollTitle('');
+      setPollChoices(['', '']);
+      setStatus('Channel poll started (90s).');
+    } catch {
+      setStatus('Poll request failed');
+    } finally {
+      setBusy(false);
+    }
+  }, [pollChoices, pollTitle, savedSecret]);
+
+  const stopGameTable = useCallback(async (
+    endpoint: string,
+    body: Record<string, unknown>,
+    label: string,
+  ) => {
+    if (!savedSecret) return;
+    setBusy(true);
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: authHeaders(savedSecret),
+        body: JSON.stringify(body),
+      });
+      const data = await res.json() as { ok?: boolean; messages?: string[]; error?: string };
+      if (!res.ok || !data.ok) {
+        setStatus(data.error || `${label} stop failed`);
+        return;
+      }
+      const line = data.messages?.[0];
+      setStatus(line || `${label} stopped.`);
+    } catch {
+      setStatus(`${label} stop request failed`);
+    } finally {
+      setBusy(false);
+    }
+  }, [savedSecret]);
 
   const disconnectSpotify = async () => {
     if (!savedSecret) return;
@@ -402,6 +583,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
       <nav style={tabRowStyle} aria-label="Control sections">
         {([
           { id: 'prompts' as const, label: 'Prompts', badge: queueCount || undefined },
+          { id: 'bot' as const, label: 'Bot' },
           { id: 'spotify' as const, label: 'Spotify', badge: spotifyStatus?.connected ? '●' : undefined },
           { id: 'setup' as const, label: 'Setup' },
         ]).map((item) => (
@@ -596,6 +778,214 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
               </div>
             )}
           </section>
+        </>
+      )}
+
+      {tab === 'bot' && (
+        <>
+          <section style={panelStyle}>
+            <h2 style={headingStyle}>Audio & voice</h2>
+            <p style={hintStyle}>
+              Same as <code style={codeStyle}>!voice</code>, <code style={codeStyle}>!ding</code>, and{' '}
+              <code style={codeStyle}>!volume</code> in chat. Changes apply on the OBS overlay within ~12s.
+            </p>
+            <div style={controlGridStyle}>
+              <div style={controlRowStyle}>
+                <span style={controlLabelStyle}>Voice (TTS)</span>
+                <button
+                  type="button"
+                  disabled={busy || !savedSecret}
+                  style={toggleButtonStyle(botControls.voiceEnabled)}
+                  onClick={() => {
+                    void patchBotControls({ voiceEnabled: !botControls.voiceEnabled });
+                  }}
+                >
+                  {botControls.voiceEnabled ? 'On' : 'Off'}
+                </button>
+              </div>
+              <div style={controlRowStyle}>
+                <span style={controlLabelStyle}>Bong ding</span>
+                <button
+                  type="button"
+                  disabled={busy || !savedSecret}
+                  style={toggleButtonStyle(botControls.dingEnabled)}
+                  onClick={() => {
+                    void patchBotControls({ dingEnabled: !botControls.dingEnabled });
+                  }}
+                >
+                  {botControls.dingEnabled ? 'On' : 'Off'}
+                </button>
+              </div>
+              <div style={{ ...controlRowStyle, alignItems: 'center' }}>
+                <span style={controlLabelStyle}>Volume ({botControls.volume}%)</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={botControls.volume}
+                  disabled={busy || !savedSecret}
+                  onChange={(e) => {
+                    setBotControls((prev) => ({ ...prev, volume: Number(e.target.value) }));
+                  }}
+                  onMouseUp={(e) => {
+                    void patchBotControls({ volume: Number((e.target as HTMLInputElement).value) });
+                  }}
+                  onTouchEnd={(e) => {
+                    void patchBotControls({ volume: Number((e.target as HTMLInputElement).value) });
+                  }}
+                  style={{ flex: 1, minWidth: '140px' }}
+                />
+              </div>
+            </div>
+          </section>
+
+          <section style={panelStyle}>
+            <h2 style={headingStyle}>Session</h2>
+            <p style={hintStyle}>Same as <code style={codeStyle}>!elroyoff</code> — disconnects the overlay bot.</p>
+            <button
+              type="button"
+              disabled={busy || !savedSecret}
+              style={{ ...buttonStyle, borderColor: 'rgba(252, 165, 165, 0.55)', color: '#fecaca' }}
+              onClick={() => { void queueBotDisconnect(); }}
+            >
+              Disconnect Elroy
+            </button>
+          </section>
+
+          <section style={panelStyle}>
+            <h2 style={headingStyle}>Production</h2>
+            <div style={controlGridStyle}>
+              <button
+                type="button"
+                disabled={busy || !savedSecret}
+                style={ghostButtonStyle}
+                onClick={() => { void createClip(); }}
+              >
+                Create clip (!clip)
+              </button>
+            </div>
+            <p style={{ ...hintStyle, marginTop: '14px' }}>Channel poll (!poll)</p>
+            <input
+              type="text"
+              value={pollTitle}
+              onChange={(e) => setPollTitle(e.target.value)}
+              placeholder="Poll question"
+              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', marginBottom: '8px' }}
+            />
+            {pollChoices.map((choice, index) => (
+              <input
+                key={`poll-choice-${index}`}
+                type="text"
+                value={choice}
+                onChange={(e) => {
+                  const next = [...pollChoices];
+                  next[index] = e.target.value;
+                  setPollChoices(next);
+                }}
+                placeholder={`Choice ${index + 1}`}
+                style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', marginBottom: '8px' }}
+              />
+            ))}
+            <div style={rowStyle}>
+              <button
+                type="button"
+                disabled={busy || pollChoices.length >= 5}
+                style={ghostButtonStyle}
+                onClick={() => setPollChoices((prev) => [...prev, ''])}
+              >
+                Add choice
+              </button>
+              <button
+                type="button"
+                disabled={busy || !savedSecret}
+                style={primaryButtonStyle}
+                onClick={() => { void createPoll(); }}
+              >
+                Start poll
+              </button>
+            </div>
+          </section>
+
+          <section style={panelStyle}>
+            <h2 style={headingStyle}>Stop games</h2>
+            <p style={hintStyle}>Mod cancel/refund — same as !bjstop, !rstop, !p3stop, !p4stop.</p>
+            <div style={rowStyle}>
+              <button
+                type="button"
+                disabled={busy || !savedSecret}
+                style={ghostButtonStyle}
+                onClick={() => {
+                  void stopGameTable('/api/blackjack/action', {
+                    action: 'stop',
+                    username: CONTROL_PANEL_ACTOR,
+                    isMod: true,
+                  }, 'Blackjack');
+                }}
+              >
+                Stop blackjack
+              </button>
+              <button
+                type="button"
+                disabled={busy || !savedSecret}
+                style={ghostButtonStyle}
+                onClick={() => {
+                  void stopGameTable('/api/roulette/action', {
+                    action: 'stop',
+                    username: CONTROL_PANEL_ACTOR,
+                    isMod: true,
+                  }, 'Roulette');
+                }}
+              >
+                Stop roulette
+              </button>
+              <button
+                type="button"
+                disabled={busy || !savedSecret}
+                style={ghostButtonStyle}
+                onClick={() => {
+                  void stopGameTable('/api/pick-numbers/action', {
+                    action: 'stop',
+                    game: 'pick3',
+                    username: CONTROL_PANEL_ACTOR,
+                    isMod: true,
+                  }, 'Pick 3');
+                }}
+              >
+                Stop Pick 3
+              </button>
+              <button
+                type="button"
+                disabled={busy || !savedSecret}
+                style={ghostButtonStyle}
+                onClick={() => {
+                  void stopGameTable('/api/pick-numbers/action', {
+                    action: 'stop',
+                    game: 'pick4',
+                    username: CONTROL_PANEL_ACTOR,
+                    isMod: true,
+                  }, 'Pick 4');
+                }}
+              >
+                Stop Pick 4
+              </button>
+            </div>
+          </section>
+
+          {MOD_COMMAND_SECTION ? (
+            <section style={panelStyle}>
+              <h2 style={headingStyle}>Mod commands reference</h2>
+              <ul style={checklistStyle}>
+                {MOD_COMMAND_SECTION.commands.map((cmd) => (
+                  <li key={cmd.command}>
+                    <strong>{cmd.command}</strong>
+                    {cmd.aliases?.length ? ` (${cmd.aliases.join(', ')})` : ''}
+                    {' — '}
+                    {cmd.description}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
         </>
       )}
 
@@ -965,5 +1355,35 @@ function quotaNumberStyle(tier: string): React.CSSProperties {
     fontWeight: 700,
     color,
     lineHeight: 1.2,
+  };
+}
+
+const controlGridStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '12px',
+};
+
+const controlRowStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  gap: '12px',
+  flexWrap: 'wrap',
+};
+
+const controlLabelStyle: React.CSSProperties = {
+  fontSize: '14px',
+  fontWeight: 600,
+  color: '#e9d5ff',
+};
+
+function toggleButtonStyle(enabled: boolean): React.CSSProperties {
+  return {
+    ...buttonStyle,
+    minWidth: '72px',
+    background: enabled ? 'rgba(134, 239, 172, 0.18)' : 'rgba(255,255,255,0.06)',
+    borderColor: enabled ? 'rgba(134, 239, 172, 0.45)' : 'rgba(255,255,255,0.12)',
+    color: enabled ? '#bbf7d0' : '#d1d5db',
   };
 }

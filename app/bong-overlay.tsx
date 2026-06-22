@@ -233,6 +233,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const directivePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const liveDirectivesRef = useRef<{ sticky: string[]; next: string[] }>({ sticky: [], next: [] });
   const processedPushIdsRef = useRef<Set<string>>(new Set());
+  const lastControlsRevisionRef = useRef(0);
+  const processedControlCommandIdsRef = useRef<Set<string>>(new Set());
+  const stopBotRef = useRef<(announceUser?: string) => Promise<void>>(async () => {});
   const pendingDeployReloadRef = useRef(false);
   const bundledBuildIdRef = useRef(process.env.NEXT_PUBLIC_BUILD_ID || 'dev');
   const sfxUrlCacheRef = useRef<Map<string, string>>(new Map());
@@ -1608,10 +1611,69 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
   }, [controlHeaders, queueBongLogic]);
 
+  const pollBotControls = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/bot/controls?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: controlHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json() as {
+        revision?: number;
+        settings?: {
+          voiceEnabled?: boolean;
+          dingEnabled?: boolean;
+          volume?: number;
+        };
+        commands?: Array<{ id: string; type: string }>;
+      };
+
+      const revision = Number(data.revision) || 0;
+      if (revision > lastControlsRevisionRef.current) {
+        lastControlsRevisionRef.current = revision;
+        if (typeof data.settings?.voiceEnabled === 'boolean') {
+          voiceEnabledRef.current = data.settings.voiceEnabled;
+          setIsVoiceOn(data.settings.voiceEnabled);
+        }
+        if (typeof data.settings?.dingEnabled === 'boolean') {
+          dingEnabledRef.current = data.settings.dingEnabled;
+          setIsDingOn(data.settings.dingEnabled);
+        }
+        if (typeof data.settings?.volume === 'number' && Number.isFinite(data.settings.volume)) {
+          volumeRef.current = Math.min(1, Math.max(0, data.settings.volume));
+        }
+      }
+
+      const ackIds: string[] = [];
+      for (const command of data.commands ?? []) {
+        if (!command?.id || processedControlCommandIdsRef.current.has(command.id)) continue;
+        processedControlCommandIdsRef.current.add(command.id);
+        ackIds.push(command.id);
+        if (command.type === 'disconnect') {
+          void stopBotRef.current();
+        }
+      }
+
+      if (ackIds.length) {
+        void fetch('/api/bot/controls', {
+          method: 'POST',
+          headers: controlHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ action: 'ack', commandIds: ackIds }),
+        }).catch((error) => {
+          console.warn('Bot controls ack failed', error);
+        });
+      }
+    } catch (error) {
+      console.warn('Bot controls poll failed', error);
+    }
+  }, [controlHeaders]);
+
   useEffect(() => {
     void pollLiveDirectives();
+    void pollBotControls();
     directivePollRef.current = setInterval(() => {
       void pollLiveDirectives();
+      void pollBotControls();
     }, DIRECTIVE_POLL_MS);
     return () => {
       if (directivePollRef.current) {
@@ -1619,7 +1681,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         directivePollRef.current = null;
       }
     };
-  }, [pollLiveDirectives]);
+  }, [pollBotControls, pollLiveDirectives]);
 
   const enterSilence = useCallback(() => {
     silencedUntilRef.current = Date.now() + SHUT_UP_DURATION_MS;
@@ -2779,22 +2841,43 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     const nextState = !dingEnabledRef.current;
     dingEnabledRef.current = nextState;
     setIsDingOn(nextState);
+    void fetch('/api/bot/controls', {
+      method: 'POST',
+      headers: controlHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ settings: { dingEnabled: nextState } }),
+    }).catch((error) => {
+      console.warn('Bot controls sync failed', error);
+    });
     void sayChat(user ? `@${user} ding ${nextState ? 'on' : 'off'}.` : `ding ${nextState ? 'on' : 'off'}.`);
-  }, [sayChat]);
+  }, [controlHeaders, sayChat]);
 
   const toggleVoice = useCallback((user?: string) => {
     const nextState = !voiceEnabledRef.current;
     voiceEnabledRef.current = nextState;
     setIsVoiceOn(nextState);
+    void fetch('/api/bot/controls', {
+      method: 'POST',
+      headers: controlHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ settings: { voiceEnabled: nextState } }),
+    }).catch((error) => {
+      console.warn('Bot controls sync failed', error);
+    });
     void sayChat(user ? `@${user} voice ${nextState ? 'on' : 'off'}.` : `voice ${nextState ? 'on' : 'off'}.`);
-  }, [sayChat]);
+  }, [controlHeaders, sayChat]);
 
   const setVolume = useCallback((level: number, user?: string) => {
     const clamped = Math.min(1, Math.max(0, level));
     volumeRef.current = clamped;
+    void fetch('/api/bot/controls', {
+      method: 'POST',
+      headers: controlHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ settings: { volume: clamped } }),
+    }).catch((error) => {
+      console.warn('Bot controls sync failed', error);
+    });
     const pct = Math.round(clamped * 100);
     void sayChat(user ? `@${user} volume ${pct}%.` : `volume ${pct}%.`);
-  }, [sayChat]);
+  }, [controlHeaders, sayChat]);
 
   const announceAboutMe = useCallback(async (username: string) => {
     try {
@@ -2915,6 +2998,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     await releaseBotSessionLock();
     await disconnectBotClient(announceUser);
   }, [disconnectBotClient, releaseBotSessionLock]);
+
+  useEffect(() => {
+    stopBotRef.current = stopBot;
+  }, [stopBot]);
 
   const stopBotForSessionLoss = useCallback(async () => {
     stopBotSessionHeartbeat();
@@ -3291,6 +3378,22 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       startQuotaPolling();
       warmupElroySfx();
       void unlockBrowserAudio();
+      void fetch('/api/bot/controls', {
+        method: 'POST',
+        headers: controlHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          settings: {
+            voiceEnabled: voiceEnabledRef.current,
+            dingEnabled: dingEnabledRef.current,
+            volume: volumeRef.current,
+          },
+        }),
+      }).then(async (res) => {
+        if (!res.ok) return;
+        const data = await res.json() as { revision?: number };
+        lastControlsRevisionRef.current = Number(data.revision) || 0;
+      }).catch(() => {});
+      void pollBotControls();
       startStreamMonitoring();
       void pollStreamLive();
     } catch (error) {
