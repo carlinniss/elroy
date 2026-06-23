@@ -131,7 +131,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const COMEBACK_CHANCE = 0.12;
   const CELEBRATION_COOLDOWN_MS = 25_000;
   const FOLLOW_CELEBRATION_COOLDOWN_MS = 60_000;
-  const JOIN_GREET_WARMUP_MS = 60_000;
   const FOLLOWER_POLL_MS = 45_000;
   const CHANNEL_EVENTS_POLL_MS = 5_000;
   const STREAM_CHECKIN_MS = 15 * 60 * 1000;
@@ -177,8 +176,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
   const lastCelebrationRef = useRef(0);
   const knownFollowerIdsRef = useRef<Set<string>>(new Set());
-  const greetedThisSessionRef = useRef<Set<string>>(new Set());
-  const joinGreetWarmupUntilRef = useRef(0);
   const followersInitializedRef = useRef(false);
   const followerPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const channelEventsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -863,7 +860,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
         startedAt: streamStartedAtRef.current,
         messages: sessionChatRef.current,
-        greetedJoiners: [...greetedThisSessionRef.current],
       }));
     } catch (e) {
       console.warn('Session save failed', e);
@@ -887,21 +883,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       const parsed = JSON.parse(raw) as {
         startedAt?: number;
         messages?: Array<{ user: string; text: string; at: number }>;
-        greetedJoiners?: string[];
       };
       if (parsed.startedAt && Array.isArray(parsed.messages)) {
         streamStartedAtRef.current = parsed.startedAt;
         sessionChatRef.current = parsed.messages.slice(0, SESSION_CHAT_MAX);
-      }
-      if (Array.isArray(parsed.greetedJoiners)) {
-        for (const login of parsed.greetedJoiners) {
-          if (typeof login === 'string' && login.trim()) {
-            greetedThisSessionRef.current.add(login.toLowerCase());
-          }
-        }
-      }
-      for (const entry of sessionChatRef.current) {
-        greetedThisSessionRef.current.add(entry.user.toLowerCase());
       }
     } catch (e) {
       console.warn('Session restore failed', e);
@@ -1328,9 +1313,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const buildFollowPrompt = useCallback((user: string) =>
     `${user} just followed the Twitch channel. One or two welcome sentences — hype but real.`, []);
 
-  const buildJoinGreetingPrompt = useCallback((user: string) =>
-    `${user} just entered the Twitch chat while the stream is live. One or two welcome sentences by username.`, []);
-
   const buildTriviaCheatRoastPrompt = useCallback((
     user: string,
     message: string,
@@ -1707,17 +1689,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     return Date.now() - lastCelebrationRef.current >= cooldown;
   };
 
-  const shouldSkipJoinGreet = useCallback((normalizedUser: string, normalizedChannel: string) => {
-    if (!normalizedUser) return true;
-    if (normalizedUser === normalizedChannel) return true;
-    const skipBots = new Set([
-      'wizebot', 'nightbot', 'streamelements', 'moobot', 'streamlabs',
-      'soundalerts', 'fossabot', 'botrix', 'coebot', 'stay_hydrated_bot',
-    ]);
-    if (skipBots.has(normalizedUser)) return true;
-    return false;
-  }, []);
-
   const moderateOffensiveChatter = useCallback((
     username: string,
     displayName?: string,
@@ -1752,20 +1723,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
     return true;
   }, [controlHeaders]);
-
-  const tryGreetChatter = useCallback((username: string, normalizedUser: string, normalizedChannel: string) => {
-    if (moderateOffensiveChatter(username)) return;
-    if (!streamLiveRef.current || isFullyMuted() || isSilenced()) return;
-    if (Date.now() < joinGreetWarmupUntilRef.current) return;
-    if (shouldSkipJoinGreet(normalizedUser, normalizedChannel)) return;
-    if (greetedThisSessionRef.current.has(normalizedUser)) return;
-
-    greetedThisSessionRef.current.add(normalizedUser);
-    if (streamStartedAtRef.current) {
-      persistStreamSession();
-    }
-    void queueBongLogic(buildJoinGreetingPrompt(username), username, { chatOnly: true });
-  }, [buildJoinGreetingPrompt, moderateOffensiveChatter, persistStreamSession, queueBongLogic, shouldSkipJoinGreet]);
 
   const celebrate = useCallback((
     kind: 'follow' | 'sub' | 'bits' | 'raid',
@@ -2001,7 +1958,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     if (!resumed) {
       streamStartedAtRef.current = Date.now();
       sessionChatRef.current = [];
-      greetedThisSessionRef.current.clear();
       lastCommandHelpAtRef.current = Date.now();
       commandHelpIndexRef.current = 0;
       activeTriviaRef.current = null;
@@ -3340,14 +3296,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       void handleRaid(username, viewers);
     });
 
-    client.on('join', (_channel: string, username: string, self: boolean) => {
-      if (self) return;
-      tryGreetChatter(username, username.toLowerCase(), normalizedChannel);
-    });
-
     try {
       await client.connect();
-      joinGreetWarmupUntilRef.current = Date.now() + JOIN_GREET_WARMUP_MS;
       clientRef.current = client;
       isActiveRef.current = true;
       setIsActive(true);
