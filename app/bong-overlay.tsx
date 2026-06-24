@@ -130,7 +130,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const CELEBRATION_VOICE_COOLDOWN_MS = 25_000;
   const COMEBACK_CHANCE = 0.12;
   const CELEBRATION_COOLDOWN_MS = 25_000;
-  const FOLLOW_CELEBRATION_COOLDOWN_MS = 60_000;
   const FOLLOWER_POLL_MS = 45_000;
   const CHANNEL_EVENTS_POLL_MS = 5_000;
   const STREAM_CHECKIN_MS = 15 * 60 * 1000;
@@ -1039,10 +1038,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const buildChatAwarePrompt = useCallback(() => {
     const recent = recentChatRef.current.slice(0, 8);
     if (!recent.length) {
-      return "No one is chatting yet. Drop a longer, welcoming OG check-in and invite chat to ask a question.";
+      return 'No one is chatting yet. Drop a short OG check-in about the stream vibe — do not welcome or greet anyone by name.';
     }
     const lines = recent.map((entry) => `- ${entry.user}: ${entry.text}`).join("\n");
-    return `Use the recent Twitch chat for a topical comment (2-3 sentences). Reference the vibe from:\n${lines}${streamMetadataLine() ? `\nStream context: ${streamMetadataLine()}` : ''}\nDo not force a rhyme.`;
+    return `Use the recent Twitch chat for a topical comment (2-3 sentences). Reference the vibe from:\n${lines}${streamMetadataLine() ? `\nStream context: ${streamMetadataLine()}` : ''}\nDo not greet, welcome, or say hello to anyone by @username. Comment on topics only — never welcome newcomers. Do not force a rhyme.`;
   }, [streamMetadataLine]);
 
   const formatSpeechHudError = useCallback((status: number, message: string) => {
@@ -1310,9 +1309,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     return `${user} called you "L Roy" in Twitch chat (wrong name — you are ELROY, not L Roy): "${message}"\n\nRecent chat:\n${context}\n\nOne short roast sentence for the misname — playful not cruel.`;
   }, []);
 
-  const buildFollowPrompt = useCallback((user: string) =>
-    `${user} just followed the Twitch channel. One or two welcome sentences — hype but real.`, []);
-
   const buildTriviaCheatRoastPrompt = useCallback((
     user: string,
     message: string,
@@ -1360,7 +1356,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       viewerLine = 'Viewer count could not be verified. Do not say the stream or chat is offline — keep the energy up anyway.';
     }
 
-    return `10-minute stream check-in.\n${viewerLine}\n${streamMetadataLine() ? `${streamMetadataLine()}\n` : ''}\nRecent chat (last ~20 minutes):\n${lines}\n\nWrite a chat check-in (2-3 sentences):\n- Mention viewer count only if provided above.\n- You may reference the stream title or game if listed.\n- Optionally shout out ONE chatter by username from the list.`;
+    return `10-minute stream check-in.\n${viewerLine}\n${streamMetadataLine() ? `${streamMetadataLine()}\n` : ''}\nRecent chat (last ~20 minutes):\n${lines}\n\nWrite a chat check-in (2-3 sentences):\n- Mention viewer count only if provided above.\n- You may reference the stream title or game if listed.\n- Do not greet, welcome, or @ individual chatters by name.`;
   }, [streamMetadataLine]);
 
   const buildStreamGreetingPrompt = useCallback((viewerCount: number | null, cannabisFact: string) => {
@@ -1680,12 +1676,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }, SHUT_UP_DURATION_MS + 250);
   }, [syncMuteHud]);
 
-  const canCelebrate = (kind: 'follow' | 'sub' | 'bits' | 'raid') => {
-    const cooldown = kind === 'follow'
-      ? FOLLOW_CELEBRATION_COOLDOWN_MS
-      : kind === 'raid'
-        ? 15_000
-        : CELEBRATION_COOLDOWN_MS;
+  const canCelebrate = (kind: 'sub' | 'bits' | 'raid') => {
+    const cooldown = kind === 'raid'
+      ? 15_000
+      : CELEBRATION_COOLDOWN_MS;
     return Date.now() - lastCelebrationRef.current >= cooldown;
   };
 
@@ -1724,31 +1718,36 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     return true;
   }, [controlHeaders]);
 
+  const recordFollow = useCallback((
+    username: string,
+    memoryEvent?: Record<string, unknown>,
+  ) => {
+    if (!username.trim()) return;
+    if (moderateOffensiveChatter(
+      username,
+      username,
+      typeof memoryEvent?.user_id === 'string' ? memoryEvent.user_id : undefined,
+    )) return;
+    rememberUser(username, username, {
+      type: 'follow',
+      followedAt: typeof memoryEvent?.followed_at === 'string' ? memoryEvent.followed_at : undefined,
+    }, controlHeaders());
+  }, [controlHeaders, moderateOffensiveChatter]);
+
   const celebrate = useCallback((
-    kind: 'follow' | 'sub' | 'bits' | 'raid',
+    kind: 'sub' | 'bits' | 'raid',
     username: string,
     extra = '',
     bitsAmount?: number,
     memoryEvent?: Record<string, unknown>,
   ) => {
     if (!streamLiveRef.current || isFullyMuted() || !canCelebrate(kind)) return;
-    if (kind === 'follow' && moderateOffensiveChatter(
-      username,
-      username,
-      typeof memoryEvent?.user_id === 'string' ? memoryEvent.user_id : undefined,
-    )) return;
     const dedupeKey = kind === 'bits'
       ? `bits:${username.toLowerCase()}:${bitsAmount ?? 0}`
       : `${kind}:${username.toLowerCase()}`;
     if (shouldSkipDuplicateCelebration(dedupeKey, kind === 'raid' ? 60_000 : 30_000)) return;
 
     lastCelebrationRef.current = Date.now();
-    if (kind === 'follow') {
-      rememberUser(username, username, {
-        type: 'follow',
-        followedAt: typeof memoryEvent?.followed_at === 'string' ? memoryEvent.followed_at : undefined,
-      }, controlHeaders());
-    }
     if (kind === 'sub') {
       const payload = memoryEvent ?? {};
       const tenure = subTenureFromEventPayload(payload as Record<string, unknown>);
@@ -1764,20 +1763,17 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
     const sfxId = kind === 'sub' || kind === 'raid'
       ? 'sub_fanfare'
-      : kind === 'bits'
-        ? 'bits_kaching'
-        : 'follow_ding';
+      : 'bits_kaching';
     void playElroySfx(sfxId);
     const prompt =
-      kind === 'follow' ? buildFollowPrompt(username)
-      : kind === 'sub' ? buildSubPrompt(username, extra)
+      kind === 'sub' ? buildSubPrompt(username, extra)
       : kind === 'raid' ? buildRaidPrompt(username, Number(extra) || 0)
       : buildBitsPrompt(username, extra);
     void queueBongLogic(prompt, username, {
       forceVoice: true,
-      voicePriority: kind === 'follow' ? 'normal' : 'celebration',
+      voicePriority: 'celebration',
     });
-  }, [buildBitsPrompt, buildFollowPrompt, buildRaidPrompt, buildSubPrompt, controlHeaders, moderateOffensiveChatter, playElroySfx, queueBongLogic, shouldSkipDuplicateCelebration]);
+  }, [buildBitsPrompt, buildRaidPrompt, buildSubPrompt, controlHeaders, playElroySfx, queueBongLogic, shouldSkipDuplicateCelebration]);
 
   const handleRaid = useCallback(async (login: string, viewers: number) => {
     if (!login.trim()) return;
@@ -1813,12 +1809,12 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       for (const follower of data.followers) {
         if (knownFollowerIdsRef.current.has(follower.user_id)) continue;
         knownFollowerIdsRef.current.add(follower.user_id);
-        celebrate('follow', follower.user_login, '', undefined, { followed_at: follower.followed_at });
+        recordFollow(follower.user_login, { followed_at: follower.followed_at });
       }
     } catch (e) {
       console.warn('Follower poll failed', e);
     }
-  }, [celebrate, controlHeaders]);
+  }, [controlHeaders, recordFollow]);
 
   const startFollowerPolling = useCallback(() => {
     if (followerPollRef.current) return;
@@ -1862,7 +1858,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
           const login = String(payload.user_login ?? '');
           const userId = String(payload.user_id ?? '');
           if (userId) knownFollowerIdsRef.current.add(userId);
-          celebrate('follow', login, '', undefined, payload);
+          recordFollow(login, payload);
         } else if (event.type === 'subscribe') {
           const login = String(payload.user_login ?? '');
           const tenure = subTenureFromEventPayload(payload);
@@ -1934,7 +1930,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     } catch (error) {
       console.warn('Channel events poll failed', error);
     }
-  }, [celebrate, controlHeaders, handleRaid, postTwitchAnnounce]);
+  }, [celebrate, controlHeaders, handleRaid, postTwitchAnnounce, recordFollow]);
 
   const startChannelEventPolling = useCallback(() => {
     if (channelEventsPollRef.current) return;
