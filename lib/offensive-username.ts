@@ -31,8 +31,8 @@ function normalizeUsernameLiteral(login: string): string {
   return s;
 }
 
-function matchesHatePatterns(value: string) {
-  return HATE_PATTERNS.some((pattern) => pattern.test(value));
+function matchesHatePhrase(value: string) {
+  return HATE_PHRASES.some((phrase) => value.includes(phrase));
 }
 
 function usernameSegments(login: string): string[] {
@@ -49,45 +49,38 @@ function usernameSegments(login: string): string[] {
   return split.length ? split : [normalizeUsernameForModeration(raw)];
 }
 
-const HATE_PATTERNS = [
-  /1488/,
-  /14words/,
-  /100deep/,
-  /hundreddeep/,
-  /whitepower/,
-  /wpww/,
-  /rahowa/,
-  /siegheil/,
-  /heilhitler/,
-  /hitlerdid/,
-  /holohoax/,
-  /killallj/,
-  /killalln/,
-  /killallg/,
-  /killallb/,
-  /killallf/,
-  /killallt/,
-  /killjew/,
-  /killnig/,
-  /killfag/,
-  /killgay/,
-  /killtrans/,
-  /gasj/,
-  /gasjew/,
-  /ihatej/,
-  /ihaten/,
-  /ihateg/,
-  /ihatef/,
-  /ihateb/,
-  /ihatejew/,
-  /ihatenig/,
-  /ihategay/,
-  /ihateblack/,
-  /deadjew/,
-  /deadnig/,
-  /rapekid/,
-  /pedophil/,
-  /childpred/,
+const HATE_PHRASES = [
+  '1488',
+  '14words',
+  '100deep',
+  'hundreddeep',
+  'whitepower',
+  'wpww',
+  'rahowa',
+  'siegheil',
+  'heilhitler',
+  'hitlerdid',
+  'holohoax',
+  'killalljew',
+  'killallnig',
+  'killallfag',
+  'killallgay',
+  'killalltrans',
+  'killjew',
+  'killnig',
+  'killfag',
+  'killgay',
+  'killtrans',
+  'gasjew',
+  'ihatejew',
+  'ihatenig',
+  'ihategay',
+  'ihateblack',
+  'deadjew',
+  'deadnig',
+  'rapekid',
+  'pedophil',
+  'childpred',
 ];
 
 /** High-confidence fragments — unlikely to appear innocently inside a login. */
@@ -95,7 +88,6 @@ const OFFENSIVE_FRAGMENTS = [
   'nigger',
   'nigga',
   'faggot',
-  'fagg',
   'fagot',
   'tranny',
   'kike',
@@ -105,10 +97,7 @@ const OFFENSIVE_FRAGMENTS = [
   'beaner',
   'raghead',
   'towelhead',
-  'retard',
   'hitler',
-  'nazi',
-  'nazis',
   'swastika',
   'pedophile',
   'pedophil',
@@ -120,28 +109,16 @@ const OFFENSIVE_FRAGMENTS = [
   'shitlord',
 ];
 
-/** Short slurs — segment-exact only so "spicy" / "raccoon" are not flagged. */
+/** Short slurs — segment-exact only so innocent substrings are not flagged. */
 const OFFENSIVE_SEGMENT_EXACT = [
   'fag',
   'dyke',
   'kike',
-  'coon',
   'spic',
   'gook',
-  'paki',
   'nazi',
   'pedo',
-  'rape',
-  'tard',
   'nigg',
-  'tit',
-  'cum',
-  'sex',
-  'anal',
-  'porn',
-  'boob',
-  'dick',
-  'cock',
   'cunt',
   'twat',
   'slut',
@@ -159,9 +136,9 @@ export function isOffensiveUsername(login: string): boolean {
   if (!collapsed && !literal) return false;
 
   if (
-    matchesHatePatterns(collapsed)
-    || matchesHatePatterns(literal)
-    || matchesHatePatterns(literalLeet)
+    matchesHatePhrase(collapsed)
+    || matchesHatePhrase(literal)
+    || matchesHatePhrase(literalLeet)
   ) {
     return true;
   }
