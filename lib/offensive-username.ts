@@ -40,7 +40,6 @@ function usernameSegments(login: string): string[] {
   if (!raw) return [];
 
   const split = raw
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
     .split(/[\W_]+/)
     .flatMap((part) => part.split(/(?<=\D)(?=\d)|(?<=\d)(?=\D)/))
     .map((part) => normalizeUsernameForModeration(part))
@@ -63,22 +62,14 @@ const HATE_PATTERNS = [
   /holohoax/,
   /killallj/,
   /killalln/,
-  /killallg/,
-  /killallb/,
-  /killallf/,
-  /killallt/,
   /killjew/,
   /killnig/,
   /killfag/,
   /killgay/,
   /killtrans/,
-  /gasj/,
   /gasjew/,
   /ihatej/,
   /ihaten/,
-  /ihateg/,
-  /ihatef/,
-  /ihateb/,
   /ihatejew/,
   /ihatenig/,
   /ihategay/,
@@ -105,10 +96,7 @@ const OFFENSIVE_FRAGMENTS = [
   'beaner',
   'raghead',
   'towelhead',
-  'retard',
   'hitler',
-  'nazi',
-  'nazis',
   'swastika',
   'pedophile',
   'pedophil',
@@ -134,13 +122,14 @@ const OFFENSIVE_SEGMENT_EXACT = [
   'rape',
   'tard',
   'nigg',
+  'retard',
+  'nazi',
   'tit',
   'cum',
   'sex',
   'anal',
   'porn',
   'boob',
-  'dick',
   'cock',
   'cunt',
   'twat',
