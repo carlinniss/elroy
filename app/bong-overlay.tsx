@@ -36,6 +36,7 @@ import type { UserMemoryEvent } from '@/lib/user-memory';
 import { controlAuthHeaders } from '@/lib/control-auth';
 import { isOffensiveUsername } from '@/lib/offensive-username';
 import { mentionsElroy, misnamesElroyAsLRoy } from '@/lib/elroy-mention';
+import { isShutElroyPowerUpRedemption } from '@/lib/shut-elroy-powerup';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
 const CONTROL_SECRET_STORAGE_KEY = 'elroy-control-secret';
@@ -125,7 +126,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
   const SHUT_UP_DURATION_MS = 8 * 60 * 1000;
   const POWERUP_MUTE_MS = 10 * 60 * 1000;
-  const SHUT_ELROY_POWERUP_PATTERN = /shut\s+elroy\s+up(\s+for\s+10\s+minutes?)?/i;
   const VOICE_COOLDOWN_MS = 90_000;
   const CELEBRATION_VOICE_COOLDOWN_MS = 25_000;
   const COMEBACK_CHANCE = 0.12;
@@ -504,26 +504,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       console.warn('EventSub subscription failed', e);
     }
   }, []);
-
-  const isShutElroyPowerUpRedemption = (message: string, tags: tmi.ChatUserstate) => {
-    const tagRecord = tags as Record<string, string | undefined>;
-    const tagId =
-      tagRecord['custom-reward-id']
-      || tagRecord['power-up-id']
-      || tagRecord['msg-param-powerup-id'];
-    const cachedId = shutElroyPowerUpIdRef.current;
-    if (cachedId && tagId === cachedId) return true;
-
-    if (!SHUT_ELROY_POWERUP_PATTERN.test(message)) return false;
-
-    const lower = message.toLowerCase();
-    return Boolean(
-      tagId ||
-      tagRecord['msg-id'] === 'highlighted-message' ||
-      /\b(redeemed|used|activated)\b/.test(lower) ||
-      /\bpower[\s-]?up\b/.test(lower),
-    );
-  };
 
   const canUseVoice = (priority: 'celebration' | 'normal' = 'normal') => {
     if (!quotaVoiceAllowedRef.current) return false;
@@ -3016,7 +2996,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
       if (isElroyChatSpeaker(t, normalizedUser, normalizedChannel, m)) return;
 
-      if (isShutElroyPowerUpRedemption(m, t)) {
+      if (isShutElroyPowerUpRedemption(m, t as Record<string, string | undefined>, shutElroyPowerUpIdRef.current)) {
         enterFullMute(username);
         return;
       }

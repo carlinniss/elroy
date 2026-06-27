@@ -1,4 +1,4 @@
-import { getEventSubSecret, verifyEventSubSignature } from '@/lib/eventsub';
+import { getEventSubSecret, isEventSubTimestampFresh, verifyEventSubSignature } from '@/lib/eventsub';
 import { recordChannelEvent } from '@/lib/channel-events';
 import { fetchShutElroyPowerUpId, SHUT_ELROY_POWERUP_TITLE } from '@/lib/twitch';
 import { recordShutElroyRedemption } from '@/lib/powerup-redemptions';
@@ -71,6 +71,10 @@ export async function POST(request: Request) {
   const timestamp = request.headers.get('twitch-eventsub-message-timestamp') ?? '';
   const signature = request.headers.get('twitch-eventsub-message-signature') ?? '';
   const messageType = request.headers.get('twitch-eventsub-message-type') ?? '';
+
+  if (!isEventSubTimestampFresh(timestamp)) {
+    return new Response('Stale EventSub message', { status: 403 });
+  }
 
   if (!verifyEventSubSignature(messageId, timestamp, rawBody, signature, secret)) {
     return new Response('Invalid signature', { status: 403 });

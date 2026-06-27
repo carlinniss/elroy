@@ -12,6 +12,7 @@ import {
 
 const TWITCH_API = 'https://api.twitch.tv/helix';
 const HMAC_PREFIX = 'sha256=';
+const MAX_EVENTSUB_MESSAGE_AGE_MS = 10 * 60 * 1000;
 
 export function getEventSubSecret() {
   return process.env.TWITCH_EVENTSUB_SECRET?.trim() || '';
@@ -40,6 +41,12 @@ export function verifyEventSubSignature(
   } catch {
     return false;
   }
+}
+
+export function isEventSubTimestampFresh(timestamp: string, nowMs = Date.now()): boolean {
+  const messageTime = Date.parse(timestamp);
+  if (!Number.isFinite(messageTime)) return false;
+  return Math.abs(nowMs - messageTime) <= MAX_EVENTSUB_MESSAGE_AGE_MS;
 }
 
 async function twitchPost(path: string, token: string, clientId: string, body: unknown) {
