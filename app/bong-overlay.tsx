@@ -2996,7 +2996,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
       if (isElroyChatSpeaker(t, normalizedUser, normalizedChannel, m)) return;
 
-      if (isShutElroyPowerUpRedemption(m, t as Record<string, string | undefined>, shutElroyPowerUpIdRef.current)) {
+      if (isShutElroyPowerUpRedemption(m, t as Record<string, string | undefined>, shutElroyPowerUpIdRef.current ?? '')) {
         enterFullMute(username);
         return;
       }
