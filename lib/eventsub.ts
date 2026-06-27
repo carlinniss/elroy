@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import {
   fetchShutElroyPowerUpId,
   getAppAccessToken,
@@ -9,10 +8,9 @@ import {
   resolveEventSubAppCredentials,
   twitchGet,
 } from '@/lib/twitch';
+export { isEventSubTimestampFresh, verifyEventSubSignature } from './eventsub-signature';
 
 const TWITCH_API = 'https://api.twitch.tv/helix';
-const HMAC_PREFIX = 'sha256=';
-const MAX_EVENTSUB_MESSAGE_AGE_MS = 10 * 60 * 1000;
 
 export function getEventSubSecret() {
   return process.env.TWITCH_EVENTSUB_SECRET?.trim() || '';
@@ -24,29 +22,6 @@ export function getEventSubCallbackUrl() {
   const vercel = process.env.VERCEL_URL?.trim();
   if (vercel) return `https://${vercel}/api/twitch/eventsub`;
   return 'https://elroy-zeta.vercel.app/api/twitch/eventsub';
-}
-
-export function verifyEventSubSignature(
-  messageId: string,
-  timestamp: string,
-  rawBody: string,
-  signature: string,
-  secret: string,
-): boolean {
-  if (!secret || !signature.startsWith(HMAC_PREFIX)) return false;
-  const message = messageId + timestamp + rawBody;
-  const expected = HMAC_PREFIX + crypto.createHmac('sha256', secret).update(message).digest('hex');
-  try {
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-  } catch {
-    return false;
-  }
-}
-
-export function isEventSubTimestampFresh(timestamp: string, nowMs = Date.now()): boolean {
-  const messageTime = Date.parse(timestamp);
-  if (!Number.isFinite(messageTime)) return false;
-  return Math.abs(nowMs - messageTime) <= MAX_EVENTSUB_MESSAGE_AGE_MS;
 }
 
 async function twitchPost(path: string, token: string, clientId: string, body: unknown) {

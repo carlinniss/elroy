@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { isEventSubTimestampFresh, verifyEventSubSignature } from './eventsub.ts';
+import { isEventSubTimestampFresh, verifyEventSubSignature } from './eventsub-signature.ts';
 
 const now = Date.parse('2026-06-27T11:00:00.000Z');
 
