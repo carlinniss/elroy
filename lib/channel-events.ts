@@ -57,15 +57,17 @@ async function recordInRedis(record: ChannelEventRecord): Promise<boolean> {
   const seenKey = `${SEEN_KEY_PREFIX}${record.id}`;
   const payload = JSON.stringify(record);
 
+  const inserted = await redisCommand(['SET', seenKey, '1', 'EX', TTL_SECONDS, 'NX']);
+  if (inserted !== 'OK') return false;
+
   const results = await redisPipeline([
-    ['SET', seenKey, '1', 'EX', TTL_SECONDS, 'NX'],
     ['LPUSH', LIST_KEY, payload],
     ['LTRIM', LIST_KEY, '0', MAX - 1],
     ['EXPIRE', LIST_KEY, TTL_SECONDS],
   ]);
 
   if (!results) return recordInMemory(record);
-  return results[0] === 'OK';
+  return true;
 }
 
 async function listFromRedis(): Promise<ChannelEventRecord[]> {

@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:control-auth": "node --experimental-strip-types lib/control-auth.test.ts",
+    "test:eventsub": "node --experimental-strip-types lib/eventsub.test.ts",
+    "test:shut-elroy-powerup": "node --experimental-strip-types lib/shut-elroy-powerup.test.ts",
+    "test:critical": "npm run test:control-auth && npm run test:eventsub && npm run test:shut-elroy-powerup"
   },
   "dependencies": {
     "@ai-sdk/google": "^2.0.70",
