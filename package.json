@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:control-auth": "node --experimental-strip-types tests/control-auth.test.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^2.0.70",
