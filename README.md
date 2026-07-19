@@ -125,7 +125,21 @@ Open Studio at:
 https://your-site.vercel.app/studio?key=YOUR_ELROY_CONTROL_SECRET
 ```
 
-In Chrome/Edge, choose a tab/window/system source that includes audio. For best results, share the Twitch stream tab or an OBS/program-monitor audio source, and keep the overlay browser source running separately. If you close the Studio page, Elroy will keep responding in chat, but voice will no longer wait for host-silence or host spoken mentions.
+In Chrome/Edge, choose a tab/window/system source that includes audio. For best results, feed Studio from an OBS/browser source that is audible to capture but **not monitored** to your speakers. Keep the overlay browser source running separately. If you close the Studio page, Elroy will keep responding in chat, but voice will no longer wait for host-silence or host spoken mentions.
+
+#### Muted OBS setup for Studio
+
+Use this if you want Elroy to hear the Twitch stream without hearing that stream audio in your room/headphones:
+
+1. In OBS, add the Twitch stream/video source you want Elroy to hear. This can be a browser source, capture source, or any source that carries the reaction video/host audio.
+2. In the OBS Audio Mixer, click the gear icon and open **Advanced Audio Properties**.
+3. Find that Twitch/video audio source and set **Audio Monitoring** to **Monitor Off**.
+4. In the same row, keep the source assigned only to the tracks you actually want. If viewers should hear it, leave the stream track enabled. If it is only for Elroy analysis, disable it from your broadcast track.
+5. Open `/studio?key=YOUR_ELROY_CONTROL_SECRET` in Chrome/Edge and click **Start listening**.
+6. When the browser asks what to share, choose a tab/window/system source that includes the OBS/Twitch audio.
+7. Confirm your speakers/headphones do not play the Twitch source. Studio should still show moving audio level when the host/video talks.
+
+Do **not** set the Twitch/video source to **Monitor and Output** unless you intentionally want to hear it locally. Studio analyzes captured audio; it does not need local speaker playback.
 
 ### API surface
 
@@ -288,7 +302,8 @@ Test: `https://your-site.vercel.app/api/sfx/<id>` · Chat: `!quota`
 3. Match canvas size (e.g. 1920×1080).
 4. Enable **Control audio via OBS** to mix voice separately.
 5. Open `/studio?key=YOUR_ELROY_CONTROL_SECRET` in a normal browser window and click **Start listening**.
-6. Share the Twitch stream tab or system audio when prompted. Keep this Studio page open while streaming so Elroy can wait for quiet spots and hear host mentions.
+6. Share the Twitch stream tab, OBS/program audio, or system audio when prompted. Keep this Studio page open while streaming so Elroy can wait for quiet spots and hear host mentions.
+7. For any Twitch/video source Elroy listens to, set OBS **Advanced Audio Properties** -> **Audio Monitoring** to **Monitor Off** so it does not play through your speakers/headphones.
 
 ---
 
