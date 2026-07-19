@@ -36,10 +36,19 @@ import type { UserMemoryEvent } from '@/lib/user-memory';
 import { controlAuthHeaders } from '@/lib/control-auth';
 import { isOffensiveUsername } from '@/lib/offensive-username';
 import { mentionsElroy, misnamesElroyAsLRoy } from '@/lib/elroy-mention';
+import { DEFAULT_STUDIO_SETTINGS } from '@/lib/studio-state';
+import {
+  describeStreamerGate,
+  isStudioGateActive,
+  waitForStreamerSilence,
+  type StudioGateState,
+} from '@/lib/streamer-gate';
 
 const BOT_SESSION_HEARTBEAT_MS = 8_000;
 const CONTROL_SECRET_STORAGE_KEY = 'elroy-control-secret';
 const CHAT_BRAIN_TIMEOUT_MS = 45_000;
+const STUDIO_POLL_MS = 500;
+const STUDIO_VOICE_WAIT_MS = 30_000;
 
 async function fetchWithTimeout(
   input: RequestInfo | URL,
@@ -98,6 +107,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     irc: 'off',
     chat: 'idle',
     mute: '',
+    studio: '',
   });
 
   const DEFAULT_VOLUME = 0.85;
@@ -230,6 +240,17 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const liveDirectivesRef = useRef<{ sticky: string[]; next: string[] }>({ sticky: [], next: [] });
   const processedPushIdsRef = useRef<Set<string>>(new Set());
   const lastControlsRevisionRef = useRef(0);
+  const processedHostMentionIdsRef = useRef<Set<string>>(new Set());
+  const studioRef = useRef<StudioGateState>({
+    listening: false,
+    listenerAlive: false,
+    streamerSpeaking: false,
+    lastSpeechAt: 0,
+    recentHostSpeech: [],
+    latestHostMention: null,
+    settings: { ...DEFAULT_STUDIO_SETTINGS },
+  });
+  const studioPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const processedControlCommandIdsRef = useRef<Set<string>>(new Set());
   const stopBotRef = useRef<(announceUser?: string) => Promise<void>>(async () => {});
   const pendingDeployReloadRef = useRef(false);
@@ -1037,11 +1058,28 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
   const buildChatAwarePrompt = useCallback(() => {
     const recent = recentChatRef.current.slice(0, 8);
+    const hostLines = studioRef.current.recentHostSpeech.slice(-4)
+      .map((entry) => `- Host: ${entry.text}`)
+      .join('\n');
     if (!recent.length) {
-      return 'No one is chatting yet. Drop a short OG check-in about the stream vibe — do not welcome or greet anyone by name.';
+      return hostLines
+        ? `No one is chatting much right now, but the host was just saying:\n${hostLines}\nDrop a short OG check-in about that stream moment — do not welcome or greet anyone by name.`
+        : 'No one is chatting yet. Drop a short OG check-in about the stream vibe — do not welcome or greet anyone by name.';
     }
     const lines = recent.map((entry) => `- ${entry.user}: ${entry.text}`).join("\n");
-    return `Use the recent Twitch chat for a topical comment (2-3 sentences). Reference the vibe from:\n${lines}${streamMetadataLine() ? `\nStream context: ${streamMetadataLine()}` : ''}\nDo not greet, welcome, or say hello to anyone by @username. Comment on topics only — never welcome newcomers. Do not force a rhyme.`;
+    return `Use the recent Twitch chat and host speech for a topical comment (2-3 sentences). Reference the vibe from:\n${lines}${hostLines ? `\n\nRecent host speech:\n${hostLines}` : ''}${streamMetadataLine() ? `\nStream context: ${streamMetadataLine()}` : ''}\nDo not greet, welcome, or say hello to anyone by @username. Comment on topics only — never welcome newcomers. Do not force a rhyme.`;
+  }, [streamMetadataLine]);
+
+  const buildHostAwarePrompt = useCallback((hostLine: string) => {
+    const recentChat = recentChatRef.current.slice(0, 8);
+    const chatLines = recentChat.length
+      ? recentChat.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
+      : '(chat is quiet right now)';
+    const hostLines = studioRef.current.recentHostSpeech.slice(-4)
+      .map((entry) => `- Host: ${entry.text}`)
+      .join('\n') || `- Host: ${hostLine}`;
+
+    return `The host just said this on stream: "${hostLine}"\n\nRecent host speech:\n${hostLines}\n\nRecent Twitch chat:\n${chatLines}${streamMetadataLine() ? `\n\nStream context: ${streamMetadataLine()}` : ''}\n\nWrite one appropriate Elroy response that fits both the host and chat context. If the host gave Elroy a clear command, follow it. If it was just a mention, give a brief relevant comment back. Do not invent facts; do not greet or welcome chatters.`;
   }, [streamMetadataLine]);
 
   const formatSpeechHudError = useCallback((status: number, message: string) => {
@@ -1395,6 +1433,18 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     return Boolean(active && !active.answered);
   }, []);
 
+  const syncStudioHud = useCallback((state: StudioGateState) => {
+    if (!isStudioGateActive(state)) {
+      setRuntimeHud((prev) => ({ ...prev, studio: '' }));
+      return;
+    }
+    const label = describeStreamerGate(state);
+    setRuntimeHud((prev) => ({
+      ...prev,
+      studio: label || 'studio listening',
+    }));
+  }, []);
+
   const processBongLogic = useCallback(async (
     input: string,
     user?: string,
@@ -1512,10 +1562,35 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       await sayChat(user ? `@${user} ${safeChatText}` : safeChatText);
 
       if (willUseVoice) {
+        if (isStudioGateActive(studioRef.current)) {
+          const gateLabel = describeStreamerGate(studioRef.current);
+          if (gateLabel) {
+            setRuntimeHud((prev) => ({ ...prev, tts: gateLabel }));
+          }
+          const gateResult = await waitForStreamerSilence(
+            () => studioRef.current,
+            { maxWaitMs: STUDIO_VOICE_WAIT_MS, pollMs: 100 },
+          );
+          if (gateResult === 'timeout') {
+            setRuntimeHud((prev) => ({
+              ...prev,
+              tts: 'streamer talking — skipped voice (chat sent)',
+            }));
+            syncStudioHud(studioRef.current);
+            return;
+          }
+        }
+
         lastElroyVoiceRef.current = Date.now();
         const playDing = dingEnabledRef.current && !opts.skipDing;
         const voiceText = clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS);
         void (async () => {
+          if (isStudioGateActive(studioRef.current)) {
+            await waitForStreamerSilence(
+              () => studioRef.current,
+              { maxWaitMs: STUDIO_VOICE_WAIT_MS, pollMs: 100 },
+            );
+          }
           if (playDing) {
             await playBongRip(volumeRef.current);
             await new Promise<void>((resolve) => setTimeout(resolve, 1600));
@@ -1524,7 +1599,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         })();
       }
     } catch (e) { console.error(e); }
-  }, [controlHeaders, describeVoiceSkip, isTriviaRoundLive, playBongRip, sayChat, speak]);
+  }, [controlHeaders, describeVoiceSkip, isTriviaRoundLive, playBongRip, sayChat, speak, syncStudioHud]);
 
   const queueBongLogic = useCallback((
     input: string,
@@ -1646,20 +1721,64 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
   }, [controlHeaders]);
 
+  const pollStudioStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/studio/status?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: controlHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json() as StudioGateState;
+      studioRef.current = {
+        listening: data.listening === true,
+        listenerAlive: data.listenerAlive === true,
+        streamerSpeaking: data.streamerSpeaking === true,
+        lastSpeechAt: Number(data.lastSpeechAt) || 0,
+        recentHostSpeech: Array.isArray(data.recentHostSpeech) ? data.recentHostSpeech : [],
+        latestHostMention: data.latestHostMention ?? null,
+        settings: data.settings ?? studioRef.current.settings,
+      };
+      syncStudioHud(studioRef.current);
+      const mention = studioRef.current.latestHostMention;
+      if (
+        mention
+        && !processedHostMentionIdsRef.current.has(mention.id)
+        && !isFullyMuted()
+      ) {
+        processedHostMentionIdsRef.current.add(mention.id);
+        void queueBongLogic(buildHostAwarePrompt(mention.text), undefined, {
+          forceVoice: true,
+          bypassVoiceCooldown: true,
+          voicePriority: 'celebration',
+        });
+      }
+    } catch (error) {
+      console.warn('Studio poll failed', error);
+    }
+  }, [buildHostAwarePrompt, controlHeaders, queueBongLogic, syncStudioHud]);
+
   useEffect(() => {
     void pollLiveDirectives();
     void pollBotControls();
+    void pollStudioStatus();
     directivePollRef.current = setInterval(() => {
       void pollLiveDirectives();
       void pollBotControls();
     }, DIRECTIVE_POLL_MS);
+    studioPollRef.current = setInterval(() => {
+      void pollStudioStatus();
+    }, STUDIO_POLL_MS);
     return () => {
       if (directivePollRef.current) {
         clearInterval(directivePollRef.current);
         directivePollRef.current = null;
       }
+      if (studioPollRef.current) {
+        clearInterval(studioPollRef.current);
+        studioPollRef.current = null;
+      }
     };
-  }, [pollBotControls, pollLiveDirectives]);
+  }, [pollBotControls, pollLiveDirectives, pollStudioStatus]);
 
   const enterSilence = useCallback(() => {
     silencedUntilRef.current = Date.now() + SHUT_UP_DURATION_MS;
@@ -3425,6 +3544,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
             <div style={{ color: '#FDE68A', marginTop: '4px', fontSize: '12px' }}>
               TTS: {runtimeHud.tts}
             </div>
+            {runtimeHud.studio ? (
+              <div style={{ color: '#C4B5FD', marginTop: '4px', fontSize: '12px' }}>
+                Studio: {runtimeHud.studio}
+              </div>
+            ) : null}
             {runtimeHud.mute ? (
               <div style={{ color: '#FCA5A5', marginTop: '4px', fontSize: '12px' }}>
                 {runtimeHud.mute}
