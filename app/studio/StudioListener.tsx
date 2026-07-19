@@ -86,7 +86,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
       setSecret(resolved);
       setSavedSecret(resolved);
       setAuthState('authorized');
-      setStatus('Authorized — pick your mic and start listening.');
+      setStatus('Authorized — share the Twitch tab or system audio to start listening.');
     })();
     return () => { cancelled = true; };
   }, [initialSecret, verifySecret]);

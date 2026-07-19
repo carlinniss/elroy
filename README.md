@@ -7,10 +7,11 @@ Elroy is an AI-driven Twitch chat bot and OBS overlay. He listens for mentions, 
 * **Twitch chat** — `tmi.js` IRC plus Helix for sends, announcements, and mod actions.
 * **AI personality** — Google Gemini (`gemini-2.5-flash-lite` by default) for mentions, check-ins, celebrations, and `!aboutme`.
 * **Voice** — ElevenLabs TTS with quota-aware pacing and bundled SFX.
+* **Host-aware Studio listener** — Optional `/studio` browser capture page shares Twitch tab/system audio, waits for quiet spots before TTS, transcribes recent host speech, and reacts when the host says "Elroy."
 * **Trivia** — On demand only: chat types **`!trivia`** to start a round (cannabis / freaky / 90s music). Curated bank + optional Gemini generation; category intros match the question topic.
 * **Casino games** — Blackjack, roulette, and Pick 3 / Pick 4 on one **1000 OG chip** bankroll (Redis-backed in production).
 * **Viewer memory** — `!aboutme` recalls trivia wins, subs, mentions, and **how long you've been following**.
-* **Stream awareness** — Title, game/category, viewer count (polled every **15s** from Twitch API); reacts to Spotify track changes; periodic command reminders every **7 minutes**.
+* **Stream awareness** — Title, game/category, viewer count (polled every **15s** from Twitch API); recent host speech from Studio; reacts to Spotify track changes; periodic command reminders every **7 minutes**.
 * **Mod tools** — Raid shoutouts, `!clip`, `!poll`, colored chat announcements (trivia, games, hints).
 * **Events** — Follows, subs, gifts, bits, raids, highlighted messages, channel updates (EventSub + IRC where applicable).
 * **Overlay** — Transparent Next.js page for OBS; live prompt control panel for the broadcaster.
@@ -73,6 +74,7 @@ Without Redis, trivia scores, casino tables, and user memory reset when the serv
 | Variable | Purpose |
 | --- | --- |
 | `GOOGLE_GENERATIVE_AI_MODEL` | Override Gemini model (default `gemini-2.5-flash-lite`) |
+| `GOOGLE_GENERATIVE_AI_AUDIO_MODEL` / `GEMINI_AUDIO_MODEL` | Override Gemini model for Studio broadcast-audio transcription (defaults to the chat model) |
 | `TRIVIA_DISABLE_GEMINI` | Set `true` to use only the static trivia bank |
 | `TWITCH_EVENTSUB_CALLBACK` | Public HTTPS URL for EventSub (defaults to `https://<VERCEL_URL>/api/twitch/eventsub`) |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` / `SPOTIFY_REDIRECT_URI` | Spotify now-playing integration |
@@ -99,9 +101,35 @@ Stay under provider rate limits on free tier (~15 req/min). Prepaid: add credits
 
 Bundled SFX live in `public/sounds/elroy/`. Optional fallback bong: `public/sounds/bong.mp3`.
 
+### Studio broadcast listener
+
+The `/studio` page is a broadcaster browser-capture page that keeps Elroy from talking over the stream. It is still needed because Twitch does not provide raw broadcast audio directly to the Next.js app. Instead, the browser captures the Twitch tab or system audio with your permission.
+
+It is broadcast-audio only: click **Start listening**, then share the Twitch tab or system audio when the browser prompts for screen/tab capture. Elroy does not use a microphone fallback.
+
+While Studio is running:
+
+* `/studio` posts voice activity to `/api/studio/ingest` every ~250ms.
+* The overlay polls `/api/studio/status` every ~500ms.
+* Before TTS plays, Elroy waits until broadcast audio is quiet, plus the configured silence tail (default **1500ms**).
+* If the stream stays busy for ~30s, Elroy skips voice and leaves the chat reply only.
+* Studio records short broadcast-audio chunks, sends them to `/api/studio/transcribe`, and stores recent host speech in Studio state.
+* Ambient comments can use recent host speech plus Twitch chat.
+* When the host says "Elroy," the overlay queues a response or command-style reply, then still waits for a quiet spot before speaking.
+
+This deliberately treats reaction-video voices and other loud broadcast audio as "busy." That is safer for stream production because Elroy waits instead of talking over the host or the video.
+
+Open Studio at:
+
+```text
+https://your-site.vercel.app/studio?key=YOUR_ELROY_CONTROL_SECRET
+```
+
+In Chrome/Edge, choose a tab/window/system source that includes audio. For best results, share the Twitch stream tab or an OBS/program-monitor audio source, and keep the overlay browser source running separately. If you close the Studio page, Elroy will keep responding in chat, but voice will no longer wait for host-silence or host spoken mentions.
+
 ### API surface
 
-Key routes under `app/api/`: `chat`, `speech`, `trivia/*`, `blackjack/*`, `roulette/*`, `pick-numbers/*`, `twitch/*`, `spotify/*`, `users/aboutme`, `bot/session`.
+Key routes under `app/api/`: `chat`, `speech`, `studio/*`, `trivia/*`, `blackjack/*`, `roulette/*`, `pick-numbers/*`, `twitch/*`, `spotify/*`, `users/aboutme`, `bot/session`.
 
 ---
 
@@ -259,6 +287,8 @@ Test: `https://your-site.vercel.app/api/sfx/<id>` · Chat: `!quota`
 2. URL: `https://your-site.vercel.app/embed/YOUR_ELROY_CONTROL_SECRET` (or local `http://localhost:3000/embed/...`).
 3. Match canvas size (e.g. 1920×1080).
 4. Enable **Control audio via OBS** to mix voice separately.
+5. Open `/studio?key=YOUR_ELROY_CONTROL_SECRET` in a normal browser window and click **Start listening**.
+6. Share the Twitch stream tab or system audio when prompted. Keep this Studio page open while streaming so Elroy can wait for quiet spots and hear host mentions.
 
 ---
 
