@@ -38,7 +38,7 @@ type DisplayCaptureMediaDevices = MediaDevices & {
 };
 
 type BroadcastCaptureOptions = DisplayMediaStreamOptions & {
-  preferCurrentTab?: boolean;
+  selfBrowserSurface?: 'include' | 'exclude';
   systemAudio?: 'include' | 'exclude';
   windowAudio?: 'exclude' | 'window' | 'system';
   surfaceSwitching?: 'include' | 'exclude';
@@ -267,7 +267,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
         noiseSuppression: false,
         autoGainControl: false,
       },
-      preferCurrentTab: true,
+      selfBrowserSurface: 'exclude',
       systemAudio: 'include',
       windowAudio: 'system',
       surfaceSwitching: 'include',
