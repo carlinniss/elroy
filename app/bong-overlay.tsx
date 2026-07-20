@@ -1562,35 +1562,28 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       await sayChat(user ? `@${user} ${safeChatText}` : safeChatText);
 
       if (willUseVoice) {
-        if (isStudioGateActive(studioRef.current)) {
-          const gateLabel = describeStreamerGate(studioRef.current);
-          if (gateLabel) {
-            setRuntimeHud((prev) => ({ ...prev, tts: gateLabel }));
-          }
-          const gateResult = await waitForStreamerSilence(
-            () => studioRef.current,
-            { maxWaitMs: STUDIO_VOICE_WAIT_MS, pollMs: 100 },
-          );
-          if (gateResult === 'timeout') {
-            setRuntimeHud((prev) => ({
-              ...prev,
-              tts: 'streamer talking — skipped voice (chat sent)',
-            }));
-            syncStudioHud(studioRef.current);
-            return;
-          }
-        }
-
-        lastElroyVoiceRef.current = Date.now();
         const playDing = dingEnabledRef.current && !opts.skipDing;
         const voiceText = clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS);
         void (async () => {
           if (isStudioGateActive(studioRef.current)) {
-            await waitForStreamerSilence(
+            const gateLabel = describeStreamerGate(studioRef.current);
+            if (gateLabel) {
+              setRuntimeHud((prev) => ({ ...prev, tts: gateLabel }));
+            }
+            const gateResult = await waitForStreamerSilence(
               () => studioRef.current,
               { maxWaitMs: STUDIO_VOICE_WAIT_MS, pollMs: 100 },
             );
+            if (gateResult === 'timeout') {
+              setRuntimeHud((prev) => ({
+                ...prev,
+                tts: 'streamer talking — skipped voice (chat sent)',
+              }));
+              syncStudioHud(studioRef.current);
+              return;
+            }
           }
+          lastElroyVoiceRef.current = Date.now();
           if (playDing) {
             await playBongRip(volumeRef.current);
             await new Promise<void>((resolve) => setTimeout(resolve, 1600));
