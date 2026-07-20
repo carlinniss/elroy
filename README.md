@@ -74,6 +74,7 @@ Without Redis, trivia scores, casino tables, and user memory reset when the serv
 | Variable | Purpose |
 | --- | --- |
 | `GOOGLE_GENERATIVE_AI_MODEL` | Override Gemini model (default `gemini-2.5-flash-lite`) |
+| `NEXT_PUBLIC_STREAMER_DISPLAY_NAME` / `STREAMER_DISPLAY_NAME` | Streamer display name Elroy should use for the broadcaster (default `DTLDabs`) |
 | `OPENAI_API_KEY` | OpenAI API key for Studio broadcast-audio transcription |
 | `OPENAI_TRANSCRIPTION_MODEL` | Override Studio transcription model (default `gpt-4o-mini-transcribe-2025-12-15`) |
 | `TRIVIA_DISABLE_GEMINI` | Set `true` to use only the static trivia bank |

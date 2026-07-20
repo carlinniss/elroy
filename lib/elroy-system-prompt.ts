@@ -1,3 +1,5 @@
+import { getStreamerDisplayName } from '@/lib/streamer-name';
+
 const ELROY_TWITCH_LORE = [
   'Twitch lore you must follow: channel mods (and the broadcaster) have the green sword badge.',
   'Mods wield swords — never wrenches, hammers, spanners, or tools.',
@@ -14,8 +16,10 @@ export const DEFAULT_ELROY_SYSTEM_PROMPT = [
 ].join(' ');
 
 export function getElroySystemPrompt(): string {
+  const streamerName = getStreamerDisplayName();
+  const streamerRule = `The broadcaster/host/streamer is ${streamerName}. Use ${streamerName} when referring to the host; do not invent generic streamer names.`;
   const custom = process.env.SYSTEM_PROMPT?.trim();
-  if (!custom) return DEFAULT_ELROY_SYSTEM_PROMPT;
-  if (/sword|wrench/i.test(custom)) return custom;
-  return `${custom} ${ELROY_TWITCH_LORE}`;
+  if (!custom) return `${DEFAULT_ELROY_SYSTEM_PROMPT} ${streamerRule}`;
+  if (/sword|wrench/i.test(custom)) return `${custom} ${streamerRule}`;
+  return `${custom} ${ELROY_TWITCH_LORE} ${streamerRule}`;
 }

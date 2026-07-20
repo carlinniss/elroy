@@ -37,6 +37,7 @@ import { controlAuthHeaders } from '@/lib/control-auth';
 import { isOffensiveUsername } from '@/lib/offensive-username';
 import { mentionsElroy, misnamesElroyAsLRoy } from '@/lib/elroy-mention';
 import { DEFAULT_STUDIO_SETTINGS } from '@/lib/studio-state';
+import { getStreamerDisplayName } from '@/lib/streamer-name';
 import {
   describeStreamerGate,
   isStudioGateActive,
@@ -49,6 +50,7 @@ const CONTROL_SECRET_STORAGE_KEY = 'elroy-control-secret';
 const CHAT_BRAIN_TIMEOUT_MS = 45_000;
 const STUDIO_POLL_MS = 500;
 const STUDIO_VOICE_WAIT_MS = 30_000;
+const STREAMER_DISPLAY_NAME = getStreamerDisplayName();
 
 async function fetchWithTimeout(
   input: RequestInfo | URL,
@@ -1063,11 +1065,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       .join('\n');
     if (!recent.length) {
       return hostLines
-        ? `No one is chatting much right now, but the host was just saying:\n${hostLines}\nDrop a short OG check-in about that stream moment — do not welcome or greet anyone by name.`
-        : 'No one is chatting yet. Drop a short OG check-in about the stream vibe — do not welcome or greet anyone by name.';
+        ? `No one is chatting much right now, but ${STREAMER_DISPLAY_NAME} was just saying:\n${hostLines}\nDrop a short OG check-in about that stream moment — do not welcome or greet anyone by name.`
+        : `No one is chatting yet. Drop a short OG check-in about ${STREAMER_DISPLAY_NAME}'s stream vibe — do not welcome or greet anyone by name.`;
     }
     const lines = recent.map((entry) => `- ${entry.user}: ${entry.text}`).join("\n");
-    return `Use the recent Twitch chat and host speech for a topical comment (2-3 sentences). Reference the vibe from:\n${lines}${hostLines ? `\n\nRecent host speech:\n${hostLines}` : ''}${streamMetadataLine() ? `\nStream context: ${streamMetadataLine()}` : ''}\nDo not greet, welcome, or say hello to anyone by @username. Comment on topics only — never welcome newcomers. Do not force a rhyme.`;
+    return `Use the recent Twitch chat and ${STREAMER_DISPLAY_NAME}'s host speech for a topical comment (2-3 sentences). Reference the vibe from:\n${lines}${hostLines ? `\n\nRecent ${STREAMER_DISPLAY_NAME} speech:\n${hostLines}` : ''}${streamMetadataLine() ? `\nStream context: ${streamMetadataLine()}` : ''}\nDo not greet, welcome, or say hello to anyone by @username. Comment on topics only — never welcome newcomers. Do not force a rhyme.`;
   }, [streamMetadataLine]);
 
   const buildHostAwarePrompt = useCallback((hostLine: string) => {
@@ -1079,7 +1081,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       .map((entry) => `- Host: ${entry.text}`)
       .join('\n') || `- Host: ${hostLine}`;
 
-    return `The host just said this on stream: "${hostLine}"\n\nRecent host speech:\n${hostLines}\n\nRecent Twitch chat:\n${chatLines}${streamMetadataLine() ? `\n\nStream context: ${streamMetadataLine()}` : ''}\n\nWrite one appropriate Elroy response that fits both the host and chat context. If the host gave Elroy a clear command, follow it. If it was just a mention, give a brief relevant comment back. Do not invent facts; do not greet or welcome chatters.`;
+    return `${STREAMER_DISPLAY_NAME}, the host, just said this on stream: "${hostLine}"\n\nRecent ${STREAMER_DISPLAY_NAME} speech:\n${hostLines}\n\nRecent Twitch chat:\n${chatLines}${streamMetadataLine() ? `\n\nStream context: ${streamMetadataLine()}` : ''}\n\nWrite one appropriate Elroy response that fits both ${STREAMER_DISPLAY_NAME} and chat context. If ${STREAMER_DISPLAY_NAME} gave Elroy a clear command, follow it. If it was just a mention, give a brief relevant comment back. Do not invent facts; do not greet or welcome chatters.`;
   }, [streamMetadataLine]);
 
   const formatSpeechHudError = useCallback((status: number, message: string) => {
@@ -1394,13 +1396,13 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       viewerLine = 'Viewer count could not be verified. Do not say the stream or chat is offline — keep the energy up anyway.';
     }
 
-    return `10-minute stream check-in.\n${viewerLine}\n${streamMetadataLine() ? `${streamMetadataLine()}\n` : ''}\nRecent chat (last ~20 minutes):\n${lines}\n\nWrite a chat check-in (2-3 sentences):\n- Mention viewer count only if provided above.\n- You may reference the stream title or game if listed.\n- Do not greet, welcome, or @ individual chatters by name.`;
+    return `10-minute stream check-in for ${STREAMER_DISPLAY_NAME}'s channel.\n${viewerLine}\n${streamMetadataLine() ? `${streamMetadataLine()}\n` : ''}\nRecent chat (last ~20 minutes):\n${lines}\n\nWrite a chat check-in (2-3 sentences):\n- Mention viewer count only if provided above.\n- You may reference the stream title or game if listed.\n- Refer to the host as ${STREAMER_DISPLAY_NAME}; do not invent a generic streamer name.\n- Do not greet, welcome, or @ individual chatters by name.`;
   }, [streamMetadataLine]);
 
   const buildStreamGreetingPrompt = useCallback((viewerCount: number | null, cannabisFact: string) => {
     const viewers = viewerCount != null ? `About ${viewerCount} viewers are here.` : 'Stream just went live.';
     const meta = streamMetadataLine();
-    return `The Twitch stream just went LIVE. ${viewers}${meta ? ` ${meta}` : ''}\n\nGive a hype stream-start greeting with VOICE energy. You MUST open with exactly "I AM ALIVE!" as the first words, then welcome chat and weave in this cannabis fact naturally: "${cannabisFact}"\nKeep it fun, OG, and welcoming.`;
+    return `${STREAMER_DISPLAY_NAME}'s Twitch stream just went LIVE. ${viewers}${meta ? ` ${meta}` : ''}\n\nGive a hype stream-start greeting with VOICE energy. You MUST open with exactly "I AM ALIVE!" as the first words, then welcome chat and weave in this cannabis fact naturally: "${cannabisFact}"\nKeep it fun, OG, and welcoming.`;
   }, [streamMetadataLine]);
 
   const buildStreamGoodbyePrompt = useCallback(() =>
