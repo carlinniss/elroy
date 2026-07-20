@@ -9,6 +9,7 @@ const INGEST_MS = 250;
 const ANALYSIS_MS = 80;
 const SETTINGS_POLL_MS = 5000;
 const TRANSCRIPT_CHUNK_MS = 5000;
+const TRANSCRIPT_TIMEOUT_MS = 25_000;
 const TRANSCRIPT_TEMPORARY_BACKOFF_MS = 60_000;
 
 function isTemporaryTranscriptionError(message: string, status: number) {
@@ -54,6 +55,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
   const [hostTranscript, setHostTranscript] = useState('');
+  const [hostTranscriptAt, setHostTranscriptAt] = useState(0);
   const [transcribing, setTranscribing] = useState(false);
   const [transcriptBackoffUntil, setTranscriptBackoffUntil] = useState(0);
   const [error, setError] = useState('');
@@ -170,6 +172,8 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
     if (Date.now() < transcriptBackoffUntilRef.current) return;
 
     transcribingRef.current = true;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TRANSCRIPT_TIMEOUT_MS);
     try {
       setTranscribing(true);
       const form = new FormData();
@@ -178,6 +182,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
         method: 'POST',
         headers: { Authorization: `Bearer ${savedSecret}` },
         body: form,
+        signal: controller.signal,
       });
       const data = await res.json().catch(() => ({})) as { text?: string; error?: string };
       if (!res.ok) {
@@ -199,6 +204,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
       if (!text) return;
       setError('');
       setHostTranscript(text);
+      setHostTranscriptAt(Date.now());
       await postIngest({
         listening: true,
         inputSource: 'broadcast',
@@ -207,12 +213,16 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
         hostTranscript: text,
       });
     } catch (error) {
+      const timedOut = error instanceof DOMException && error.name === 'AbortError';
       const retryAt = Date.now() + 15_000;
       transcriptBackoffUntilRef.current = retryAt;
       setTranscriptBackoffUntil(retryAt);
-      setStatus('Studio is still listening — transcription upload hiccup, retrying shortly.');
+      setStatus(timedOut
+        ? 'Studio is still listening — transcription timed out, retrying shortly.'
+        : 'Studio is still listening — transcription upload hiccup, retrying shortly.');
       console.warn('Broadcast transcription failed', error);
     } finally {
+      clearTimeout(timeoutId);
       transcribingRef.current = false;
       setTranscribing(false);
     }
@@ -242,6 +252,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
     setSpeaking(false);
     setLevel(0);
     setTranscribing(false);
+    setHostTranscriptAt(0);
     transcribingRef.current = false;
     transcriptBackoffUntilRef.current = 0;
     setTranscriptBackoffUntil(0);
@@ -386,6 +397,9 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
   const thresholdPct = Math.min(100, Math.round((settingsRef.current.energyThreshold / 0.15) * 100));
   const transcriptPaused = transcriptBackoffUntil > Date.now();
   const transcriptLabel = transcribing ? 'listening' : transcriptPaused ? 'retrying soon' : 'idle';
+  const lastHeardLabel = hostTranscriptAt
+    ? new Date(hostTranscriptAt).toLocaleTimeString()
+    : '';
 
   return (
     <div style={pageStyle}>
@@ -461,7 +475,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
             <p style={{ ...hintStyle, marginBottom: 0 }}>{status}</p>
             {hostTranscript ? (
               <p style={{ ...hintStyle, marginTop: '12px', marginBottom: 0 }}>
-                Last heard: <strong>{hostTranscript}</strong>
+                Last heard{lastHeardLabel ? ` (${lastHeardLabel})` : ''}: <strong>{hostTranscript}</strong>
               </p>
             ) : null}
           </section>
