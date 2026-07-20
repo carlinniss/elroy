@@ -1,5 +1,6 @@
 import { getGeminiModelId } from '@/lib/gemini-model';
 import { isControlAuthorized } from '@/lib/control-auth';
+import { mapBrainErrorMessage } from '@/lib/chat-reply';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,8 +81,9 @@ export async function POST(request: Request) {
       error?: { message?: string };
     };
     if (!response.ok) {
+      const providerMessage = data.error?.message || `Gemini audio transcription failed (${response.status})`;
       return Response.json({
-        error: data.error?.message || `Gemini audio transcription failed (${response.status})`,
+        error: mapBrainErrorMessage(new Error(providerMessage)),
       }, { status: response.status });
     }
 
@@ -94,7 +96,8 @@ export async function POST(request: Request) {
     }
     return Response.json({ text });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Studio transcription failed';
+    const message = mapBrainErrorMessage(error);
+    console.error('STUDIO TRANSCRIPTION ERROR:', error instanceof Error ? error.message : error);
     return Response.json({ error: message }, { status: 500 });
   }
 }

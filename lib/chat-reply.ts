@@ -57,6 +57,15 @@ export function mapBrainErrorMessage(error: unknown): string {
   if (lower.includes('quota') || lower.includes('rate limit') || lower.includes('429')) {
     return 'Brain stall — Gemini quota/rate limit hit. Give it a minute or check AI Studio billing.';
   }
+  if (
+    lower.includes('high demand')
+    || lower.includes('overloaded')
+    || lower.includes('temporarily unavailable')
+    || lower.includes('try again later')
+    || lower.includes('503')
+  ) {
+    return 'Brain stall — Gemini is temporarily busy. Try again in a minute.';
+  }
   if (lower.includes('api key') || lower.includes('key missing') || lower.includes('unauthorized')) {
     return 'Brain stall — GOOGLE_GENERATIVE_AI_API_KEY looks wrong or missing in Vercel.';
   }

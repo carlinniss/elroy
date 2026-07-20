@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { sanitizeElroyModLore } from '@/lib/chat-reply';
+import { mapBrainErrorMessage, sanitizeElroyModLore } from '@/lib/chat-reply';
 import { isControlAuthorized } from '@/lib/control-auth';
 import { getElroySystemPrompt } from '@/lib/elroy-system-prompt';
 import { getGeminiModel } from '@/lib/gemini-model';
@@ -56,7 +56,8 @@ export async function GET(request: Request) {
 
     return Response.json({ known, text: sanitizeElroyModLore(text.trim()) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'About me failed';
+    const message = mapBrainErrorMessage(error);
+    console.error('ABOUTME BRAIN ERROR:', error instanceof Error ? error.message : error);
     return Response.json({ error: message }, { status: 500 });
   }
 }

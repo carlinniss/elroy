@@ -9,6 +9,20 @@ const INGEST_MS = 250;
 const ANALYSIS_MS = 80;
 const SETTINGS_POLL_MS = 5000;
 const TRANSCRIPT_CHUNK_MS = 5000;
+const TRANSCRIPT_TEMPORARY_BACKOFF_MS = 60_000;
+
+function isTemporaryTranscriptionError(message: string, status: number) {
+  const lower = message.toLowerCase();
+  return (
+    status === 429
+    || status === 503
+    || lower.includes('temporarily busy')
+    || lower.includes('high demand')
+    || lower.includes('overloaded')
+    || lower.includes('try again')
+    || lower.includes('quota/rate limit')
+  );
+}
 
 function authHeaders(secret: string) {
   return {
@@ -23,6 +37,13 @@ type DisplayCaptureMediaDevices = MediaDevices & {
   getDisplayMedia?: (constraints?: DisplayMediaStreamOptions) => Promise<MediaStream>;
 };
 
+type BroadcastCaptureOptions = DisplayMediaStreamOptions & {
+  preferCurrentTab?: boolean;
+  systemAudio?: 'include' | 'exclude';
+  windowAudio?: 'exclude' | 'window' | 'system';
+  surfaceSwitching?: 'include' | 'exclude';
+};
+
 export function StudioListener({ initialSecret }: { initialSecret?: string }) {
   const [secret, setSecret] = useState('');
   const [savedSecret, setSavedSecret] = useState('');
@@ -34,6 +55,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
   const [speaking, setSpeaking] = useState(false);
   const [hostTranscript, setHostTranscript] = useState('');
   const [transcribing, setTranscribing] = useState(false);
+  const [transcriptBackoffUntil, setTranscriptBackoffUntil] = useState(0);
   const [error, setError] = useState('');
 
   const settingsRef = useRef({
@@ -49,6 +71,8 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const analysisTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ingestTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const transcribingRef = useRef(false);
+  const transcriptBackoffUntilRef = useRef(0);
 
   const verifySecret = useCallback(async (candidate: string) => {
     const trimmed = candidate.trim();
@@ -142,6 +166,10 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
 
   const transcribeBroadcastChunk = useCallback(async (blob: Blob) => {
     if (!savedSecret || blob.size < 1000) return;
+    if (transcribingRef.current) return;
+    if (Date.now() < transcriptBackoffUntilRef.current) return;
+
+    transcribingRef.current = true;
     try {
       setTranscribing(true);
       const form = new FormData();
@@ -153,11 +181,23 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
       });
       const data = await res.json().catch(() => ({})) as { text?: string; error?: string };
       if (!res.ok) {
-        setError(data.error || 'Broadcast transcription failed');
+        const message = data.error || 'Broadcast transcription failed';
+        if (isTemporaryTranscriptionError(message, res.status)) {
+          const retryAt = Date.now() + TRANSCRIPT_TEMPORARY_BACKOFF_MS;
+          transcriptBackoffUntilRef.current = retryAt;
+          setTranscriptBackoffUntil(retryAt);
+          setError('');
+          setStatus('Studio is still listening — Gemini transcription is busy, retrying automatically in ~60s.');
+          return;
+        }
+        setError(message);
         return;
       }
+      transcriptBackoffUntilRef.current = 0;
+      setTranscriptBackoffUntil(0);
       const text = data.text?.replace(/\s+/g, ' ').trim();
       if (!text) return;
+      setError('');
       setHostTranscript(text);
       await postIngest({
         listening: true,
@@ -167,8 +207,13 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
         hostTranscript: text,
       });
     } catch (error) {
-      setError(error instanceof Error ? error.message : 'Broadcast transcription failed');
+      const retryAt = Date.now() + 15_000;
+      transcriptBackoffUntilRef.current = retryAt;
+      setTranscriptBackoffUntil(retryAt);
+      setStatus('Studio is still listening — transcription upload hiccup, retrying shortly.');
+      console.warn('Broadcast transcription failed', error);
     } finally {
+      transcribingRef.current = false;
       setTranscribing(false);
     }
   }, [postIngest, savedSecret]);
@@ -197,6 +242,9 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
     setSpeaking(false);
     setLevel(0);
     setTranscribing(false);
+    transcribingRef.current = false;
+    transcriptBackoffUntilRef.current = 0;
+    setTranscriptBackoffUntil(0);
     void postIngest({
       listening: false,
       inputSource: 'broadcast',
@@ -212,18 +260,27 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
       throw new Error('Broadcast audio capture is not supported in this browser.');
     }
 
-    const stream = await mediaDevices.getDisplayMedia({
+    const captureOptions: BroadcastCaptureOptions = {
       video: true,
       audio: {
         echoCancellation: false,
         noiseSuppression: false,
         autoGainControl: false,
       },
-    });
+      preferCurrentTab: true,
+      systemAudio: 'include',
+      windowAudio: 'system',
+      surfaceSwitching: 'include',
+    };
+
+    const stream = await mediaDevices.getDisplayMedia(captureOptions);
 
     if (stream.getAudioTracks().length > 0) return stream;
     stream.getTracks().forEach((track) => track.stop());
-    throw new Error('No broadcast audio was shared.');
+    const isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
+    throw new Error(isFirefox
+      ? 'No broadcast audio was shared. Firefox usually shares display video without tab/window audio here. Use Chrome or Edge and pick a tab with "Share tab audio", or feed Studio system audio through an OBS/virtual-audio setup.'
+      : 'No broadcast audio was shared. Pick a browser tab and enable "Share tab audio", or choose Entire screen with system audio. Window capture often does not include audio.');
   }, []);
 
   const startListening = useCallback(async () => {
@@ -327,6 +384,8 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
 
   const levelPct = Math.min(100, Math.round((level / 0.15) * 100));
   const thresholdPct = Math.min(100, Math.round((settingsRef.current.energyThreshold / 0.15) * 100));
+  const transcriptPaused = transcriptBackoffUntil > Date.now();
+  const transcriptLabel = transcribing ? 'listening' : transcriptPaused ? 'retrying soon' : 'idle';
 
   return (
     <div style={pageStyle}>
@@ -362,8 +421,9 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
           <section style={panelStyle}>
             <h2 style={headingStyle}>Twitch broadcast audio</h2>
             <p style={hintStyle}>
-              Click start, then share the Twitch stream tab or system audio. Elroy uses that broadcast audio to wait
-              until the host is quiet before speaking.
+              Click start, then share the Twitch stream tab with audio enabled, or share your entire screen with system
+              audio. Chrome or Edge work best; Firefox may share video without broadcast audio. Elroy uses that audio
+              to wait until the host is quiet before speaking.
             </p>
 
             <div style={meterTrackStyle}>
@@ -377,7 +437,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
               {' · '}
               Source: {listening ? 'broadcast' : 'not listening'}
               {' · '}
-              Transcript: {transcribing ? 'listening' : 'idle'}
+              Transcript: {transcriptLabel}
               {' · '}
               {speaking ? (
                 <span style={{ color: '#86efac', fontWeight: 600 }}>Host audio detected</span>
