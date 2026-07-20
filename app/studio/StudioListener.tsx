@@ -82,6 +82,8 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const analysisTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ingestTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const transcriptSliceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stoppingRef = useRef(false);
   const transcribingRef = useRef(false);
   const transcriptBackoffUntilRef = useRef(0);
 
@@ -238,6 +240,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
   }, [postIngest, savedSecret]);
 
   const stopListening = useCallback(() => {
+    stoppingRef.current = true;
     if (analysisTimerRef.current) {
       clearInterval(analysisTimerRef.current);
       analysisTimerRef.current = null;
@@ -245,6 +248,10 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
     if (ingestTimerRef.current) {
       clearInterval(ingestTimerRef.current);
       ingestTimerRef.current = null;
+    }
+    if (transcriptSliceTimerRef.current) {
+      clearTimeout(transcriptSliceTimerRef.current);
+      transcriptSliceTimerRef.current = null;
     }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
@@ -306,6 +313,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
   const startListening = useCallback(async () => {
     if (!savedSecret) return;
     setError('');
+    stoppingRef.current = false;
     try {
       const stream = await getBroadcastStream();
       streamRef.current = stream;
@@ -329,17 +337,51 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : 'audio/webm';
-      const recorder = new MediaRecorder(transcriptStream, { mimeType });
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          void transcribeBroadcastChunk(event.data);
+
+      const startTranscriptSlice = () => {
+        if (
+          stoppingRef.current
+          || streamRef.current !== stream
+          || !stream.getAudioTracks().some((track) => track.readyState === 'live')
+        ) {
+          return;
         }
+
+        const chunks: Blob[] = [];
+        const recorder = new MediaRecorder(transcriptStream, { mimeType });
+        mediaRecorderRef.current = recorder;
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            chunks.push(event.data);
+          }
+        };
+        recorder.onerror = () => {
+          setError('Broadcast transcription recorder failed');
+        };
+        recorder.onstop = () => {
+          if (mediaRecorderRef.current === recorder) {
+            mediaRecorderRef.current = null;
+          }
+          if (!stoppingRef.current && chunks.length > 0) {
+            const blob = new Blob(chunks, { type: mimeType });
+            void transcribeBroadcastChunk(blob);
+          }
+          if (
+            !stoppingRef.current
+            && streamRef.current === stream
+            && stream.getAudioTracks().some((track) => track.readyState === 'live')
+          ) {
+            transcriptSliceTimerRef.current = setTimeout(startTranscriptSlice, 0);
+          }
+        };
+        recorder.start();
+        transcriptSliceTimerRef.current = setTimeout(() => {
+          if (recorder.state === 'recording') {
+            recorder.stop();
+          }
+        }, TRANSCRIPT_CHUNK_MS);
       };
-      recorder.onerror = () => {
-        setError('Broadcast transcription recorder failed');
-      };
-      mediaRecorderRef.current = recorder;
-      recorder.start(TRANSCRIPT_CHUNK_MS);
+      startTranscriptSlice();
 
       vadRef.current = INITIAL_MIC_VAD_STATE;
       setListening(true);
