@@ -11,6 +11,7 @@ const SETTINGS_POLL_MS = 5000;
 const TRANSCRIPT_CHUNK_MS = 10_000;
 const TRANSCRIPT_TIMEOUT_MS = 25_000;
 const TRANSCRIPT_TEMPORARY_BACKOFF_MS = 60_000;
+const TRANSCRIPT_LONG_BACKOFF_MS = 5 * 60_000;
 
 function isTemporaryTranscriptionError(message: string, status: number) {
   const lower = message.toLowerCase();
@@ -67,6 +68,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
   const [hostTranscriptAt, setHostTranscriptAt] = useState(0);
   const [transcribing, setTranscribing] = useState(false);
   const [transcriptBackoffUntil, setTranscriptBackoffUntil] = useState(0);
+  const [transcriptNote, setTranscriptNote] = useState('');
   const [error, setError] = useState('');
 
   const settingsRef = useRef({
@@ -87,6 +89,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
   const transcribingRef = useRef(false);
   const transcriptBackoffUntilRef = useRef(0);
   const transcriptSliceHadAudioRef = useRef(false);
+  const temporaryTranscriptErrorCountRef = useRef(0);
 
   const verifySecret = useCallback(async (candidate: string) => {
     const trimmed = candidate.trim();
@@ -199,12 +202,17 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
       const data = await res.json().catch(() => ({})) as { text?: string; error?: string };
       if (!res.ok) {
         const message = data.error || 'Broadcast transcription failed';
-        if (isTemporaryTranscriptionError(message, res.status)) {
-          const retryAt = Date.now() + TRANSCRIPT_TEMPORARY_BACKOFF_MS;
+        const temporary = isTemporaryTranscriptionError(message, res.status);
+        if (temporary) {
+          temporaryTranscriptErrorCountRef.current += 1;
+          const backoffMs = temporaryTranscriptErrorCountRef.current >= 3
+            ? TRANSCRIPT_LONG_BACKOFF_MS
+            : TRANSCRIPT_TEMPORARY_BACKOFF_MS;
+          const retryAt = Date.now() + backoffMs;
           transcriptBackoffUntilRef.current = retryAt;
           setTranscriptBackoffUntil(retryAt);
           setError('');
-          setStatus('Studio is still listening — transcription is busy, retrying automatically in ~60s.');
+          setTranscriptNote(`Transcription rate-limited; audio gating still works. Retrying in ~${Math.round(backoffMs / 60_000)}m.`);
           return;
         }
         setError(message);
@@ -212,9 +220,11 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
       }
       transcriptBackoffUntilRef.current = 0;
       setTranscriptBackoffUntil(0);
+      temporaryTranscriptErrorCountRef.current = 0;
       const text = data.text?.replace(/\s+/g, ' ').trim();
       if (!text) return;
       setError('');
+      setTranscriptNote('');
       setHostTranscript(text);
       setHostTranscriptAt(Date.now());
       await postIngest({
@@ -229,7 +239,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
       const retryAt = Date.now() + 15_000;
       transcriptBackoffUntilRef.current = retryAt;
       setTranscriptBackoffUntil(retryAt);
-      setStatus(timedOut
+      setTranscriptNote(timedOut
         ? 'Studio is still listening — transcription timed out, retrying shortly.'
         : 'Studio is still listening — transcription upload hiccup, retrying shortly.');
       console.warn('Broadcast transcription failed', error);
@@ -273,7 +283,9 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
     transcribingRef.current = false;
     transcriptBackoffUntilRef.current = 0;
     transcriptSliceHadAudioRef.current = false;
+    temporaryTranscriptErrorCountRef.current = 0;
     setTranscriptBackoffUntil(0);
+    setTranscriptNote('');
     void postIngest({
       listening: false,
       inputSource: 'broadcast',
@@ -530,6 +542,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
               )}
             </div>
             {error ? <p style={{ ...hintStyle, color: '#fca5a5', marginBottom: 0 }}>{error}</p> : null}
+            {transcriptNote ? <p style={{ ...hintStyle, color: '#fcd34d', marginBottom: 0 }}>{transcriptNote}</p> : null}
             <p style={{ ...hintStyle, marginBottom: 0 }}>{status}</p>
             {hostTranscript ? (
               <p style={{ ...hintStyle, marginTop: '12px', marginBottom: 0 }}>
