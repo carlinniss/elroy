@@ -199,7 +199,12 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
         body: form,
         signal: controller.signal,
       });
-      const data = await res.json().catch(() => ({})) as { text?: string; error?: string };
+      const data = await res.json().catch(() => ({})) as {
+        text?: string;
+        error?: string;
+        warning?: string;
+        retryAfterMs?: number;
+      };
       if (!res.ok) {
         const message = data.error || 'Broadcast transcription failed';
         const temporary = isTemporaryTranscriptionError(message, res.status);
@@ -216,6 +221,17 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
           return;
         }
         setError(message);
+        return;
+      }
+      if (data.warning) {
+        const retryAfterMs = typeof data.retryAfterMs === 'number'
+          ? Math.max(15_000, data.retryAfterMs)
+          : TRANSCRIPT_TEMPORARY_BACKOFF_MS;
+        const retryAt = Date.now() + retryAfterMs;
+        transcriptBackoffUntilRef.current = retryAt;
+        setTranscriptBackoffUntil(retryAt);
+        setError('');
+        setTranscriptNote(data.warning);
         return;
       }
       transcriptBackoffUntilRef.current = 0;

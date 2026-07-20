@@ -3,11 +3,48 @@ import { isControlAuthorized } from '@/lib/control-auth';
 export const dynamic = 'force-dynamic';
 
 const OPENAI_TRANSCRIPTIONS_API = 'https://api.openai.com/v1/audio/transcriptions';
+const DEFAULT_RATE_LIMIT_BACKOFF_MS = 2 * 60_000;
+const LONG_RATE_LIMIT_BACKOFF_MS = 10 * 60_000;
+
+const globalState = globalThis as typeof globalThis & {
+  __elroyOpenAiTranscription?: {
+    cooldownUntil: number;
+    consecutiveRateLimits: number;
+  };
+};
+
+function transcriptionState() {
+  globalState.__elroyOpenAiTranscription ??= {
+    cooldownUntil: 0,
+    consecutiveRateLimits: 0,
+  };
+  return globalState.__elroyOpenAiTranscription;
+}
 
 function openAiAudioModelId() {
   return (
     process.env.OPENAI_TRANSCRIPTION_MODEL?.trim()
-    || 'gpt-4o-mini-transcribe'
+    || 'gpt-4o-mini-transcribe-2025-12-15'
+  );
+}
+
+function parseRetryAfterMs(value: string | null) {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const retryAt = Date.parse(value);
+  if (Number.isFinite(retryAt)) return Math.max(0, retryAt - Date.now());
+  return null;
+}
+
+function isOpenAiRateLimit(status: number, code?: string, message = '') {
+  const lowerCode = code?.toLowerCase() || '';
+  const lower = message.toLowerCase();
+  return (
+    status === 429
+    || lowerCode.includes('rate_limit')
+    || lowerCode.includes('rate_limit_exceeded')
+    || lower.includes('rate limit')
   );
 }
 
@@ -59,6 +96,17 @@ export async function POST(request: Request) {
       return Response.json({ error: 'OPENAI_API_KEY missing' }, { status: 500 });
     }
 
+    const state = transcriptionState();
+    const now = Date.now();
+    if (state.cooldownUntil > now) {
+      const retryAfterMs = state.cooldownUntil - now;
+      return Response.json({
+        text: '',
+        warning: `OpenAI transcription cooling down after rate limits. Retrying in ~${Math.ceil(retryAfterMs / 60_000)}m.`,
+        retryAfterMs,
+      });
+    }
+
     const form = await request.formData();
     const audio = form.get('audio');
     if (!(audio instanceof File)) {
@@ -92,16 +140,32 @@ export async function POST(request: Request) {
     };
     if (!response.ok) {
       const providerMessage = data.error?.message || data.error?.code || `OpenAI transcription failed (${response.status})`;
+      const rateLimited = isOpenAiRateLimit(response.status, data.error?.code, providerMessage);
       console.error('OPENAI TRANSCRIPTION ERROR:', {
         status: response.status,
         code: data.error?.code,
         message: providerMessage,
         model: openAiAudioModelId(),
+        rateLimited,
       });
+      if (rateLimited) {
+        state.consecutiveRateLimits += 1;
+        const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'))
+          ?? (state.consecutiveRateLimits >= 3 ? LONG_RATE_LIMIT_BACKOFF_MS : DEFAULT_RATE_LIMIT_BACKOFF_MS);
+        state.cooldownUntil = Date.now() + retryAfterMs;
+        return Response.json({
+          text: '',
+          warning: `OpenAI transcription rate-limited. Retrying in ~${Math.ceil(retryAfterMs / 60_000)}m.`,
+          retryAfterMs,
+        });
+      }
       return Response.json({
         error: mapOpenAiTranscriptionError(providerMessage, response.status, data.error?.code),
       }, { status: response.status });
     }
+
+    state.cooldownUntil = 0;
+    state.consecutiveRateLimits = 0;
 
     const text = cleanTranscript(data.text || '');
     if (/^(none|no speech|no clear speech|silence|empty)$/i.test(text)) {
