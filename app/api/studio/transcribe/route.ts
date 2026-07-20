@@ -15,6 +15,9 @@ function mapOpenAiTranscriptionError(message: string, status: number, code?: str
   const lower = message.toLowerCase();
   const lowerCode = code?.toLowerCase() || '';
   const detail = code ? ` OpenAI code: ${code}.` : '';
+  if (lowerCode.includes('rate_limit') || lowerCode.includes('rate_limit_exceeded')) {
+    return `OpenAI transcription rate limit hit.${detail} Studio is still listening and will retry shortly.`;
+  }
   if (
     lowerCode.includes('insufficient_quota')
     || lower.includes('insufficient_quota')

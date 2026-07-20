@@ -8,7 +8,7 @@ const SECRET_STORAGE_KEY = 'elroy-control-secret';
 const INGEST_MS = 250;
 const ANALYSIS_MS = 80;
 const SETTINGS_POLL_MS = 5000;
-const TRANSCRIPT_CHUNK_MS = 5000;
+const TRANSCRIPT_CHUNK_MS = 10_000;
 const TRANSCRIPT_TIMEOUT_MS = 25_000;
 const TRANSCRIPT_TEMPORARY_BACKOFF_MS = 60_000;
 
@@ -86,6 +86,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
   const stoppingRef = useRef(false);
   const transcribingRef = useRef(false);
   const transcriptBackoffUntilRef = useRef(0);
+  const transcriptSliceHadAudioRef = useRef(false);
 
   const verifySecret = useCallback(async (candidate: string) => {
     const trimmed = candidate.trim();
@@ -271,6 +272,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
     setHostTranscriptAt(0);
     transcribingRef.current = false;
     transcriptBackoffUntilRef.current = 0;
+    transcriptSliceHadAudioRef.current = false;
     setTranscriptBackoffUntil(0);
     void postIngest({
       listening: false,
@@ -362,7 +364,9 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
           if (mediaRecorderRef.current === recorder) {
             mediaRecorderRef.current = null;
           }
-          if (!stoppingRef.current && chunks.length > 0) {
+          const shouldTranscribe = transcriptSliceHadAudioRef.current;
+          transcriptSliceHadAudioRef.current = false;
+          if (!stoppingRef.current && shouldTranscribe && chunks.length > 0) {
             const blob = new Blob(chunks, { type: mimeType });
             void transcribeBroadcastChunk(blob);
           }
@@ -401,6 +405,9 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
           prev: vadRef.current,
         });
         vadRef.current = next;
+        if (rms >= settings.energyThreshold) {
+          transcriptSliceHadAudioRef.current = true;
+        }
         setLevel(rms);
         setSpeaking(next.speaking);
       }, ANALYSIS_MS);
