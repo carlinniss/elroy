@@ -11,27 +11,30 @@ function openAiAudioModelId() {
   );
 }
 
-function mapOpenAiTranscriptionError(message: string, status: number) {
+function mapOpenAiTranscriptionError(message: string, status: number, code?: string) {
   const lower = message.toLowerCase();
+  const lowerCode = code?.toLowerCase() || '';
+  const detail = code ? ` OpenAI code: ${code}.` : '';
   if (
-    lower.includes('insufficient_quota')
+    lowerCode.includes('insufficient_quota')
+    || lower.includes('insufficient_quota')
     || lower.includes('billing')
     || lower.includes('payment')
     || lower.includes('credits')
     || lower.includes('quota exceeded')
   ) {
-    return 'OpenAI transcription quota/billing issue. Add API credits or check billing in the OpenAI platform.';
+    return `OpenAI transcription quota/billing issue.${detail} If you just added credits, make sure this API key belongs to the funded project and redeploy Vercel.`;
   }
   if (status === 429 || lower.includes('rate limit')) {
-    return 'OpenAI transcription rate limit hit. Studio is still listening and will retry shortly.';
+    return `OpenAI transcription rate limit hit.${detail} Studio is still listening and will retry shortly.`;
   }
   if (status === 503 || lower.includes('overloaded') || lower.includes('temporarily unavailable')) {
-    return 'OpenAI transcription is temporarily busy. Studio is still listening and will retry shortly.';
+    return `OpenAI transcription is temporarily busy.${detail} Studio is still listening and will retry shortly.`;
   }
   if (status === 401 || lower.includes('api key') || lower.includes('unauthorized')) {
-    return 'OPENAI_API_KEY looks wrong or missing in Vercel.';
+    return `OPENAI_API_KEY looks wrong or missing in Vercel.${detail}`;
   }
-  return message || `OpenAI transcription failed (${status})`;
+  return `${message || `OpenAI transcription failed (${status})`}${detail}`;
 }
 
 function cleanTranscript(text: string) {
@@ -86,8 +89,14 @@ export async function POST(request: Request) {
     };
     if (!response.ok) {
       const providerMessage = data.error?.message || data.error?.code || `OpenAI transcription failed (${response.status})`;
+      console.error('OPENAI TRANSCRIPTION ERROR:', {
+        status: response.status,
+        code: data.error?.code,
+        message: providerMessage,
+        model: openAiAudioModelId(),
+      });
       return Response.json({
-        error: mapOpenAiTranscriptionError(providerMessage, response.status),
+        error: mapOpenAiTranscriptionError(providerMessage, response.status, data.error?.code),
       }, { status: response.status });
     }
 
