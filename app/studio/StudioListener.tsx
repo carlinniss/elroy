@@ -14,6 +14,15 @@ const TRANSCRIPT_TEMPORARY_BACKOFF_MS = 60_000;
 
 function isTemporaryTranscriptionError(message: string, status: number) {
   const lower = message.toLowerCase();
+  if (
+    lower.includes('billing')
+    || lower.includes('payment')
+    || lower.includes('credits')
+    || lower.includes('quota exceeded')
+    || lower.includes('insufficient_quota')
+  ) {
+    return false;
+  }
   return (
     status === 429
     || status === 503
@@ -192,7 +201,7 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
           transcriptBackoffUntilRef.current = retryAt;
           setTranscriptBackoffUntil(retryAt);
           setError('');
-          setStatus('Studio is still listening — Gemini transcription is busy, retrying automatically in ~60s.');
+          setStatus('Studio is still listening — transcription is busy, retrying automatically in ~60s.');
           return;
         }
         setError(message);

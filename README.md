@@ -74,7 +74,8 @@ Without Redis, trivia scores, casino tables, and user memory reset when the serv
 | Variable | Purpose |
 | --- | --- |
 | `GOOGLE_GENERATIVE_AI_MODEL` | Override Gemini model (default `gemini-2.5-flash-lite`) |
-| `GOOGLE_GENERATIVE_AI_AUDIO_MODEL` / `GEMINI_AUDIO_MODEL` | Override Gemini model for Studio broadcast-audio transcription (defaults to the chat model) |
+| `OPENAI_API_KEY` | OpenAI API key for Studio broadcast-audio transcription |
+| `OPENAI_TRANSCRIPTION_MODEL` | Override Studio transcription model (default `gpt-4o-mini-transcribe`) |
 | `TRIVIA_DISABLE_GEMINI` | Set `true` to use only the static trivia bank |
 | `TWITCH_EVENTSUB_CALLBACK` | Public HTTPS URL for EventSub (defaults to `https://<VERCEL_URL>/api/twitch/eventsub`) |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` / `SPOTIFY_REDIRECT_URI` | Spotify now-playing integration |
