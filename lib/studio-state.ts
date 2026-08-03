@@ -3,6 +3,7 @@ import { mentionsElroy } from '@/lib/elroy-mention';
 
 const STORE_KEY = 'elroy:studio';
 const MAX_HOST_SPEECH_ITEMS = 10;
+const DUPLICATE_HOST_SPEECH_WINDOW_MS = 45_000;
 
 export type StudioSettings = {
   silenceTailMs: number;
@@ -123,6 +124,34 @@ function parseStore(raw: unknown): StudioStore {
   };
 }
 
+function normalizeHostSpeechText(text: string) {
+  return text
+    .replace(/[^a-z0-9\s]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function isSameHostSpeechTopic(a: string, b: string) {
+  if (a === b) return true;
+  const shorter = a.length < b.length ? a : b;
+  const longer = a.length < b.length ? b : a;
+  return shorter.length >= 24 && longer.includes(shorter);
+}
+
+function isDuplicateHostSpeech(
+  recent: StudioHostSpeech[],
+  text: string,
+  now: number,
+) {
+  const normalized = normalizeHostSpeechText(text);
+  if (!normalized) return true;
+  return recent.some((entry) => {
+    if (now - entry.at > DUPLICATE_HOST_SPEECH_WINDOW_MS) return false;
+    return isSameHostSpeechTopic(normalizeHostSpeechText(entry.text), normalized);
+  });
+}
+
 async function readStore(): Promise<StudioStore> {
   if (hasRedisStorage()) {
     const raw = await redisCommand(['GET', STORE_KEY]);
@@ -215,7 +244,7 @@ export async function ingestStudio(payload: StudioIngestPayload): Promise<Studio
   }
   if (typeof payload.hostTranscript === 'string') {
     const text = payload.hostTranscript.replace(/\s+/g, ' ').trim();
-    if (text) {
+    if (text && !isDuplicateHostSpeech(updated.recentHostSpeech, text, now)) {
       updated.recentHostSpeech = [
         ...updated.recentHostSpeech,
         {

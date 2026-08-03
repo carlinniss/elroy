@@ -132,19 +132,23 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const elroySpeakerLoginsRef = useRef<Set<string>>(new Set());
   const elroySpeakerUserIdsRef = useRef<Set<string>>(new Set());
   const recentElroyOutboundRef = useRef<Array<{ fingerprint: string; at: number }>>([]);
+  const recentVoicePlaybackRef = useRef<Array<{ fingerprint: string; at: number }>>([]);
 
   const ELROY_SYSTEM_BROADCAST = /^elroy initiated\./i;
+  const RECENT_VOICE_STORAGE_KEY = 'elroy-recent-voice-playback';
+  const VOICE_PLAYBACK_GAP_MS = 90_000;
 
   const SHUT_UP_DURATION_MS = 8 * 60 * 1000;
   const POWERUP_MUTE_MS = 10 * 60 * 1000;
   const SHUT_ELROY_POWERUP_PATTERN = /shut\s+elroy\s+up(\s+for\s+10\s+minutes?)?/i;
-  const VOICE_COOLDOWN_MS = 90_000;
+  const VOICE_COOLDOWN_MS = 4 * 60_000;
   const CELEBRATION_VOICE_COOLDOWN_MS = 25_000;
   const COMEBACK_CHANCE = 0.12;
   const CELEBRATION_COOLDOWN_MS = 25_000;
   const FOLLOWER_POLL_MS = 45_000;
   const CHANNEL_EVENTS_POLL_MS = 5_000;
-  const STREAM_CHECKIN_MS = 15 * 60 * 1000;
+  const STREAM_CHECKIN_MS = 30 * 60 * 1000;
+  const HOST_MENTION_RESPONSE_COOLDOWN_MS = 3 * 60 * 1000;
   const STREAM_POLL_MS = 15_000;
   const TRIVIA_ANSWER_WINDOW_MS = 5 * 60 * 1000;
   const TRIVIA_CHECK_MS = 30_000;
@@ -152,8 +156,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const ROULETTE_TICK_MS = 4_000;
   const PICK_TICK_MS = 4_000;
   const COMMAND_HELP_INTERVAL_MS = 7 * 60 * 1000;
-  const CHAT_ACTIVITY_MESSAGE_THRESHOLD = 90;
-  const CHAT_ACTIVITY_CHANCE = 0.75;
+  const CHAT_ACTIVITY_MESSAGE_THRESHOLD = 180;
+  const CHAT_ACTIVITY_CHANCE = 0.25;
   const chatActivityThresholdRef = useRef(CHAT_ACTIVITY_MESSAGE_THRESHOLD);
   const chatActivityChanceRef = useRef(CHAT_ACTIVITY_CHANCE);
   const ambientVoiceAllowedRef = useRef(false);
@@ -243,6 +247,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const processedPushIdsRef = useRef<Set<string>>(new Set());
   const lastControlsRevisionRef = useRef(0);
   const processedHostMentionIdsRef = useRef<Set<string>>(new Set());
+  const lastHostMentionResponseRef = useRef(0);
   const studioRef = useRef<StudioGateState>({
     listening: false,
     listenerAlive: false,
@@ -417,6 +422,41 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       || fingerprint.startsWith(entry.fingerprint.slice(0, 48))
       || entry.fingerprint.startsWith(fingerprint.slice(0, 48))
     ));
+  }, [normalizeChatFingerprint]);
+
+  const shouldSkipVoicePlayback = useCallback((text: string) => {
+    const fingerprint = normalizeChatFingerprint(text);
+    if (!fingerprint) return true;
+    const now = Date.now();
+    const cutoff = now - VOICE_PLAYBACK_GAP_MS;
+    const recent = recentVoicePlaybackRef.current
+      .filter((entry) => entry.at >= cutoff);
+
+    try {
+      const stored = window.localStorage.getItem(RECENT_VOICE_STORAGE_KEY);
+      const parsed = stored ? JSON.parse(stored) as Array<{ fingerprint?: string; at?: number }> : [];
+      for (const entry of parsed) {
+        if (typeof entry.fingerprint === 'string' && typeof entry.at === 'number' && entry.at >= cutoff) {
+          recent.push({ fingerprint: entry.fingerprint, at: entry.at });
+        }
+      }
+    } catch {
+      /* storage is optional */
+    }
+
+    if (recent.length > 0) {
+      recentVoicePlaybackRef.current = recent.slice(-20);
+      return true;
+    }
+
+    const updated = [...recent, { fingerprint, at: now }].slice(-20);
+    recentVoicePlaybackRef.current = updated;
+    try {
+      window.localStorage.setItem(RECENT_VOICE_STORAGE_KEY, JSON.stringify(updated));
+    } catch {
+      /* storage is optional */
+    }
+    return false;
   }, [normalizeChatFingerprint]);
 
   const seedElroySpeakerLogins = useCallback(async (normalizedChannel: string) => {
@@ -1326,12 +1366,16 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   }, [controlHeaders, formatSpeechHudError, parseSpeechApiError, playElroySfx]);
 
   const speak = useCallback((text: string) => {
+    if (shouldSkipVoicePlayback(text)) {
+      setRuntimeHud((prev) => ({ ...prev, tts: 'recent voice skipped' }));
+      return speechQueueRef.current;
+    }
     speechQueueRef.current = speechQueueRef.current
       .then(() => speakNow(text))
       .then(() => { void playElroySfx('cough'); })
       .catch((e) => { console.error(e); });
     return speechQueueRef.current;
-  }, [playElroySfx]);
+  }, [playElroySfx, shouldSkipVoicePlayback]);
 
   const buildMentionPrompt = useCallback((user: string, message: string) => {
     const recent = recentChatRef.current.slice(0, 6);
@@ -1566,6 +1610,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       if (willUseVoice) {
         const playDing = dingEnabledRef.current && !opts.skipDing;
         const voiceText = clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS);
+        lastElroyVoiceRef.current = Date.now();
         void (async () => {
           if (isStudioGateActive(studioRef.current)) {
             const gateLabel = describeStreamerGate(studioRef.current);
@@ -1585,7 +1630,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
               return;
             }
           }
-          lastElroyVoiceRef.current = Date.now();
           if (playDing) {
             await playBongRip(volumeRef.current);
             await new Promise<void>((resolve) => setTimeout(resolve, 1600));
@@ -1735,16 +1779,17 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       };
       syncStudioHud(studioRef.current);
       const mention = studioRef.current.latestHostMention;
+      const now = Date.now();
       if (
         mention
         && !processedHostMentionIdsRef.current.has(mention.id)
         && !isFullyMuted()
       ) {
         processedHostMentionIdsRef.current.add(mention.id);
+        if (now - lastHostMentionResponseRef.current < HOST_MENTION_RESPONSE_COOLDOWN_MS) return;
+        lastHostMentionResponseRef.current = now;
         void queueBongLogic(buildHostAwarePrompt(mention.text), undefined, {
-          forceVoice: true,
-          bypassVoiceCooldown: true,
-          voicePriority: 'celebration',
+          voicePriority: 'normal',
         });
       }
     } catch (error) {

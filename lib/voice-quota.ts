@@ -33,8 +33,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
       voiceAllowed: false,
       celebrationsVoiceOnly: false,
       ambientVoice: false,
-      chatActivityThreshold: 90,
-      chatActivityChance: 0.75,
+      chatActivityThreshold: 180,
+      chatActivityChance: 0.25,
     };
   }
   if (remaining < 1_000) {
@@ -45,8 +45,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
       voiceAllowed: false,
       celebrationsVoiceOnly: false,
       ambientVoice: false,
-      chatActivityThreshold: 90,
-      chatActivityChance: 0.75,
+      chatActivityThreshold: 180,
+      chatActivityChance: 0.25,
     };
   }
   if (remaining < 5_000) {
@@ -57,8 +57,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
       voiceAllowed: true,
       celebrationsVoiceOnly: true,
       ambientVoice: false,
-      chatActivityThreshold: 90,
-      chatActivityChance: 0.75,
+      chatActivityThreshold: 180,
+      chatActivityChance: 0.25,
     };
   }
   if (remaining < 15_000) {
@@ -69,8 +69,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
       voiceAllowed: true,
       celebrationsVoiceOnly: false,
       ambientVoice: false,
-      chatActivityThreshold: 80,
-      chatActivityChance: 0.75,
+      chatActivityThreshold: 180,
+      chatActivityChance: 0.25,
     };
   }
   if (remaining < 50_000) {
@@ -81,43 +81,43 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
       voiceAllowed: true,
       celebrationsVoiceOnly: false,
       ambientVoice: false,
-      chatActivityThreshold: 75,
-      chatActivityChance: 0.75,
+      chatActivityThreshold: 180,
+      chatActivityChance: 0.25,
     };
   }
   if (remaining < 100_000) {
     return {
       tier: 'full',
-      voiceCooldownMs: 70_000,
+      voiceCooldownMs: 4 * 60_000,
       celebrationVoiceCooldownMs: 30_000,
       voiceAllowed: true,
       celebrationsVoiceOnly: false,
-      ambientVoice: true,
-      chatActivityThreshold: 60,
-      chatActivityChance: 0.75,
+      ambientVoice: false,
+      chatActivityThreshold: 180,
+      chatActivityChance: 0.25,
     };
   }
   if (remaining < 250_000) {
     return {
       tier: 'plentiful',
-      voiceCooldownMs: 50_000,
+      voiceCooldownMs: 4 * 60_000,
       celebrationVoiceCooldownMs: 22_000,
       voiceAllowed: true,
       celebrationsVoiceOnly: false,
-      ambientVoice: true,
-      chatActivityThreshold: 50,
-      chatActivityChance: 0.75,
+      ambientVoice: false,
+      chatActivityThreshold: 180,
+      chatActivityChance: 0.25,
     };
   }
   return {
     tier: 'abundant',
-    voiceCooldownMs: 40_000,
+    voiceCooldownMs: 4 * 60_000,
     celebrationVoiceCooldownMs: 18_000,
     voiceAllowed: true,
     celebrationsVoiceOnly: false,
-    ambientVoice: true,
-    chatActivityThreshold: 40,
-    chatActivityChance: 0.75,
+    ambientVoice: false,
+    chatActivityThreshold: 180,
+    chatActivityChance: 0.25,
   };
 }
 
