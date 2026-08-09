@@ -40,6 +40,7 @@ import { DEFAULT_STUDIO_SETTINGS } from '@/lib/studio-state';
 import { getStreamerDisplayName } from '@/lib/streamer-name';
 import {
   describeStreamerGate,
+  isStreamerBlockingVoice,
   isStudioGateActive,
   waitForStreamerSilence,
   type StudioGateState,
@@ -50,6 +51,7 @@ const CONTROL_SECRET_STORAGE_KEY = 'elroy-control-secret';
 const CHAT_BRAIN_TIMEOUT_MS = 45_000;
 const STUDIO_POLL_MS = 500;
 const STUDIO_VOICE_WAIT_MS = 30_000;
+const STUDIO_TRANSCRIPT_LAG_BUFFER_MS = 2_500;
 const STREAMER_DISPLAY_NAME = getStreamerDisplayName();
 
 async function fetchWithTimeout(
@@ -147,7 +149,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const CELEBRATION_COOLDOWN_MS = 25_000;
   const FOLLOWER_POLL_MS = 45_000;
   const CHANNEL_EVENTS_POLL_MS = 5_000;
-  const STREAM_CHECKIN_MS = 30 * 60 * 1000;
+  const STREAM_CHECKIN_MS = 20 * 60 * 1000;
   const HOST_MENTION_RESPONSE_COOLDOWN_MS = 3 * 60 * 1000;
   const STREAM_POLL_MS = 15_000;
   const TRIVIA_ANSWER_WINDOW_MS = 5 * 60 * 1000;
@@ -156,8 +158,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const ROULETTE_TICK_MS = 4_000;
   const PICK_TICK_MS = 4_000;
   const COMMAND_HELP_INTERVAL_MS = 7 * 60 * 1000;
-  const CHAT_ACTIVITY_MESSAGE_THRESHOLD = 180;
-  const CHAT_ACTIVITY_CHANCE = 0.25;
+  const CHAT_ACTIVITY_MESSAGE_THRESHOLD = 75;
+  const CHAT_ACTIVITY_CHANCE = 0.55;
   const chatActivityThresholdRef = useRef(CHAT_ACTIVITY_MESSAGE_THRESHOLD);
   const chatActivityChanceRef = useRef(CHAT_ACTIVITY_CHANCE);
   const ambientVoiceAllowedRef = useRef(false);
@@ -1425,7 +1427,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     const chatActive = recent.length >= 3;
     const lines = recent.length
       ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
-      : '(few messages in the last 10 minutes)';
+      : '(few messages in the last 20 minutes)';
 
     let viewerLine: string;
     if (streamStatus === 'live' && viewerCount != null) {
@@ -1440,7 +1442,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       viewerLine = 'Viewer count could not be verified. Do not say the stream or chat is offline — keep the energy up anyway.';
     }
 
-    return `10-minute stream check-in for ${STREAMER_DISPLAY_NAME}'s channel.\n${viewerLine}\n${streamMetadataLine() ? `${streamMetadataLine()}\n` : ''}\nRecent chat (last ~20 minutes):\n${lines}\n\nWrite a chat check-in (2-3 sentences):\n- Mention viewer count only if provided above.\n- You may reference the stream title or game if listed.\n- Refer to the host as ${STREAMER_DISPLAY_NAME}; do not invent a generic streamer name.\n- Do not greet, welcome, or @ individual chatters by name.`;
+    return `20-minute stream check-in for ${STREAMER_DISPLAY_NAME}'s channel.\n${viewerLine}\n${streamMetadataLine() ? `${streamMetadataLine()}\n` : ''}\nRecent chat (last ~20 minutes):\n${lines}\n\nWrite a chat check-in (2-3 sentences):\n- Mention viewer count only if provided above.\n- You may reference the stream title or game if listed.\n- Refer to the host as ${STREAMER_DISPLAY_NAME}; do not invent a generic streamer name.\n- Do not greet, welcome, or @ individual chatters by name.`;
   }, [streamMetadataLine]);
 
   const buildStreamGreetingPrompt = useCallback((viewerCount: number | null, cannabisFact: string) => {
@@ -1613,13 +1615,19 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         lastElroyVoiceRef.current = Date.now();
         void (async () => {
           if (isStudioGateActive(studioRef.current)) {
-            const gateLabel = describeStreamerGate(studioRef.current);
+            const gateLabel = describeStreamerGate(studioRef.current, Date.now(), {
+              extraTailMs: STUDIO_TRANSCRIPT_LAG_BUFFER_MS,
+            });
             if (gateLabel) {
               setRuntimeHud((prev) => ({ ...prev, tts: gateLabel }));
             }
             const gateResult = await waitForStreamerSilence(
               () => studioRef.current,
-              { maxWaitMs: STUDIO_VOICE_WAIT_MS, pollMs: 100 },
+              {
+                maxWaitMs: STUDIO_VOICE_WAIT_MS,
+                pollMs: 100,
+                extraTailMs: STUDIO_TRANSCRIPT_LAG_BUFFER_MS,
+              },
             );
             if (gateResult === 'timeout') {
               setRuntimeHud((prev) => ({
@@ -1633,6 +1641,16 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
           if (playDing) {
             await playBongRip(volumeRef.current);
             await new Promise<void>((resolve) => setTimeout(resolve, 1600));
+          }
+          if (isStreamerBlockingVoice(studioRef.current, Date.now(), {
+            extraTailMs: STUDIO_TRANSCRIPT_LAG_BUFFER_MS,
+          })) {
+            setRuntimeHud((prev) => ({
+              ...prev,
+              tts: 'streamer resumed - skipped voice (chat sent)',
+            }));
+            syncStudioHud(studioRef.current);
+            return;
           }
           void speak(voiceText);
         })();

@@ -33,8 +33,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
       voiceAllowed: false,
       celebrationsVoiceOnly: false,
       ambientVoice: false,
-      chatActivityThreshold: 180,
-      chatActivityChance: 0.25,
+      chatActivityThreshold: 75,
+      chatActivityChance: 0.55,
     };
   }
   if (remaining < 1_000) {
@@ -45,8 +45,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
       voiceAllowed: false,
       celebrationsVoiceOnly: false,
       ambientVoice: false,
-      chatActivityThreshold: 180,
-      chatActivityChance: 0.25,
+      chatActivityThreshold: 75,
+      chatActivityChance: 0.55,
     };
   }
   if (remaining < 5_000) {
@@ -57,8 +57,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
       voiceAllowed: true,
       celebrationsVoiceOnly: true,
       ambientVoice: false,
-      chatActivityThreshold: 180,
-      chatActivityChance: 0.25,
+      chatActivityThreshold: 75,
+      chatActivityChance: 0.55,
     };
   }
   if (remaining < 15_000) {
@@ -69,8 +69,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
       voiceAllowed: true,
       celebrationsVoiceOnly: false,
       ambientVoice: false,
-      chatActivityThreshold: 180,
-      chatActivityChance: 0.25,
+      chatActivityThreshold: 75,
+      chatActivityChance: 0.55,
     };
   }
   if (remaining < 50_000) {
@@ -81,8 +81,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
       voiceAllowed: true,
       celebrationsVoiceOnly: false,
       ambientVoice: false,
-      chatActivityThreshold: 180,
-      chatActivityChance: 0.25,
+      chatActivityThreshold: 75,
+      chatActivityChance: 0.55,
     };
   }
   if (remaining < 100_000) {
@@ -93,8 +93,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
       voiceAllowed: true,
       celebrationsVoiceOnly: false,
       ambientVoice: false,
-      chatActivityThreshold: 180,
-      chatActivityChance: 0.25,
+      chatActivityThreshold: 75,
+      chatActivityChance: 0.55,
     };
   }
   if (remaining < 250_000) {
@@ -105,8 +105,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
       voiceAllowed: true,
       celebrationsVoiceOnly: false,
       ambientVoice: false,
-      chatActivityThreshold: 180,
-      chatActivityChance: 0.25,
+      chatActivityThreshold: 75,
+      chatActivityChance: 0.55,
     };
   }
   return {
@@ -116,8 +116,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
     voiceAllowed: true,
     celebrationsVoiceOnly: false,
     ambientVoice: false,
-    chatActivityThreshold: 180,
-    chatActivityChance: 0.25,
+    chatActivityThreshold: 75,
+    chatActivityChance: 0.55,
   };
 }
 
