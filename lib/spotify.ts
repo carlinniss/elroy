@@ -20,6 +20,19 @@ export type SpotifyTrackSnapshot = {
   trackUrl: string | null;
 };
 
+export type SpotifyConnectionIssue =
+  | 'not_configured'
+  | 'not_connected'
+  | 'auth_expired'
+  | 'api_error';
+
+export type SpotifyNowPlayingSnapshot = {
+  connected: boolean;
+  playing: boolean;
+  track: SpotifyTrackSnapshot | null;
+  reason?: SpotifyConnectionIssue;
+};
+
 type TokenBundle = {
   accessToken: string;
   refreshToken: string;
@@ -259,23 +272,20 @@ export async function disconnectSpotify() {
   await writeTokens(null);
 }
 
-export async function fetchSpotifyNowPlaying(): Promise<{
-  connected: boolean;
-  playing: boolean;
-  track: SpotifyTrackSnapshot | null;
-}> {
+export async function fetchSpotifyNowPlaying(): Promise<SpotifyNowPlayingSnapshot> {
   if (!spotifyConfigured()) {
-    return { connected: false, playing: false, track: null };
+    return { connected: false, playing: false, track: null, reason: 'not_configured' };
   }
 
   const tokens = await readTokens();
   if (!tokens?.refreshToken) {
-    return { connected: false, playing: false, track: null };
+    return { connected: false, playing: false, track: null, reason: 'not_connected' };
   }
 
   const accessToken = await getAccessToken();
   if (!accessToken) {
-    return { connected: true, playing: false, track: null };
+    await writeTokens(null);
+    return { connected: false, playing: false, track: null, reason: 'auth_expired' };
   }
 
   const res = await fetch(`${SPOTIFY_API}/me/player/currently-playing`, {
@@ -289,12 +299,12 @@ export async function fetchSpotifyNowPlaying(): Promise<{
 
   if (res.status === 401) {
     await writeTokens(null);
-    return { connected: false, playing: false, track: null };
+    return { connected: false, playing: false, track: null, reason: 'auth_expired' };
   }
 
   if (!res.ok) {
     console.warn('Spotify now playing failed', res.status);
-    return { connected: true, playing: false, track: null };
+    return { connected: true, playing: false, track: null, reason: 'api_error' };
   }
 
   const playback = await res.json() as SpotifyPlayback;

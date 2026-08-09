@@ -170,6 +170,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const VERSION_POLL_MS = 90_000;
   const DIRECTIVE_POLL_MS = 12_000;
   const SPOTIFY_POLL_MS = 5_000;
+  const SPOTIFY_RECONNECT_REMINDER_MS = 4 * 60 * 1000;
   const CANNABIS_FACTS = [
     'The word "canvas" comes from cannabis — sailcloth was historically made from hemp.',
     'Cannabis has been cultivated for thousands of years; ancient China used hemp for rope and medicine.',
@@ -212,6 +213,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const commandsPageUrlRef = useRef('');
   const spotifyPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSpotifyTrackIdRef = useRef<string | null>(null);
+  const lastSpotifyReconnectReminderAtRef = useRef(0);
   const streamLiveRef = useRef(false);
   const lastTriviaAtRef = useRef(0);
   const recentTriviaHistoryRef = useRef<Array<{ category: TriviaCategory; question: string; id: string }>>([]);
@@ -2410,6 +2412,21 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     void queueBongLogic(buildSpotifyTrackPrompt(track), requestedBy, { chatOnly: true });
   }, [queueBongLogic]);
 
+  const maybeRemindSpotifyReconnect = useCallback((reason?: string) => {
+    if (!streamLiveRef.current || isFullyMuted()) return;
+    if (reason !== 'auth_expired' && reason !== 'not_connected') return;
+    const now = Date.now();
+    if (now - lastSpotifyReconnectReminderAtRef.current < SPOTIFY_RECONNECT_REMINDER_MS) return;
+    lastSpotifyReconnectReminderAtRef.current = now;
+    const reconnectUrl = commandsPageUrlRef.current
+      ? commandsPageUrlRef.current.replace(/\/commands(?:\?.*)?$/, '/control')
+      : '/control';
+    const cause = reason === 'auth_expired' ? 'link expired' : 'is not linked';
+    void sayChat(
+      `${STREAMER_DISPLAY_NAME}, Spotify ${cause} - reconnect it in ${reconnectUrl} so Elroy can announce songs.`,
+    );
+  }, [sayChat]);
+
   const pollSpotifyNowPlaying = useCallback(async () => {
     if (!streamLiveRef.current || isFullyMuted()) return;
 
@@ -2423,14 +2440,20 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         connected?: boolean;
         playing?: boolean;
         track?: SpotifyTrackSnapshot | null;
+        reason?: string;
       };
-      if (!data.connected || !data.playing || !data.track) return;
+      if (!data.connected) {
+        maybeRemindSpotifyReconnect(data.reason);
+        return;
+      }
+      if (!data.playing || !data.track) return;
+      lastSpotifyReconnectReminderAtRef.current = 0;
       if (data.track.id === lastSpotifyTrackIdRef.current) return;
       commentOnSpotifyTrack(data.track);
     } catch (error) {
       console.warn('Spotify poll failed', error);
     }
-  }, [commentOnSpotifyTrack, controlHeaders]);
+  }, [commentOnSpotifyTrack, controlHeaders, maybeRemindSpotifyReconnect]);
 
   const requestSpotifyComment = useCallback(async (username: string) => {
     if (isFullyMuted()) return;
@@ -2444,11 +2467,16 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         connected?: boolean;
         playing?: boolean;
         track?: SpotifyTrackSnapshot | null;
+        reason?: string;
         error?: string;
       };
 
-      if (!data.connected) {
+      if (!data.connected && data.reason !== 'auth_expired') {
         void sayChat(`@${username} Spotify ain't linked — broadcaster connects it from /control.`);
+        return;
+      }
+      if (!data.connected && data.reason === 'auth_expired') {
+        void sayChat(`@${username} Spotify link expired - broadcaster reconnects it from /control.`);
         return;
       }
       if (!data.track || !data.playing) {
