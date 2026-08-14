@@ -1380,6 +1380,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       setRuntimeHud((prev) => ({ ...prev, tts: 'recent voice skipped' }));
       return speechQueueRef.current;
     }
+    lastElroyVoiceRef.current = Date.now();
     speechQueueRef.current = speechQueueRef.current
       .then(() => speakNow(text))
       .then(() => { void playElroySfx('cough'); })
@@ -1666,7 +1667,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
             );
             if (gateResult === 'clear') {
               syncStudioHud(studioRef.current);
-              lastElroyVoiceRef.current = Date.now();
               void speak(voiceText);
               return;
             }
@@ -1677,7 +1677,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
             syncStudioHud(studioRef.current);
             return;
           }
-          lastElroyVoiceRef.current = Date.now();
           void speak(voiceText);
         })();
       }
