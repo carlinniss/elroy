@@ -138,13 +138,13 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
   const ELROY_SYSTEM_BROADCAST = /^elroy initiated\./i;
   const RECENT_VOICE_STORAGE_KEY = 'elroy-recent-voice-playback';
-  const VOICE_PLAYBACK_GAP_MS = 90_000;
+  const VOICE_PLAYBACK_GAP_MS = 30_000;
 
   const SHUT_UP_DURATION_MS = 8 * 60 * 1000;
   const POWERUP_MUTE_MS = 10 * 60 * 1000;
   const SHUT_ELROY_POWERUP_PATTERN = /shut\s+elroy\s+up(\s+for\s+10\s+minutes?)?/i;
-  const VOICE_COOLDOWN_MS = 4 * 60_000;
-  const CELEBRATION_VOICE_COOLDOWN_MS = 25_000;
+  const VOICE_COOLDOWN_MS = 60_000;
+  const CELEBRATION_VOICE_COOLDOWN_MS = 15_000;
   const COMEBACK_CHANCE = 0.12;
   const CELEBRATION_COOLDOWN_MS = 25_000;
   const FOLLOWER_POLL_MS = 45_000;
@@ -448,7 +448,13 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       /* storage is optional */
     }
 
-    if (recent.length > 0) {
+    const duplicate = recent.some((entry) => (
+      entry.fingerprint === fingerprint
+      || fingerprint.startsWith(entry.fingerprint.slice(0, 48))
+      || entry.fingerprint.startsWith(fingerprint.slice(0, 48))
+    ));
+
+    if (duplicate) {
       recentVoicePlaybackRef.current = recent.slice(-20);
       return true;
     }
@@ -1614,7 +1620,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       if (willUseVoice) {
         const playDing = dingEnabledRef.current && !opts.skipDing;
         const voiceText = clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS);
-        lastElroyVoiceRef.current = Date.now();
         void (async () => {
           if (isStudioGateActive(studioRef.current)) {
             const gateLabel = describeStreamerGate(studioRef.current, Date.now(), {
@@ -1649,11 +1654,30 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
           })) {
             setRuntimeHud((prev) => ({
               ...prev,
+              tts: 'streamer resumed - voice held',
+            }));
+            const gateResult = await waitForStreamerSilence(
+              () => studioRef.current,
+              {
+                maxWaitMs: STUDIO_VOICE_WAIT_MS,
+                pollMs: 100,
+                extraTailMs: STUDIO_TRANSCRIPT_LAG_BUFFER_MS,
+              },
+            );
+            if (gateResult === 'clear') {
+              syncStudioHud(studioRef.current);
+              lastElroyVoiceRef.current = Date.now();
+              void speak(voiceText);
+              return;
+            }
+            setRuntimeHud((prev) => ({
+              ...prev,
               tts: 'streamer resumed - skipped voice (chat sent)',
             }));
             syncStudioHud(studioRef.current);
             return;
           }
+          lastElroyVoiceRef.current = Date.now();
           void speak(voiceText);
         })();
       }

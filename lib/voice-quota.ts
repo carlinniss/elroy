@@ -52,8 +52,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
   if (remaining < 5_000) {
     return {
       tier: 'low',
-      voiceCooldownMs: 5 * 60_000,
-      celebrationVoiceCooldownMs: 2 * 60_000,
+      voiceCooldownMs: 3 * 60_000,
+      celebrationVoiceCooldownMs: 60_000,
       voiceAllowed: true,
       celebrationsVoiceOnly: true,
       ambientVoice: false,
@@ -64,8 +64,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
   if (remaining < 15_000) {
     return {
       tier: 'moderate',
-      voiceCooldownMs: 3 * 60_000,
-      celebrationVoiceCooldownMs: 90_000,
+      voiceCooldownMs: 90_000,
+      celebrationVoiceCooldownMs: 45_000,
       voiceAllowed: true,
       celebrationsVoiceOnly: false,
       ambientVoice: false,
@@ -76,8 +76,8 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
   if (remaining < 50_000) {
     return {
       tier: 'comfortable',
-      voiceCooldownMs: 2 * 60_000,
-      celebrationVoiceCooldownMs: 45_000,
+      voiceCooldownMs: 60_000,
+      celebrationVoiceCooldownMs: 25_000,
       voiceAllowed: true,
       celebrationsVoiceOnly: false,
       ambientVoice: false,
@@ -88,36 +88,36 @@ export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
   if (remaining < 100_000) {
     return {
       tier: 'full',
-      voiceCooldownMs: 4 * 60_000,
-      celebrationVoiceCooldownMs: 30_000,
+      voiceCooldownMs: 75_000,
+      celebrationVoiceCooldownMs: 20_000,
       voiceAllowed: true,
       celebrationsVoiceOnly: false,
-      ambientVoice: false,
-      chatActivityThreshold: 75,
-      chatActivityChance: 0.55,
+      ambientVoice: true,
+      chatActivityThreshold: 55,
+      chatActivityChance: 0.6,
     };
   }
   if (remaining < 250_000) {
     return {
       tier: 'plentiful',
-      voiceCooldownMs: 4 * 60_000,
-      celebrationVoiceCooldownMs: 22_000,
+      voiceCooldownMs: 60_000,
+      celebrationVoiceCooldownMs: 15_000,
       voiceAllowed: true,
       celebrationsVoiceOnly: false,
-      ambientVoice: false,
-      chatActivityThreshold: 75,
-      chatActivityChance: 0.55,
+      ambientVoice: true,
+      chatActivityThreshold: 45,
+      chatActivityChance: 0.65,
     };
   }
   return {
     tier: 'abundant',
-    voiceCooldownMs: 4 * 60_000,
-    celebrationVoiceCooldownMs: 18_000,
+    voiceCooldownMs: 45_000,
+    celebrationVoiceCooldownMs: 12_000,
     voiceAllowed: true,
     celebrationsVoiceOnly: false,
-    ambientVoice: false,
-    chatActivityThreshold: 75,
-    chatActivityChance: 0.55,
+    ambientVoice: true,
+    chatActivityThreshold: 35,
+    chatActivityChance: 0.7,
   };
 }
 
