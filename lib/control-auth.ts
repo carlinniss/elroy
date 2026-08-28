@@ -14,7 +14,7 @@ export function controlAuthHeaders(secret: string, extra: Record<string, string>
 
 export function isControlAuthorized(request: Request) {
   const secret = getControlSecret();
-  if (!secret) return true;
+  if (!secret) return false;
 
   const auth = request.headers.get('authorization')?.trim();
   if (auth === `Bearer ${secret}`) return true;
