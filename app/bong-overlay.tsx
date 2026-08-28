@@ -307,11 +307,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       try {
         const statusRes = await fetch('/api/control/status', { cache: 'no-store' });
         const statusData = await statusRes.json() as { configured?: boolean };
-        const authRequired = statusData.configured === true;
 
-        if (!authRequired) {
+        if (statusData.configured !== true) {
           if (!cancelled) {
-            setOverlayAuthStatus('open');
+            setOverlayAuthStatus('missing');
             setControlSecretReady(true);
           }
           return;
