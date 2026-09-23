@@ -70,6 +70,8 @@ function setMemoryTokens(tokens: TokenBundle | null) {
 export function getSpotifyRedirectUri() {
   const explicit = process.env.SPOTIFY_REDIRECT_URI?.trim();
   if (explicit) return explicit;
+  const publicUrl = process.env.ELROY_PUBLIC_URL?.trim().replace(/\/$/, '');
+  if (publicUrl) return `${publicUrl}/api/spotify/callback`;
   const vercel = process.env.VERCEL_URL?.trim();
   if (vercel) return `https://${vercel}/api/spotify/callback`;
   return 'https://elroy-zeta.vercel.app/api/spotify/callback';

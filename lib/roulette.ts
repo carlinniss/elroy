@@ -52,6 +52,8 @@ export type RouletteActionResult = {
   ok: boolean;
   messages: string[];
   error?: string;
+  /** Tick only: whether the table still needs ticking. */
+  active?: boolean;
 };
 
 type MemoryStore = {
@@ -253,9 +255,15 @@ export async function handleRouletteAction(req: RouletteActionRequest): Promise<
   }
 
   if (req.action === 'tick') {
+    // Idle tables never advance — skip the lock + write round-trip (this runs every few seconds).
+    const peek = await loadTable();
+    if (peek.state === 'idle') return { ok: true, messages: [], active: false };
     return withTableMutation(async (table) => {
       const advanced = await advancePhase(table);
-      return { table: advanced.table, result: { ok: true, messages: advanced.messages } };
+      return {
+        table: advanced.table,
+        result: { ok: true, messages: advanced.messages, active: advanced.table.state !== 'idle' },
+      };
     });
   }
 

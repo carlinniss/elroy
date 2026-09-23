@@ -262,3 +262,33 @@ export function buildAboutMeUnknownPrompt(username: string, followTenure?: strin
 
 Tell them honestly you are still learning them — they should mention you, win trivia, sub, or run it up in chat so you can build a profile. Elroy OG voice, playful, 2-3 sentences, under 320 characters.`;
 }
+
+/**
+ * Compact, prompt-ready summary of a viewer for normal replies (not !aboutme).
+ * Returns '' when there is nothing worth mentioning so thin files don't bloat the prompt.
+ */
+export function formatViewerBrief(profile: UserMemoryProfile | null): string {
+  if (!profile || !profileHasMemory(profile)) return '';
+
+  const facts: string[] = [];
+  if (profile.mentionCount >= 3) {
+    facts.push(`regular — has talked to you ${profile.mentionCount} times`);
+  } else if (profile.mentionCount > 0) {
+    facts.push('has talked to you a couple of times before');
+  }
+  if (profile.followedAt) {
+    facts.push(`following for ${formatFollowTenureFromIso(profile.followedAt)}`);
+  }
+  const wins = profile.triviaWins;
+  const totalWins = (wins.cannabis ?? 0) + (wins.freaky ?? 0) + (wins.music90s ?? 0);
+  if (totalWins > 0) {
+    facts.push(`${totalWins} trivia win${totalWins === 1 ? '' : 's'}`);
+  }
+  const supportNotes = profile.notes
+    .filter((note) => /^(Supported with|Dropped \d+ bits|Cheered with bits)/.test(note))
+    .slice(0, 2);
+  facts.push(...supportNotes.map((note) => note.replace(/\.$/, '').toLowerCase()));
+
+  if (!facts.length) return '';
+  return `What you already know about ${profile.displayName} (weave in at most one detail, only if it fits naturally — never list these, never invent more): ${facts.join('; ')}.`;
+}

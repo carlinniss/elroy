@@ -147,7 +147,7 @@ export async function sendTwitchChatMessage(message: string): Promise<{ login: s
 
   for (const candidate of candidates) {
     if (usernameMismatch(candidate)) continue;
-    if (!candidate.scopes.includes('chat:write')) continue;
+    if (!(candidate.scopes.includes('chat:edit') || candidate.scopes.includes('chat:write'))) continue;
     try {
       await sendIrcChatMessage(text, candidate);
       return { login: candidate.login };

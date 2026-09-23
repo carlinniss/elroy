@@ -108,6 +108,7 @@ export type BjActionRequest = {
     | 'loan'
     | 'debt'
     | 'leaders'
+    | 'give'
     | 'tick'
     | 'stop';
   username: string;
@@ -117,6 +118,8 @@ export type BjActionRequest = {
   betInput?: string;
   /** Chat line for dareComplete ritual verification. */
   message?: string;
+  /** !give recipient login (with or without @). */
+  target?: string;
   isMod?: boolean;
 };
 
@@ -132,7 +135,13 @@ export type BjActionResult = {
   error?: string;
   /** True when this action transitioned the table from idle to seating. */
   tableOpened?: boolean;
+  /** Tick only: whether the table still needs ticking. */
+  active?: boolean;
 };
+
+function isTableActive(table: { state: string }) {
+  return table.state !== 'idle' && table.state !== 'settle';
+}
 
 type MemoryStore = {
   table: BjTable | null;
@@ -1248,6 +1257,85 @@ async function doubleDownCurrentSeat(table: BjTable): Promise<{ table: BjTable; 
   return { table: advanced.table, messages: [...messages, ...advanced.messages] };
 }
 
+export const GIVE_MIN = 10;
+export const GIVE_MAX = 200;
+export const GIVE_COOLDOWN_MS = 60_000;
+const GIVE_LAST_KEY = 'elroy:bj:give:last';
+const giveLastMemory = new Map<string, number>();
+
+async function getLastGiveAt(login: string): Promise<number> {
+  if (hasRedisStorage()) {
+    try {
+      const raw = await redisCommand(['HGET', GIVE_LAST_KEY, login]);
+      const at = Number.parseInt(String(raw ?? ''), 10);
+      return Number.isFinite(at) ? at : 0;
+    } catch {
+      /* fall through to memory */
+    }
+  }
+  return giveLastMemory.get(login) ?? 0;
+}
+
+async function setLastGiveAt(login: string, at: number) {
+  giveLastMemory.set(login, at);
+  if (hasRedisStorage()) {
+    try {
+      await redisCommand(['HSET', GIVE_LAST_KEY, login, String(at)]);
+    } catch {
+      /* memory copy is enough for a cooldown */
+    }
+  }
+}
+
+/**
+ * Chat-to-chat chip transfer. Guard rails keep it from becoming a loan-farming pipeline:
+ * capped per transfer, one per minute, and blocked while the giver still owes the house.
+ */
+export async function giveChips(
+  fromLogin: string,
+  fromDisplay: string,
+  rawTarget: string,
+  rawAmount: string,
+): Promise<BjActionResult> {
+  const usage = `@${fromDisplay} use !give @user <${GIVE_MIN}-${GIVE_MAX}>`;
+  const toLogin = normalizeLogin(rawTarget.replace(/^@/, ''));
+  const amount = Number.parseInt(rawAmount, 10);
+  if (!toLogin || !/^[a-z0-9_]{3,25}$/.test(toLogin) || !Number.isFinite(amount)) {
+    return { ok: false, messages: [usage], error: 'usage' };
+  }
+  if (toLogin === fromLogin) {
+    return { ok: false, messages: [`@${fromDisplay} giving chips to yourself is just called having chips.`], error: 'self' };
+  }
+  if (amount < GIVE_MIN || amount > GIVE_MAX) {
+    return { ok: false, messages: [usage], error: 'amount' };
+  }
+  if (await getLoanDebt(fromLogin) > 0) {
+    return { ok: false, messages: [`@${fromDisplay} pay off your loan debt before you start handing out chips.`], error: 'debt' };
+  }
+  const lastAt = await getLastGiveAt(fromLogin);
+  const waitMs = GIVE_COOLDOWN_MS - (Date.now() - lastAt);
+  if (waitMs > 0) {
+    return { ok: false, messages: [`@${fromDisplay} easy, big spender — next !give in ${Math.ceil(waitMs / 1000)}s.`], error: 'cooldown' };
+  }
+  const fromChips = await getPlayerChips(fromLogin);
+  if (fromChips < amount) {
+    return { ok: false, messages: [`@${fromDisplay} you only have ${fromChips} chips.`], error: 'insufficient' };
+  }
+
+  const toChips = await getPlayerChips(toLogin);
+  const toDisplay = await getDisplayName(toLogin);
+  await setPlayerChips(fromLogin, fromChips - amount, fromDisplay);
+  await setPlayerChips(toLogin, toChips + amount);
+  await setLastGiveAt(fromLogin, Date.now());
+  await syncLeaderboard(fromLogin, fromChips - amount);
+  await syncLeaderboard(toLogin, toChips + amount);
+
+  return {
+    ok: true,
+    messages: [`🤝 @${fromDisplay} slid ${amount} OG chips to @${toDisplay} (${fromChips - amount} left).`],
+  };
+}
+
 export async function handleBlackjackAction(req: BjActionRequest): Promise<BjActionResult> {
   const login = normalizeLogin(req.username);
   const displayName = req.displayName?.trim() || req.username.trim() || login;
@@ -1258,6 +1346,10 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
   if (req.action === 'chips') {
     const chips = await getPlayerChips(login);
     return { ok: true, messages: [`@${displayName} you have ${chips} OG chips.`] };
+  }
+
+  if (req.action === 'give') {
+    return giveChips(login, displayName, req.target ?? '', req.betInput ?? '');
   }
 
   if (req.action === 'debt') {
@@ -1387,9 +1479,15 @@ export async function handleBlackjackAction(req: BjActionRequest): Promise<BjAct
   }
 
   if (req.action === 'tick') {
+    // Idle tables never advance — skip the lock + write round-trip (this runs every few seconds).
+    const peek = await loadTable();
+    if (!isTableActive(peek)) return { ok: true, messages: [], active: false };
     return withTableMutation(async (table) => {
       const advanced = await advancePhase(table);
-      return { table: advanced.table, result: { ok: true, messages: advanced.messages } };
+      return {
+        table: advanced.table,
+        result: { ok: true, messages: advanced.messages, active: isTableActive(advanced.table) },
+      };
     });
   }
 

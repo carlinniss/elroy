@@ -27,8 +27,10 @@ function squashRepeatedLetters(text: string): string {
 const ELROY_FORWARD = 'elroy';
 const ELROY_BACKWARD = 'yorle';
 
-const SPACED_ELROY = /e[\W_]*l[\W_]*r[\W_]*o[\W_]*y/i;
-const SPACED_YORLE = /y[\W_]*o[\W_]*r[\W_]*l[\W_]*e/i;
+// Letters may be split by punctuation/spaces ("E l r o y", "e.l.r.o.y") but the name has to stand
+// alone — "hotel royale" and "Delroy" are not Elroy.
+const SPACED_ELROY = /(?<![a-z0-9])e[\W_]*l[\W_]*r[\W_]*o[\W_]*y(?![a-z0-9])/i;
+const SPACED_YORLE = /(?<![a-z0-9])y[\W_]*o[\W_]*r[\W_]*l[\W_]*e(?![a-z0-9])/i;
 const SPACED_LROY = /(?<![a-z0-9])l[\W_]*r[\W_]*o[\W_]*y(?![a-z0-9])/i;
 
 /** "el roy" / "el-roy" — name split across a space or dash. */
@@ -37,9 +39,24 @@ const EL_ROY_SPLIT = /\bel[\W_]+roy\b/i;
 /** "roy el" — backwards word order (talking about Elroy behind his back). */
 const ROY_EL_SPLIT = /\broy[\W_]+el\b/i;
 
+/** A run of tokens that collapses to exactly the name (plus possessive s): "3lr0y", "E L R O Y", "yorle's". */
+const COLLAPSED_NAME = /^(e+l+r+o+y+|y+o+r+l+e+)s?$/;
+const MAX_NAME_TOKENS = 5;
+
 function collapsedIncludesElroyName(text: string): boolean {
-  const collapsed = squashRepeatedLetters(collapseLettersForMentionMatch(text));
-  return collapsed.includes(ELROY_FORWARD) || collapsed.includes(ELROY_BACKWARD);
+  // Check each word, and short runs of adjacent words, on their own. Collapsing the whole message
+  // at once made "hotel royale" → "hotelroyale" and "my orleans trip" → "myorleans…" count as mentions.
+  const tokens = text.split(/\s+/).filter(Boolean);
+  for (let start = 0; start < tokens.length; start += 1) {
+    let joined = '';
+    for (let end = start; end < Math.min(tokens.length, start + MAX_NAME_TOKENS); end += 1) {
+      joined += tokens[end];
+      const collapsed = squashRepeatedLetters(collapseLettersForMentionMatch(joined));
+      if (COLLAPSED_NAME.test(collapsed)) return true;
+      if (collapsed.length > 8) break;
+    }
+  }
+  return false;
 }
 
 export function mentionsElroy(text: string): boolean {

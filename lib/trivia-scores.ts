@@ -143,6 +143,7 @@ export async function incrementTriviaWin(
         return incrementMemoryScore(username, category, safePoints);
       }
       await redisCommand(['HSET', DISPLAY_NAMES_KEY, login, username.trim()]);
+      await recordSeasonPoints(login, safePoints);
       return score;
     } catch (error) {
       console.error('Redis trivia score write failed, using memory fallback', error);
@@ -214,4 +215,94 @@ export function formatTriviaLeaderboardChatMessage(leaders: TriviaLeaders): stri
     return '🏆 No trivia wins yet — first correct answer during trivia wins!';
   }
   return `🏆 Trivia top 3: ${parts.join(' | ')}`;
+}
+
+// ── Monthly trivia season ────────────────────────────────────────────────────
+// All-time boards reward whoever has been around longest; a monthly season gives newer
+// viewers something winnable. Points across all categories count toward one board.
+
+const SEASON_KEY_PREFIX = 'elroy:trivia:season:';
+const SEASON_TTL_SECONDS = 120 * 24 * 60 * 60;
+export const SEASON_LEADERBOARD_SIZE = 5;
+
+/** "2026-09" in the channel's timezone (ELROY_TIMEZONE, default America/New_York). */
+export function currentSeasonId(now = new Date()): string {
+  const timeZone = process.env.ELROY_TIMEZONE?.trim() || 'America/New_York';
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit' })
+      .formatToParts(now);
+    const year = parts.find((part) => part.type === 'year')?.value;
+    const month = parts.find((part) => part.type === 'month')?.value;
+    if (year && month) return `${year}-${month}`;
+  } catch {
+    /* bad timezone env — fall back to UTC */
+  }
+  return now.toISOString().slice(0, 7);
+}
+
+export function formatSeasonName(seasonId: string): string {
+  const [year, month] = seasonId.split('-').map(Number);
+  if (!year || !month) return seasonId;
+  const name = new Date(Date.UTC(year, month - 1, 15)).toLocaleString('en-US', { month: 'long', timeZone: 'UTC' });
+  return `${name} ${year}`;
+}
+
+const memorySeason = new Map<string, Map<string, number>>();
+
+async function recordSeasonPoints(login: string, points: number) {
+  const seasonId = currentSeasonId();
+  if (hasRedisStorage()) {
+    try {
+      const key = `${SEASON_KEY_PREFIX}${seasonId}`;
+      await redisPipeline([
+        ['ZINCRBY', key, String(points), login],
+        ['EXPIRE', key, String(SEASON_TTL_SECONDS)],
+      ]);
+      return;
+    } catch (error) {
+      console.error('Redis trivia season write failed', error);
+    }
+  }
+  const board = memorySeason.get(seasonId) ?? new Map<string, number>();
+  board.set(login, (board.get(login) ?? 0) + points);
+  memorySeason.set(seasonId, board);
+}
+
+export async function getTriviaSeasonLeaders(
+  limit = SEASON_LEADERBOARD_SIZE,
+): Promise<{ seasonId: string; leaders: TriviaLeader[] }> {
+  const seasonId = currentSeasonId();
+  if (hasRedisStorage()) {
+    try {
+      const rows = await redisCommand(['ZREVRANGE', `${SEASON_KEY_PREFIX}${seasonId}`, '0', String(limit - 1), 'WITHSCORES']);
+      const leaders: TriviaLeader[] = [];
+      if (Array.isArray(rows)) {
+        for (let i = 0; i < rows.length; i += 2) {
+          const login = String(rows[i]);
+          if (SANDBOX_LOGINS.has(login)) continue;
+          const score = Number.parseFloat(String(rows[i + 1]));
+          if (!Number.isFinite(score) || score <= 0) continue;
+          leaders.push({ username: (await getRedisDisplayName(login)) ?? login, score });
+        }
+      }
+      return { seasonId, leaders };
+    } catch (error) {
+      console.error('Redis trivia season read failed', error);
+    }
+  }
+  const board = memorySeason.get(seasonId) ?? new Map<string, number>();
+  const leaders = [...board.entries()]
+    .filter(([login]) => !SANDBOX_LOGINS.has(login))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([login, score]) => ({ username: login, score }));
+  return { seasonId, leaders };
+}
+
+export function formatTriviaSeasonChatMessage(seasonId: string, leaders: TriviaLeader[]): string {
+  const name = formatSeasonName(seasonId);
+  if (!leaders.length) {
+    return `🏅 ${name} trivia season is wide open — nobody's on the board yet. !trivia to start a round.`;
+  }
+  return `🏅 ${name} trivia season: ${leaders.map((entry, index) => `${index + 1}. ${entry.username} (${entry.score})`).join(', ')}`;
 }

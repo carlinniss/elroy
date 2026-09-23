@@ -20,6 +20,8 @@ export function getEventSubSecret() {
 export function getEventSubCallbackUrl() {
   const explicit = process.env.TWITCH_EVENTSUB_CALLBACK?.trim();
   if (explicit) return explicit;
+  const publicUrl = process.env.ELROY_PUBLIC_URL?.trim().replace(/\/$/, '');
+  if (publicUrl) return `${publicUrl}/api/twitch/eventsub`;
   const vercel = process.env.VERCEL_URL?.trim();
   if (vercel) return `https://${vercel}/api/twitch/eventsub`;
   return 'https://elroy-zeta.vercel.app/api/twitch/eventsub';

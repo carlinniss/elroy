@@ -1,7 +1,14 @@
-import { hasRedisStorage, redisCommand } from '@/lib/redis-rest';
+import { hasRedisStorage, redisCommand, redisPipeline } from '@/lib/redis-rest';
 import { mentionsElroy } from '@/lib/elroy-mention';
 
 const STORE_KEY = 'elroy:studio';
+// Host speech and settings live in their own keys. The VAD heartbeat rewrites STORE_KEY constantly;
+// when everything shared one blob, a heartbeat landing mid-transcript silently erased host speech
+// (and settings saved from /control), so Elroy missed "hey Elroy" from the host.
+const SPEECH_KEY = 'elroy:studio:speech';
+const SETTINGS_KEY = 'elroy:studio:settings';
+
+type StorePart = 'vad' | 'speech' | 'settings';
 const MAX_HOST_SPEECH_ITEMS = 10;
 const DUPLICATE_HOST_SPEECH_WINDOW_MS = 45_000;
 
@@ -154,15 +161,24 @@ function isDuplicateHostSpeech(
 
 async function readStore(): Promise<StudioStore> {
   if (hasRedisStorage()) {
-    const raw = await redisCommand(['GET', STORE_KEY]);
-    if (typeof raw === 'string' && raw.length > 0) {
-      try {
-        return parseStore(JSON.parse(raw));
-      } catch {
-        return defaultStore();
-      }
-    }
-    return defaultStore();
+    const [rawMain, rawSpeech, rawSettings] = (await redisPipeline([
+      ['GET', STORE_KEY],
+      ['GET', SPEECH_KEY],
+      ['GET', SETTINGS_KEY],
+    ])) ?? [];
+    const parseJson = (raw: unknown) => {
+      if (typeof raw !== 'string' || !raw) return undefined;
+      try { return JSON.parse(raw) as unknown; } catch { return undefined; }
+    };
+    const main = (parseJson(rawMain) ?? {}) as Partial<StudioStore>;
+    const speech = parseJson(rawSpeech);
+    const settings = parseJson(rawSettings);
+    return parseStore({
+      ...main,
+      // Fall back to the legacy single-blob fields until the split keys have been written once.
+      recentHostSpeech: Array.isArray(speech) ? speech as StudioHostSpeech[] : main.recentHostSpeech,
+      settings: settings && typeof settings === 'object' ? settings as StudioSettings : main.settings,
+    });
   }
   if (!globalStore.__elroyStudio) {
     globalStore.__elroyStudio = defaultStore();
@@ -170,10 +186,21 @@ async function readStore(): Promise<StudioStore> {
   return parseStore(globalStore.__elroyStudio);
 }
 
-async function writeStore(store: StudioStore): Promise<StudioStore> {
+async function writeStore(store: StudioStore, parts: StorePart[]): Promise<StudioStore> {
   const normalized = parseStore(store);
   if (hasRedisStorage()) {
-    await redisCommand(['SET', STORE_KEY, JSON.stringify(normalized)]);
+    const commands: unknown[][] = [];
+    if (parts.includes('vad')) {
+      const { recentHostSpeech: _speech, settings: _settings, ...vad } = normalized;
+      commands.push(['SET', STORE_KEY, JSON.stringify(vad)]);
+    }
+    if (parts.includes('speech')) {
+      commands.push(['SET', SPEECH_KEY, JSON.stringify(normalized.recentHostSpeech)]);
+    }
+    if (parts.includes('settings')) {
+      commands.push(['SET', SETTINGS_KEY, JSON.stringify(normalized.settings)]);
+    }
+    if (commands.length) await redisPipeline(commands);
     return normalized;
   }
   globalStore.__elroyStudio = normalized;
@@ -242,9 +269,11 @@ export async function ingestStudio(payload: StudioIngestPayload): Promise<Studio
   } else if (payload.streamerSpeaking === true) {
     updated.lastSpeechAt = now;
   }
+  const parts: StorePart[] = ['vad'];
   if (typeof payload.hostTranscript === 'string') {
     const text = payload.hostTranscript.replace(/\s+/g, ' ').trim();
     if (text && !isDuplicateHostSpeech(updated.recentHostSpeech, text, now)) {
+      parts.push('speech');
       updated.recentHostSpeech = [
         ...updated.recentHostSpeech,
         {
@@ -257,7 +286,7 @@ export async function ingestStudio(payload: StudioIngestPayload): Promise<Studio
     }
   }
 
-  return buildStudioSnapshot(await writeStore(updated), now);
+  return buildStudioSnapshot(await writeStore(updated, parts), now);
 }
 
 export async function updateStudioSettings(
@@ -270,5 +299,5 @@ export async function updateStudioSettings(
     settings: clampSettings({ ...store.settings, ...settings }),
     updatedAt: Date.now(),
   };
-  return buildStudioSnapshot(await writeStore(updated));
+  return buildStudioSnapshot(await writeStore(updated, ['settings']));
 }

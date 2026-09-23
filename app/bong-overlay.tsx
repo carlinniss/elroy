@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import tmi from 'tmi.js';
 import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
@@ -19,13 +19,20 @@ import {
   subTenureFromEventPayload,
   subTenureFromTmiUserstate,
 } from '@/lib/sub-tenure';
-import { buildPeriodicCommandHelpMessage, buildCommandsChatReply, buildCommandsPageUrl } from '@/lib/bot-commands';
+import {
+  buildPeriodicCommandHelpMessage,
+  buildCommandsChatReply,
+  buildCommandsPageUrl,
+  COMMANDS_ALLOWED_WHILE_MUTED,
+  parseChatCommand,
+} from '@/lib/bot-commands';
 import { buildTriviaProgressHint } from '@/lib/trivia-hints';
 import { buildSpotifyTrackPrompt } from '@/lib/spotify-prompt';
 import type { SpotifyTrackSnapshot } from '@/lib/spotify';
 import { getBotInstanceId } from '@/lib/bot-instance';
 import { getBuildLabel } from '@/lib/build-version';
 import { formatDirectiveInjection } from '@/lib/live-directives';
+import { createElroyPromptBuilders } from '@/lib/elroy-prompts';
 import {
   clampReplyLength,
   formatChatReplyBody,
@@ -105,6 +112,21 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const [postUpdateCheck, setPostUpdateCheck] = useState(false);
   const [overlayAuthStatus, setOverlayAuthStatus] = useState<'checking' | 'missing' | 'rejected' | 'ok' | 'open'>('checking');
   const [overlayAuthSource, setOverlayAuthSource] = useState<'path' | 'query' | 'storage' | 'none'>('none');
+  const showHud = searchParams.get('hud') !== 'off';
+  const showWidgets = searchParams.get('widgets') !== 'off';
+  const [widgetTrivia, setWidgetTrivia] = useState<{
+    category: TriviaCategory;
+    question: string;
+    points: number;
+    endsAt: number;
+    winner?: string;
+    answer?: string;
+  } | null>(null);
+  const [widgetTrack, setWidgetTrack] = useState<{ name: string; artists: string } | null>(null);
+  const [widgetTables, setWidgetTables] = useState({ blackjack: false, roulette: false, pick3: false, pick4: false });
+  const [widgetNow, setWidgetNow] = useState(() => Date.now());
+  const widgetTrackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const widgetTriviaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [runtimeHud, setRuntimeHud] = useState({
     stream: 'checking…',
     tts: 'idle',
@@ -134,6 +156,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const elroySpeakerLoginsRef = useRef<Set<string>>(new Set());
   const elroySpeakerUserIdsRef = useRef<Set<string>>(new Set());
   const recentElroyOutboundRef = useRef<Array<{ fingerprint: string; at: number }>>([]);
+  const recentElroyRepliesRef = useRef<string[]>([]);
+  const lastMentionReplyByUserRef = useRef<Map<string, number>>(new Map());
   const recentVoicePlaybackRef = useRef<Array<{ fingerprint: string; at: number }>>([]);
 
   const ELROY_SYSTEM_BROADCAST = /^elroy initiated\./i;
@@ -165,11 +189,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const ambientVoiceAllowedRef = useRef(false);
   const SESSION_CHAT_MAX = 600;
   const SESSION_STORAGE_KEY = 'elroy-stream-session';
+  const SESSION_RESUME_MAX_GAP_MS = 20 * 60 * 1000;
+  const MENTION_USER_COOLDOWN_MS = 20_000;
+  const RECENT_REPLY_MEMORY = 6;
   const AUTO_RESUME_STORAGE_KEY = 'elroy-auto-resume';
   const POST_UPDATE_DIAGNOSTICS_KEY = 'elroy-post-update-diagnostics';
   const VERSION_POLL_MS = 90_000;
   const DIRECTIVE_POLL_MS = 12_000;
-  const SPOTIFY_POLL_MS = 5_000;
+  const SPOTIFY_POLL_MS = 10_000;
   const SPOTIFY_RECONNECT_REMINDER_MS = 4 * 60 * 1000;
   const CANNABIS_FACTS = [
     'The word "canvas" comes from cannabis — sailcloth was historically made from hemp.',
@@ -231,11 +258,12 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const sessionChatRef = useRef<Array<{ user: string; text: string; at: number }>>([]);
   const streamStartedAtRef = useRef<number | null>(null);
   const shutElroyPowerUpIdRef = useRef<string | null>(null);
+  const rewardIdsRef = useRef<{ roast?: string; ask?: string }>({});
   const powerupPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastRedemptionPollRef = useRef(Date.now());
   const processedRedemptionIdsRef = useRef<Set<string>>(new Set());
   const powerupStorageWarnedRef = useRef(false);
-  const POWERUP_POLL_MS = 2_000;
+  const POWERUP_POLL_MS = 4_000;
   const QUOTA_POLL_MS = 2 * 60_000;
   const voiceCooldownMsRef = useRef(VOICE_COOLDOWN_MS);
   const celebrationVoiceCooldownMsRef = useRef(CELEBRATION_VOICE_COOLDOWN_MS);
@@ -513,7 +541,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   ) => {
     if (isElroySystemBroadcast(message)) return true;
     if (isEchoOfElroyOutbound(message)) return true;
-    if (normalizedUser === normalizedChannel) return true;
+    // The broadcaster is a human. If Elroy ever posts with the broadcaster token, those lines are
+    // already caught by the outbound-echo check above, so everything else the host types is real.
+    if (normalizedUser === normalizedChannel) return false;
     if (isKnownElroySpeakerLogin(normalizedUser)) return true;
     const userId = userstate['user-id'];
     if (userId && elroySpeakerUserIdsRef.current.has(userId)) return true;
@@ -931,6 +961,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     try {
       localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
         startedAt: streamStartedAtRef.current,
+        savedAt: Date.now(),
         messages: sessionChatRef.current,
       }));
     } catch (e) {
@@ -954,8 +985,19 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       if (!raw) return;
       const parsed = JSON.parse(raw) as {
         startedAt?: number;
+        savedAt?: number;
         messages?: Array<{ user: string; text: string; at: number }>;
       };
+      // Only resume a session that was still being written recently (deploy reload / OBS restart).
+      // Anything older is a previous stream that ended without Elroy seeing it go offline.
+      const lastActivity = parsed.savedAt
+        ?? parsed.messages?.[0]?.at
+        ?? parsed.startedAt
+        ?? 0;
+      if (Date.now() - lastActivity > SESSION_RESUME_MAX_GAP_MS) {
+        localStorage.removeItem(SESSION_STORAGE_KEY);
+        return;
+      }
       if (parsed.startedAt && Array.isArray(parsed.messages)) {
         streamStartedAtRef.current = parsed.startedAt;
         sessionChatRef.current = parsed.messages.slice(0, SESSION_CHAT_MAX);
@@ -966,6 +1008,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   }, []);
 
   const canSafelyReloadForDeploy = useCallback(() => {
+    // Never swap code under a live show — a bad deploy mid-stream takes Elroy down on air.
+    // The update lands once the stream ends (or refresh the OBS browser source to take it now).
+    if (streamLiveRef.current) return false;
     if (isSpeakingRef.current) return false;
     const trivia = activeTriviaRef.current;
     if (trivia && !trivia.answered) return false;
@@ -978,7 +1023,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     if (isActiveRef.current && !canSafelyReloadForDeploy()) {
       setDiagnostics((prev) => ({
         ...prev,
-        update: 'update pending — waiting for safe moment',
+        update: streamLiveRef.current
+          ? 'update ready — applies after stream (refresh OBS source to take it now)'
+          : 'update pending — waiting for safe moment',
       }));
       return;
     }
@@ -1108,32 +1155,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     return messages.filter((_, index) => index % step === 0).slice(0, maxLines);
   }, []);
 
-  const buildChatAwarePrompt = useCallback(() => {
-    const recent = recentChatRef.current.slice(0, 8);
-    const hostLines = studioRef.current.recentHostSpeech.slice(-4)
-      .map((entry) => `- Host: ${entry.text}`)
-      .join('\n');
-    if (!recent.length) {
-      return hostLines
-        ? `No one is chatting much right now, but ${STREAMER_DISPLAY_NAME} was just saying:\n${hostLines}\nDrop a short OG check-in about that stream moment — do not welcome or greet anyone by name.`
-        : `No one is chatting yet. Drop a short OG check-in about ${STREAMER_DISPLAY_NAME}'s stream vibe — do not welcome or greet anyone by name.`;
-    }
-    const lines = recent.map((entry) => `- ${entry.user}: ${entry.text}`).join("\n");
-    return `Use the recent Twitch chat and ${STREAMER_DISPLAY_NAME}'s host speech for a topical comment (2-3 sentences). Reference the vibe from:\n${lines}${hostLines ? `\n\nRecent ${STREAMER_DISPLAY_NAME} speech:\n${hostLines}` : ''}${streamMetadataLine() ? `\nStream context: ${streamMetadataLine()}` : ''}\nDo not greet, welcome, or say hello to anyone by @username. Comment on topics only — never welcome newcomers. Do not force a rhyme.`;
-  }, [streamMetadataLine]);
-
-  const buildHostAwarePrompt = useCallback((hostLine: string) => {
-    const recentChat = recentChatRef.current.slice(0, 8);
-    const chatLines = recentChat.length
-      ? recentChat.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
-      : '(chat is quiet right now)';
-    const hostLines = studioRef.current.recentHostSpeech.slice(-4)
-      .map((entry) => `- Host: ${entry.text}`)
-      .join('\n') || `- Host: ${hostLine}`;
-
-    return `${STREAMER_DISPLAY_NAME}, the host, just said this on stream: "${hostLine}"\n\nRecent ${STREAMER_DISPLAY_NAME} speech:\n${hostLines}\n\nRecent Twitch chat:\n${chatLines}${streamMetadataLine() ? `\n\nStream context: ${streamMetadataLine()}` : ''}\n\nWrite one appropriate Elroy response that fits both ${STREAMER_DISPLAY_NAME} and chat context. If ${STREAMER_DISPLAY_NAME} gave Elroy a clear command, follow it. If it was just a mention, give a brief relevant comment back. Do not invent facts; do not greet or welcome chatters.`;
-  }, [streamMetadataLine]);
-
   const formatSpeechHudError = useCallback((status: number, message: string) => {
     const lower = message.toLowerCase();
     if (lower.includes('payment')) {
@@ -1257,6 +1278,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     void runDiagnostics();
   }, [controlSecretReady, overlayAuthStatus, resolvedControlSecret, runDiagnostics]);
   useEffect(() => { dingEnabledRef.current = isDingOn; }, [isDingOn]);
+  useEffect(() => {
+    if (!widgetTrivia || widgetTrivia.winner) return;
+    const timer = setInterval(() => setWidgetNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [widgetTrivia]);
   useEffect(() => { voiceEnabledRef.current = isVoiceOn; }, [isVoiceOn]);
   useEffect(() => {
     startVersionPolling();
@@ -1388,102 +1414,33 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     return speechQueueRef.current;
   }, [playElroySfx, shouldSkipVoicePlayback]);
 
-  const buildMentionPrompt = useCallback((user: string, message: string) => {
-    const recent = recentChatRef.current.slice(0, 6);
-    const context = recent.length
-      ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
-      : '(no other recent lines)';
-    return `Someone brought you up in Twitch chat. ${user} said: "${message}"\n\nRecent chat:\n${context}${streamMetadataLine() ? `\n\nStream context: ${streamMetadataLine()}` : ''}\n\nReply in OG character — 2-3 sentences, enough personality to land the bit.`;
-  }, [streamMetadataLine]);
-
-  const buildLRoyRoastPrompt = useCallback((user: string, message: string) => {
-    const recent = recentChatRef.current.slice(0, 6);
-    const context = recent.length
-      ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
-      : '(no other recent lines)';
-    return `${user} called you "L Roy" in Twitch chat (wrong name — you are ELROY, not L Roy): "${message}"\n\nRecent chat:\n${context}\n\nOne short roast sentence for the misname — playful not cruel.`;
-  }, []);
-
-  const buildTriviaCheatRoastPrompt = useCallback((
-    user: string,
-    message: string,
-    triviaQuestion: string,
-    cheatKind: 'answer' | 'question' | 'help',
-  ) => {
-    const cheatLine = cheatKind === 'answer'
-      ? `${user} tagged Elroy trying to slip in the trivia answer: "${message}"`
-      : cheatKind === 'question'
-        ? `${user} tried to ask Elroy the same trivia question instead of answering fair: "${message}"`
-        : `${user} tried to fish the trivia answer out of Elroy: "${message}"`;
-    return `${cheatLine}\n\nLive trivia question: "${triviaQuestion}"\n\nOne short roast sentence for ${user} — playful not cruel. They must answer in chat themselves.`;
-  }, []);
-
-  const buildSubPrompt = useCallback((user: string, details: string) =>
-    `${user} just subscribed or resubbed! ${details} Celebrate them — use total months subscribed when given, not streak alone. One or two sentences.`, []);
-
-  const buildRaidPrompt = useCallback((user: string, viewers: number) =>
-    `${user} just raided with ${viewers} viewer${viewers === 1 ? '' : 's'}! Welcome them hard — hype the raid, shout them out by name, OG energy.`, []);
-
-  const buildBitsPrompt = useCallback((user: string, details: string) =>
-    `${user} just cheered ${details} in chat! One or two thank-you sentences.`, []);
-
-  const buildStreamCheckinPrompt = useCallback((
-    viewerCount: number | null,
-    streamStatus: 'live' | 'offline' | 'unknown',
-  ) => {
-    const cutoff = Date.now() - STREAM_CHECKIN_MS;
-    const recent = recentChatRef.current.filter((entry) => entry.at >= cutoff);
-    const chatActive = recent.length >= 3;
-    const lines = recent.length
-      ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
-      : '(few messages in the last 20 minutes)';
-
-    let viewerLine: string;
-    if (streamStatus === 'live' && viewerCount != null) {
-      viewerLine = `The stream is LIVE with about ${viewerCount} viewers (latest Twitch API poll — may differ slightly from the player UI).`;
-    } else if (chatActive) {
-      viewerLine = streamStatus === 'live' && viewerCount != null
-        ? `The stream is live with about ${viewerCount} viewers (API snapshot). Chat is active.`
-        : 'Chat is active — the stream is clearly live. Viewer count could not be fetched; hype the room without inventing a number.';
-    } else if (streamStatus === 'offline') {
-      viewerLine = 'Twitch reports the channel is not live and chat has been quiet.';
-    } else {
-      viewerLine = 'Viewer count could not be verified. Do not say the stream or chat is offline — keep the energy up anyway.';
-    }
-
-    return `20-minute stream check-in for ${STREAMER_DISPLAY_NAME}'s channel.\n${viewerLine}\n${streamMetadataLine() ? `${streamMetadataLine()}\n` : ''}\nRecent chat (last ~20 minutes):\n${lines}\n\nWrite a chat check-in (2-3 sentences):\n- Mention viewer count only if provided above.\n- You may reference the stream title or game if listed.\n- Refer to the host as ${STREAMER_DISPLAY_NAME}; do not invent a generic streamer name.\n- Do not greet, welcome, or @ individual chatters by name.`;
-  }, [streamMetadataLine]);
-
-  const buildStreamGreetingPrompt = useCallback((viewerCount: number | null, cannabisFact: string) => {
-    const viewers = viewerCount != null ? `About ${viewerCount} viewers are here.` : 'Stream just went live.';
-    const meta = streamMetadataLine();
-    return `${STREAMER_DISPLAY_NAME}'s Twitch stream just went LIVE. ${viewers}${meta ? ` ${meta}` : ''}\n\nGive a hype stream-start greeting with VOICE energy. You MUST open with exactly "I AM ALIVE!" as the first words, then welcome chat and weave in this cannabis fact naturally: "${cannabisFact}"\nKeep it fun, OG, and welcoming.`;
-  }, [streamMetadataLine]);
-
-  const buildStreamGoodbyePrompt = useCallback(() =>
-    'The Twitch stream just ended. Give a warm, brief goodbye to chat (1-2 sentences). Chat-only, no voice.',
-  []);
-
-  const buildStreamSummaryPrompt = useCallback(() => {
-    const messages = sampleSessionChat(120);
-    const durationMin = streamStartedAtRef.current
-      ? Math.max(1, Math.round((Date.now() - streamStartedAtRef.current) / 60_000))
-      : null;
-    const uniqueChatters = new Set(messages.map((m) => m.user.toLowerCase())).size;
-    const lines = messages.length
-      ? messages.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
-      : '(very little chat captured this stream)';
-    const durationLine = durationMin ? `Stream ran about ${durationMin} minutes.` : '';
-    return `The stream just ended. Write a recap for Twitch chat (chat-only, no voice).\n${durationLine} ${messages.length} messages logged from ~${uniqueChatters} chatters.\n\nChat sample:\n${lines}\n\nTwo or three sentences: a highlight, a shout-out if someone stood out, and thanks. Stay under 450 characters. Only reference usernames/topics above.`;
-  }, [sampleSessionChat]);
-
-  const buildComebackPrompt = useCallback((user: string, message: string) => {
-    const recent = recentChatRef.current.slice(0, 6);
-    const context = recent.length
-      ? recent.map((entry) => `- ${entry.user}: ${entry.text}`).join('\n')
-      : '(no other recent lines)';
-    return `You were trying to stay quiet, but chat kept talking about you. ${user} said: "${message}"\n\nRecent chat:\n${context}\n\nSnap back with a funny, crusty call-out — you're annoyed they couldn't let you chill. Roast ${user} by name; keep it playful, not cruel.`;
-  }, []);
+  // Prompt text lives in lib/elroy-prompts.ts (pure + testable); this wires it to live state.
+  const promptBuilders = useMemo(() => createElroyPromptBuilders({
+    streamer: STREAMER_DISPLAY_NAME,
+    checkinWindowMs: STREAM_CHECKIN_MS,
+    recentChat: () => recentChatRef.current,
+    hostSpeech: () => studioRef.current.recentHostSpeech,
+    streamMetadataLine: () => streamMetadataLine(),
+    sampleSessionChat: (maxLines) => sampleSessionChat(maxLines),
+    streamStartedAt: () => streamStartedAtRef.current,
+  }), [sampleSessionChat, streamMetadataLine]);
+  const {
+    buildRoastRedeemPrompt,
+    buildAskRedeemPrompt,
+    buildChatAwarePrompt,
+    buildHostAwarePrompt,
+    buildMentionPrompt,
+    buildLRoyRoastPrompt,
+    buildTriviaCheatRoastPrompt,
+    buildSubPrompt,
+    buildRaidPrompt,
+    buildBitsPrompt,
+    buildStreamCheckinPrompt,
+    buildStreamGreetingPrompt,
+    buildStreamGoodbyePrompt,
+    buildStreamSummaryPrompt,
+    buildComebackPrompt,
+  } = promptBuilders;
 
   const isTriviaRoundLive = useCallback(() => {
     const active = activeTriviaRef.current;
@@ -1512,6 +1469,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       skipDing?: boolean;
       bypassVoiceCooldown?: boolean;
       voicePriority?: 'celebration' | 'normal';
+      /** Viewer login whose memory file should inform the reply. */
+      viewer?: string;
     } = {},
   ) => {
     try {
@@ -1529,8 +1488,12 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         const res = await fetch('/api/quota', {
           headers: controlHeaders(),
         });
-        const d = await res.json();
-        void sayChat(`@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate}.`);
+        const d = await res.json().catch(() => ({})) as { remaining?: unknown; resetDate?: string };
+        if (!res.ok || typeof d.remaining !== 'number') {
+          void sayChat(`@${user} can't read my voice quota right now — try again in a bit.`);
+          return;
+        }
+        void sayChat(`@${user} I got ${d.remaining.toLocaleString()} chars until ${d.resetDate ?? 'the next reset'}.`);
         return;
       }
 
@@ -1564,13 +1527,17 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         ? `- Voice: 2-3 sentences, about 180-${MAX_VOICE_REPLY_CHARS} characters total. Say the full thought — do not stop mid-sentence.`
         : `- Chat only: 2-4 sentences, about 200-${MAX_TWITCH_CHAT_CHARS} characters total.
 - Hard cap ${MAX_TWITCH_CHAT_CHARS} characters. No bullet lists or paragraphs — keep it flowing chat prose.`;
-      const fullPrompt = `${input}${directiveBlock}\n\nResponse requirements:\n${lengthRule}\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
+      const recentReplies = recentElroyRepliesRef.current;
+      const antiRepeatBlock = recentReplies.length
+        ? `\n\nYour last few lines in chat (do NOT reuse their openers, jokes, catchphrases, or structure):\n${recentReplies.map((line) => `- ${line}`).join('\n')}`
+        : '';
+      const fullPrompt = `${input}${directiveBlock}${antiRepeatBlock}\n\nResponse requirements:\n${lengthRule}\n- Keep the same OG personality and rhythm.\n${personalizationRule}`;
       let res: Response;
       try {
         res = await fetchWithTimeout('/api/chat', {
           method: 'POST',
           headers: controlHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({ prompt: fullPrompt }),
+          body: JSON.stringify({ prompt: fullPrompt, viewer: opts.viewer }),
         });
       } catch (error) {
         const timedOut = error instanceof DOMException && error.name === 'AbortError';
@@ -1615,6 +1582,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         });
       }
       const safeChatText = formatChatReplyBody(data.text, user);
+      recentElroyRepliesRef.current = [
+        ...recentElroyRepliesRef.current,
+        safeChatText.slice(0, 160),
+      ].slice(-RECENT_REPLY_MEMORY);
       setLog(p => [{ text: safeChatText }, ...p].slice(0, 5));
       await sayChat(user ? `@${user} ${safeChatText}` : safeChatText);
 
@@ -1693,6 +1664,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       skipDing?: boolean;
       bypassVoiceCooldown?: boolean;
       voicePriority?: 'celebration' | 'normal';
+      /** Viewer login whose memory file should inform the reply. */
+      viewer?: string;
     } = {},
   ) => {
     responseQueueRef.current = responseQueueRef.current
@@ -1848,7 +1821,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       void pollLiveDirectives();
       void pollBotControls();
     }, DIRECTIVE_POLL_MS);
+    let studioTick = 0;
     studioPollRef.current = setInterval(() => {
+      // Only the running bot needs Studio state. Poll fast while the listener is live
+      // (voice gating needs it), otherwise check every ~10s to notice when Studio starts.
+      if (!isActiveRef.current) return;
+      studioTick += 1;
+      const studioLive = studioRef.current.listening && studioRef.current.listenerAlive;
+      if (!studioLive && studioTick % 20 !== 0) return;
       void pollStudioStatus();
     }, STUDIO_POLL_MS);
     return () => {
@@ -1943,13 +1923,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     bitsAmount?: number,
     memoryEvent?: Record<string, unknown>,
   ) => {
-    if (!streamLiveRef.current || isFullyMuted() || !canCelebrate(kind)) return;
+    if (!username.trim()) return;
     const dedupeKey = kind === 'bits'
       ? `bits:${username.toLowerCase()}:${bitsAmount ?? 0}`
       : `${kind}:${username.toLowerCase()}`;
+    // Same event arriving from both IRC and EventSub — handle it once.
     if (shouldSkipDuplicateCelebration(dedupeKey, kind === 'raid' ? 60_000 : 30_000)) return;
 
-    lastCelebrationRef.current = Date.now();
+    // Always remember supporters, even offline or mid-burst, so !aboutme stays accurate.
     if (kind === 'sub') {
       const payload = memoryEvent ?? {};
       const tenure = subTenureFromEventPayload(payload as Record<string, unknown>);
@@ -1963,6 +1944,22 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
     if (kind === 'bits') rememberUser(username, username, { type: 'bits', amount: bitsAmount }, controlHeaders());
 
+    if (!streamLiveRef.current || isFullyMuted()) return;
+
+    if (!canCelebrate(kind)) {
+      // Gift recipients arrive as a flood of sub events during a gift bomb — the gifter gets thanked.
+      if (memoryEvent?.is_gift === true) return;
+      // Burst (sub train, bits spam): skip the AI line + voice, but never leave a supporter unthanked.
+      const quickLine = kind === 'bits'
+        ? `💎 @${username} thank you for the bits!`
+        : kind === 'raid'
+          ? `🚨 @${username} thank you for the raid!`
+          : `💜 @${username} thank you for the sub!`;
+      void sayChat(quickLine);
+      return;
+    }
+
+    lastCelebrationRef.current = Date.now();
     const sfxId = kind === 'sub' || kind === 'raid'
       ? 'sub_fanfare'
       : 'bits_kaching';
@@ -1975,7 +1972,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       forceVoice: true,
       voicePriority: 'celebration',
     });
-  }, [buildBitsPrompt, buildRaidPrompt, buildSubPrompt, controlHeaders, playElroySfx, queueBongLogic, shouldSkipDuplicateCelebration]);
+  }, [buildBitsPrompt, buildRaidPrompt, buildSubPrompt, controlHeaders, playElroySfx, queueBongLogic, sayChat, shouldSkipDuplicateCelebration]);
 
   const handleRaid = useCallback(async (login: string, viewers: number) => {
     if (!login.trim()) return;
@@ -2202,8 +2199,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       onStreamStarted(viewerCount);
     } else if (wasLive && !isLive) {
       onStreamEnded();
+    } else if (isLive) {
+      // Keep the session's savedAt fresh during quiet stretches so a reload mid-stream still resumes.
+      persistStreamSession();
     }
-  }, [fetchStreamStatus, onStreamEnded, onStreamStarted]);
+  }, [fetchStreamStatus, onStreamEnded, onStreamStarted, persistStreamSession]);
 
   const expireTriviaIfNeeded = useCallback(() => {
     const active = activeTriviaRef.current;
@@ -2211,6 +2211,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     if (Date.now() - active.askedAt < TRIVIA_ANSWER_WINDOW_MS) return;
 
     activeTriviaRef.current = null;
+    setWidgetTrivia(null);
     void postTwitchAnnounce(
       `⏰ Trivia time's up! Nobody got it — the answer was ${active.displayAnswer}.`,
       'purple',
@@ -2315,6 +2316,13 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       };
 
       const roundPoints = Math.max(1, Number(picked.points) || 1);
+      if (widgetTriviaTimerRef.current) clearTimeout(widgetTriviaTimerRef.current);
+      setWidgetTrivia({
+        category: picked.category,
+        question: picked.question,
+        points: roundPoints,
+        endsAt: Date.now() + TRIVIA_ANSWER_WINDOW_MS,
+      });
       const requestNote = options?.requestedBy ? ` (requested by @${options.requestedBy})` : '';
       void postTwitchAnnounce(
         `${triviaIntroFor(picked.category)} ${picked.question} — first correct answer gets ${roundPoints} point${roundPoints === 1 ? '' : 's'}!${requestNote}`,
@@ -2432,6 +2440,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     if (!streamLiveRef.current || isFullyMuted()) return;
 
     lastSpotifyTrackIdRef.current = track.id;
+    setWidgetTrack({ name: track.name, artists: track.artists.join(', ') });
+    if (widgetTrackTimerRef.current) clearTimeout(widgetTrackTimerRef.current);
+    widgetTrackTimerRef.current = setTimeout(() => setWidgetTrack(null), 15_000);
     void queueBongLogic(buildSpotifyTrackPrompt(track), requestedBy, { chatOnly: true });
   }, [queueBongLogic]);
 
@@ -2537,6 +2548,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
 
     void playElroySfx('sub_fanfare');
+    setWidgetTrivia((prev) => (prev ? { ...prev, winner: username, answer: active.displayAnswer } : prev));
+    if (widgetTriviaTimerRef.current) clearTimeout(widgetTriviaTimerRef.current);
+    widgetTriviaTimerRef.current = setTimeout(() => setWidgetTrivia(null), 10_000);
     void sayChat(
       `🎉 @${username} got it FIRST! Correct — ${active.displayAnswer}. (+${awardedPoints} point${awardedPoints === 1 ? '' : 's'} • ${totalWins} total)`,
     );
@@ -2602,6 +2616,24 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   }, [sayChat]);
 
   const blackjackPendingDareRef = useRef<Set<string>>(new Set());
+  // Which casino tables need ticking. Start true so the first tick syncs with Redis after a reload;
+  // a tick that reports idle turns it off, and any player command turns it back on.
+  const gameActiveRef = useRef({ blackjack: true, roulette: true, pick3: true, pick4: true });
+  const trackGameActivity = useCallback((
+    game: 'blackjack' | 'roulette' | 'pick3' | 'pick4',
+    action: string,
+    data: { active?: boolean } | null,
+  ) => {
+    if (action === 'tick') {
+      if (data?.active === false) gameActiveRef.current[game] = false;
+      if (typeof data?.active === 'boolean') {
+        const open = data.active;
+        setWidgetTables((prev) => (prev[game] === open ? prev : { ...prev, [game]: open }));
+      }
+    } else {
+      gameActiveRef.current[game] = true;
+    }
+  }, []);
 
   const postBlackjackAction = useCallback(async (payload: {
     action: string;
@@ -2610,15 +2642,18 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     amount?: number;
     betInput?: string;
     message?: string;
+    target?: string;
     isMod?: boolean;
   }) => {
     try {
+      if (payload.action !== 'tick') trackGameActivity('blackjack', payload.action, null);
       const res = await fetch('/api/blackjack/action', {
         method: 'POST',
         headers: controlHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
       });
       const data = await res.json();
+      if (payload.action === 'tick') trackGameActivity('blackjack', 'tick', data);
       if (Array.isArray(data.messages) && data.messages.length) {
         sayBlackjackLines(data.messages);
       }
@@ -2627,7 +2662,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       console.warn('Blackjack action failed', error);
       return null;
     }
-  }, [controlHeaders, sayBlackjackLines]);
+  }, [controlHeaders, sayBlackjackLines, trackGameActivity]);
 
   const tryCompleteDareRitual = useCallback((
     username: string,
@@ -2650,7 +2685,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   }, [postBlackjackAction]);
 
   const tickBlackjackTable = useCallback(() => {
-    if (!streamLiveRef.current || isFullyMuted()) return;
+    if (!streamLiveRef.current || isFullyMuted() || !gameActiveRef.current.blackjack) return;
     void postBlackjackAction({ action: 'tick', username: 'elroy', displayName: 'Elroy' });
   }, [postBlackjackAction]);
 
@@ -2663,12 +2698,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     isMod?: boolean;
   }) => {
     try {
+      if (payload.action !== 'tick') trackGameActivity('roulette', payload.action, null);
       const res = await fetch('/api/roulette/action', {
         method: 'POST',
         headers: controlHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
       });
       const data = await res.json();
+      if (payload.action === 'tick') trackGameActivity('roulette', 'tick', data);
       if (Array.isArray(data.messages) && data.messages.length) {
         sayBlackjackLines(data.messages);
       }
@@ -2677,10 +2714,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       console.warn('Roulette action failed', error);
       return null;
     }
-  }, [controlHeaders, sayBlackjackLines]);
+  }, [controlHeaders, sayBlackjackLines, trackGameActivity]);
 
   const tickRouletteTable = useCallback(() => {
-    if (!streamLiveRef.current || isFullyMuted()) return;
+    if (!streamLiveRef.current || isFullyMuted() || !gameActiveRef.current.roulette) return;
     void postRouletteAction({ action: 'tick', username: 'elroy', displayName: 'Elroy' });
   }, [postRouletteAction]);
 
@@ -2695,12 +2732,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     isMod?: boolean;
   }) => {
     try {
+      if (payload.action !== 'tick') trackGameActivity(payload.game, payload.action, null);
       const res = await fetch('/api/pick-numbers/action', {
         method: 'POST',
         headers: controlHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
       });
       const data = await res.json();
+      if (payload.action === 'tick') trackGameActivity(payload.game, 'tick', data);
       if (Array.isArray(data.messages) && data.messages.length) {
         sayBlackjackLines(data.messages);
       }
@@ -2709,12 +2748,16 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       console.warn('Pick numbers action failed', error);
       return null;
     }
-  }, [controlHeaders, sayBlackjackLines]);
+  }, [controlHeaders, sayBlackjackLines, trackGameActivity]);
 
   const tickPickGames = useCallback(() => {
     if (!streamLiveRef.current || isFullyMuted()) return;
-    void postPickAction({ action: 'tick', game: 'pick3', username: 'elroy', displayName: 'Elroy' });
-    void postPickAction({ action: 'tick', game: 'pick4', username: 'elroy', displayName: 'Elroy' });
+    if (gameActiveRef.current.pick3) {
+      void postPickAction({ action: 'tick', game: 'pick3', username: 'elroy', displayName: 'Elroy' });
+    }
+    if (gameActiveRef.current.pick4) {
+      void postPickAction({ action: 'tick', game: 'pick4', username: 'elroy', displayName: 'Elroy' });
+    }
   }, [postPickAction]);
 
   const announceCommandHelp = useCallback(() => {
@@ -2766,7 +2809,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
     if (cmd === 'bet') {
       const match = rawMessage.trim().match(/^!bet\s+(\S+)$/i);
-      if (!match) return;
+      if (!match) {
+        void sayChat(`@${username} use !bet <amount> or !bet all`);
+        return;
+      }
       void postBlackjackAction({
         action: 'bet',
         username,
@@ -2811,6 +2857,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
     if (cmd === 'bjtop' || cmd === 'bjlb') {
       void postBlackjackAction({ action: 'leaders', username, displayName });
+      return;
+    }
+    if (cmd === 'give') {
+      const [, target = '', amount = ''] = rawMessage.trim().split(/\s+/);
+      void postBlackjackAction({ action: 'give', username, displayName, target, betInput: amount });
       return;
     }
     if (cmd === 'bjstop' && isMod) {
@@ -2972,11 +3023,19 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
     lastSpotifyTrackIdRef.current = null;
     activeTriviaRef.current = null;
+    setWidgetTrivia(null);
+    setWidgetTrack(null);
+    setWidgetTables({ blackjack: false, roulette: false, pick3: false, pick4: false });
     triviaAskInFlightRef.current = false;
     streamLiveRef.current = false;
   }, []);
 
-  const handleElroyMention = useCallback((username: string, displayName: string, message: string) => {
+  const handleElroyMention = useCallback((
+    username: string,
+    displayName: string,
+    message: string,
+    isBroadcaster = false,
+  ) => {
     if (isFullyMuted()) return;
     const normalizedUser = username.toLowerCase();
     if (moderateOffensiveChatter(username, displayName, undefined)) return;
@@ -3000,7 +3059,12 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       void queueBongLogic(buildComebackPrompt(username, message), username, { chatOnly: true });
       return;
     }
-    void queueBongLogic(buildMentionPrompt(username, message), username);
+    // One viewer can't monopolize Elroy (or the Gemini/ElevenLabs budget) by spamming his name.
+    const now = Date.now();
+    const lastReplyAt = lastMentionReplyByUserRef.current.get(normalizedUser) ?? 0;
+    if (!isBroadcaster && now - lastReplyAt < MENTION_USER_COOLDOWN_MS) return;
+    lastMentionReplyByUserRef.current.set(normalizedUser, now);
+    void queueBongLogic(buildMentionPrompt(username, message, isBroadcaster), username, { viewer: username });
   }, [announceStreamMetadata, buildComebackPrompt, buildMentionPrompt, controlHeaders, isElroySystemBroadcast, isKnownElroySpeakerLogin, moderateOffensiveChatter, queueBongLogic, requestSpotifyComment]);
 
   const handleLRoyMisname = useCallback((username: string, displayName: string, message: string) => {
@@ -3086,6 +3150,58 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     } catch (error) {
       console.warn('Trivia leaderboard command failed', error);
       void sayChat(user ? `@${user} leaderboard unavailable right now.` : 'Leaderboard unavailable right now.');
+    }
+  }, [sayChat]);
+
+  const resolveChannelRewards = useCallback(async () => {
+    try {
+      const res = await fetch('/api/twitch/rewards', { headers: controlHeaders(), cache: 'no-store' });
+      const data = await res.json() as { roast?: string; ask?: string; error?: string };
+      rewardIdsRef.current = { roast: data.roast, ask: data.ask };
+      if (data.error) console.info('Channel-point rewards:', data.error);
+      else console.info('Channel-point rewards:', rewardIdsRef.current);
+    } catch (error) {
+      console.warn('Channel-point reward lookup failed', error);
+    }
+  }, [controlHeaders]);
+
+  /** Returns true when the message was a Roast Me / Ask Elroy redemption and has been handled. */
+  const tryHandleRewardRedemption = useCallback((
+    tags: tmi.ChatUserstate,
+    username: string,
+    message: string,
+  ) => {
+    const rewardId = (tags as Record<string, string | undefined>)['custom-reward-id'];
+    if (!rewardId) return false;
+    const { roast, ask } = rewardIdsRef.current;
+    if (rewardId !== roast && rewardId !== ask) return false;
+    if (isFullyMuted()) {
+      void sayChat(`@${username} Elroy's muted right now — ask the mods to refund your points.`);
+      return true;
+    }
+    const prompt = rewardId === roast
+      ? buildRoastRedeemPrompt(username, message)
+      : buildAskRedeemPrompt(username, message);
+    if (rewardId === roast) void playElroySfx('roast_sting');
+    // Viewers paid for this — skip the usual voice cooldown.
+    void queueBongLogic(prompt, username, {
+      viewer: username,
+      forceVoice: true,
+      bypassVoiceCooldown: true,
+      voicePriority: 'celebration',
+    });
+    return true;
+  }, [buildAskRedeemPrompt, buildRoastRedeemPrompt, playElroySfx, queueBongLogic, sayChat]);
+
+  const announceTriviaSeason = useCallback(async (user: string) => {
+    try {
+      const res = await fetch('/api/trivia/season', { cache: 'no-store' });
+      const data = await res.json() as { message?: string };
+      if (!res.ok || !data.message) throw new Error('season lookup failed');
+      void sayChat(`@${user} ${data.message}`);
+    } catch (error) {
+      console.warn('Trivia season command failed', error);
+      void sayChat(`@${user} season standings unavailable right now.`);
     }
   }, [sayChat]);
 
@@ -3249,6 +3365,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         return;
       }
 
+      if (tryHandleRewardRedemption(t, username, m)) {
+        rememberChatLine(username, m);
+        return;
+      }
+
       const isWizebot = normalizedUser === 'wizebot';
 
       if (!m.startsWith('!')) {
@@ -3277,7 +3398,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
           if (misnamesElroyAsLRoy(m)) {
             handleLRoyMisname(username, displayName, m);
           } else if (mentionsElroy(m)) {
-            handleElroyMention(username, displayName, m);
+            handleElroyMention(username, displayName, m, isBroadcaster);
           } else if (streamLiveRef.current && !isFullyMuted() && !isSilenced() && !isBroadcaster) {
             chatMessageCountRef.current += 1;
             if (
@@ -3292,156 +3413,67 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
           }
         }
       }
-      if (m.toLowerCase() === '!quota') {
-        if (isFullyMuted()) return;
-        return queueBongLogic('', t.username, { isQuota: true });
-      }
-      if (m.toLowerCase() === '!leaderboard' || m.toLowerCase() === '!lb') {
-        if (isFullyMuted()) return;
-        return void announceTriviaLeaderboard(t.username);
-      }
-      if (m.toLowerCase() === '!aboutme') {
-        if (isFullyMuted()) return;
-        return void announceAboutMe(username);
-      }
-      const lowerCmd = m.toLowerCase().trim();
-      if (lowerCmd === '!commands' || lowerCmd === '!cmds' || lowerCmd === '!help') {
-        if (isFullyMuted()) return;
-        return void announceCommandsLink(username);
-      }
-      if (lowerCmd === '!trivia' || lowerCmd.startsWith('!trivia ')) {
-        if (isFullyMuted()) return;
-        return void handleTriviaRequest(username, m);
-      }
-      if (lowerCmd === '!np' || lowerCmd === '!nowplaying' || lowerCmd === '!song') {
-        if (isFullyMuted()) return;
-        return void requestSpotifyComment(username);
-      }
-      if (lowerCmd === '!clip' || lowerCmd === '!clipthat') {
-        if (isFullyMuted()) return;
-        return void handleClipCommand(username);
-      }
-      if (lowerCmd.startsWith('!poll')) {
-        if (isFullyMuted()) return;
-        return void handlePollCommand(username, m, t.mod === true || isBroadcaster);
-      }
-      if (lowerCmd === '!stream' || lowerCmd === '!title' || lowerCmd === '!game' || lowerCmd === '!category') {
-        if (isFullyMuted()) return;
-        return void announceStreamMetadata(username);
-      }
-      if (lowerCmd === '!bj' || lowerCmd === '!blackjack') {
-        return handleBlackjackCommand('bj', username, displayName, normalizedChannel, t.mod === true || isBroadcaster, m);
-      }
-      if (/^!bet\s+\S+$/i.test(lowerCmd)) {
-        return handleBlackjackCommand('bet', username, displayName, normalizedChannel, false, m);
-      }
-      if (lowerCmd === '!double' || lowerCmd === '!dd') {
-        return handleBlackjackCommand('double', username, displayName, normalizedChannel, false, m);
-      }
-      if (lowerCmd === '!hit' || lowerCmd === '!h') {
-        return handleBlackjackCommand('hit', username, displayName, normalizedChannel, false, m);
-      }
-      if (lowerCmd === '!stand' || lowerCmd === '!s') {
-        return handleBlackjackCommand('stand', username, displayName, normalizedChannel, false, m);
-      }
-      if (lowerCmd === '!table' || lowerCmd === '!bjtable') {
-        return handleBlackjackCommand('table', username, displayName, normalizedChannel, false, m);
-      }
-      if (lowerCmd === '!chips') {
-        return handleBlackjackCommand('chips', username, displayName, normalizedChannel, false, m);
-      }
-      if (lowerCmd === '!dare') {
-        return handleBlackjackCommand('dare', username, displayName, normalizedChannel, false, m);
-      }
-      if (lowerCmd === '!loan') {
-        return handleBlackjackCommand('loan', username, displayName, normalizedChannel, false, m);
-      }
-      if (lowerCmd === '!debt') {
-        return handleBlackjackCommand('debt', username, displayName, normalizedChannel, false, m);
-      }
-      if (lowerCmd === '!bjtop' || lowerCmd === '!bjlb') {
-        return handleBlackjackCommand('bjtop', username, displayName, normalizedChannel, false, m);
-      }
-      if (lowerCmd === '!bjstop') {
-        return handleBlackjackCommand('bjstop', username, displayName, normalizedChannel, t.mod === true || isBroadcaster, m);
-      }
-      if (lowerCmd === '!roulette' || lowerCmd === '!spin') {
-        return handleRouletteCommand('roulette', username, displayName, t.mod === true || isBroadcaster, m);
-      }
-      if (lowerCmd === '!rtable' || lowerCmd === '!rstatus') {
-        return handleRouletteCommand('rtable', username, displayName, t.mod === true || isBroadcaster, m);
-      }
-      if (lowerCmd === '!rstop') {
-        return handleRouletteCommand('rstop', username, displayName, t.mod === true || isBroadcaster, m);
-      }
-      if (/^!rbet\s+\S+\s+\S+$/i.test(lowerCmd)) {
-        return handleRouletteCommand('rbet', username, displayName, t.mod === true || isBroadcaster, m);
-      }
-      if (lowerCmd === '!pick3' || lowerCmd === '!p3') {
-        return handlePickCommand('pick3', 'pick3', username, displayName, t.mod === true || isBroadcaster, m);
-      }
-      if (lowerCmd === '!p3table' || lowerCmd === '!pick3table') {
-        return handlePickCommand('pick3', 'pick3table', username, displayName, t.mod === true || isBroadcaster, m);
-      }
-      if (lowerCmd === '!p3stop' || lowerCmd === '!pick3stop') {
-        return handlePickCommand('pick3', 'pick3stop', username, displayName, t.mod === true || isBroadcaster, m);
-      }
-      if (/^!p3bet\s+\S+\s+\d+\s+\S+$/i.test(lowerCmd)) {
-        return handlePickCommand('pick3', 'p3bet', username, displayName, t.mod === true || isBroadcaster, m);
-      }
-      if (lowerCmd === '!pick4' || lowerCmd === '!p4') {
-        return handlePickCommand('pick4', 'pick4', username, displayName, t.mod === true || isBroadcaster, m);
-      }
-      if (lowerCmd === '!p4table' || lowerCmd === '!pick4table') {
-        return handlePickCommand('pick4', 'pick4table', username, displayName, t.mod === true || isBroadcaster, m);
-      }
-      if (lowerCmd === '!p4stop' || lowerCmd === '!pick4stop') {
-        return handlePickCommand('pick4', 'pick4stop', username, displayName, t.mod === true || isBroadcaster, m);
-      }
-      if (/^!p4bet\s+\S+\s+\d+\s+\S+$/i.test(lowerCmd)) {
-        return handlePickCommand('pick4', 'p4bet', username, displayName, t.mod === true || isBroadcaster, m);
-      }
-      if (m.toLowerCase() === '!ding' || m.toLowerCase() === '!gong') {
-        const isModerator = t.mod === true;
-        if (isBroadcaster || isModerator) {
-          return toggleDing(t.username);
-        }
-        return;
-      }
-      if (m.toLowerCase() === '!elroyoff') {
-        const isModerator = t.mod === true;
-        if (isBroadcaster || isModerator) {
-          return void stopBot(t.username);
-        }
-        return;
-      }
-      if (m.toLowerCase() === '!voice') {
-        const isModerator = t.mod === true;
-        if (isBroadcaster || isModerator) {
-          return toggleVoice(t.username);
-        }
-        return;
-      }
-      if (m.toLowerCase().startsWith('!volume')) {
-        const isModerator = t.mod === true;
-        if (!isBroadcaster && !isModerator) return;
-        const arg = m.slice('!volume'.length).trim();
-        if (!arg) {
-          const pct = Math.round(volumeRef.current * 100);
-          void sayChat(`@${t.username} volume ${pct}%.`);
+      const command = parseChatCommand(m);
+      if (!command) return;
+      if (isFullyMuted() && !COMMANDS_ALLOWED_WHILE_MUTED.has(command.id)) return;
+      const isMod = t.mod === true || isBroadcaster;
+      const arg = command.args.join(' ');
+
+      switch (command.id) {
+        case 'quota': return void queueBongLogic('', username, { isQuota: true });
+        case 'leaderboard': return void announceTriviaLeaderboard(username);
+        case 'season': return void announceTriviaSeason(username);
+        case 'aboutme': return void announceAboutMe(username);
+        case 'commands': return void announceCommandsLink(username);
+        case 'trivia': return void handleTriviaRequest(username, m);
+        case 'np': return void requestSpotifyComment(username);
+        case 'clip': return void handleClipCommand(username);
+        case 'poll': return void handlePollCommand(username, m, isMod);
+        case 'stream': return void announceStreamMetadata(username);
+
+        case 'bj': case 'bet': case 'hit': case 'stand': case 'double': case 'table':
+        case 'chips': case 'dare': case 'loan': case 'debt': case 'bjtop': case 'bjstop': case 'give':
+          return handleBlackjackCommand(command.id, username, displayName, normalizedChannel, isMod, m);
+
+        case 'roulette': case 'rtable': case 'rstop': case 'rbet':
+          return handleRouletteCommand(command.id, username, displayName, isMod, m);
+
+        case 'pick3': case 'p3table': case 'p3stop': case 'p3bet':
+          return handlePickCommand('pick3', command.id, username, displayName, isMod, m);
+        case 'pick4': case 'p4table': case 'p4stop': case 'p4bet':
+          return handlePickCommand('pick4', command.id, username, displayName, isMod, m);
+
+        case 'ding':
+          if (isMod) toggleDing(username);
           return;
-        }
-        const deltaMatch = arg.match(/^([+-])(\d+)$/);
-        if (deltaMatch) {
-          const delta = (deltaMatch[1] === '+' ? 1 : -1) * Number(deltaMatch[2]) / 100;
-          return setVolume(volumeRef.current + delta, t.username);
-        }
-        const parsed = Number(arg.replace(/%$/, ''));
-        if (!Number.isFinite(parsed)) {
-          void sayChat(`@${t.username} use !volume, !volume 50, or !volume +10 / -10.`);
+        case 'voice':
+          if (isMod) toggleVoice(username);
           return;
+        case 'elroyoff':
+          if (isMod) void stopBot(username);
+          return;
+        case 'volume': {
+          if (!isMod) return;
+          if (!arg) {
+            void sayChat(`@${username} volume ${Math.round(volumeRef.current * 100)}%.`);
+            return;
+          }
+          const deltaMatch = arg.match(/^([+-])(\d+)$/);
+          if (deltaMatch) {
+            const delta = (deltaMatch[1] === '+' ? 1 : -1) * Number(deltaMatch[2]) / 100;
+            return setVolume(volumeRef.current + delta, username);
+          }
+          const level = Number(arg.replace(/%$/, ''));
+          if (!Number.isFinite(level)) {
+            void sayChat(`@${username} use !volume, !volume 50, or !volume +10 / -10.`);
+            return;
+          }
+          return setVolume(level / 100, username);
         }
-        return setVolume(parsed / 100, t.username);
+        default: {
+          const unhandled: never = command.id;
+          console.warn('Command has no handler', unhandled);
+        }
       }
     });
 
@@ -3468,7 +3500,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         cumulative_months: tenure.cumulativeMonths ?? 1,
         streak_months: tenure.streakMonths ?? 0,
         tier: userstate['msg-param-sub-plan'],
-        is_gift: userstate['msg-param-sub-plan'] === 'Prime',
+        is_gift: false,
       });
     });
 
@@ -3543,6 +3575,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       }
       restoreStreamSession();
       void ensureEventSubSubscription();
+      void resolveChannelRewards();
       const foundPowerUp = await resolveShutElroyPowerUpId();
       if (foundPowerUp) {
         startPowerupRedemptionPolling();
@@ -3618,8 +3651,17 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   }, [controlSecretReady, searchParams, runDiagnostics]);
   return (
     <div style={{ height: '100vh', padding: '60px', color: 'white', backgroundColor: 'transparent', fontFamily: 'sans-serif' }}>
+      {showWidgets && isActive ? (
+        <OverlayWidgets
+          trivia={widgetTrivia}
+          track={widgetTrack}
+          tables={widgetTables}
+          now={widgetNow}
+        />
+      ) : null}
       <div
         style={{
+          display: !showHud && isActive ? 'none' : undefined,
           position: 'fixed',
           top: 20,
           right: 20,
@@ -3708,6 +3750,79 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+const TRIVIA_CATEGORY_LABEL: Record<TriviaCategory, string> = {
+  cannabis: '🌿 Cannabis trivia',
+  freaky: '🔥 Freaky trivia',
+  music90s: '🎵 90s music trivia',
+};
+
+const widgetCard: React.CSSProperties = {
+  background: 'rgba(12, 6, 24, 0.88)',
+  border: '2px solid #9146FF',
+  borderRadius: 16,
+  padding: '14px 18px',
+  color: 'white',
+  boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+  maxWidth: 520,
+};
+
+/** Viewer-facing cards (bottom-left). Hide with ?widgets=off on the OBS source URL. */
+function OverlayWidgets({
+  trivia,
+  track,
+  tables,
+  now,
+}: {
+  trivia: { category: TriviaCategory; question: string; points: number; endsAt: number; winner?: string; answer?: string } | null;
+  track: { name: string; artists: string } | null;
+  tables: { blackjack: boolean; roulette: boolean; pick3: boolean; pick4: boolean };
+  now: number;
+}) {
+  const openTables = [
+    tables.blackjack ? '🃏 Blackjack — !bj' : '',
+    tables.roulette ? '🎡 Roulette — !rbet' : '',
+    tables.pick3 ? '🎲 Pick 3 — !p3bet' : '',
+    tables.pick4 ? '🎲 Pick 4 — !p4bet' : '',
+  ].filter(Boolean);
+  const secondsLeft = trivia ? Math.max(0, Math.ceil((trivia.endsAt - now) / 1000)) : 0;
+  const clock = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;
+
+  if (!trivia && !track && !openTables.length) return null;
+
+  return (
+    <div style={{ position: 'fixed', left: 32, bottom: 32, display: 'flex', flexDirection: 'column', gap: 12, zIndex: 900 }}>
+      {trivia ? (
+        <div style={widgetCard}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 16, color: '#C4B5FD', fontWeight: 700 }}>
+            <span>{TRIVIA_CATEGORY_LABEL[trivia.category] ?? 'Trivia'} · {trivia.points} pt{trivia.points === 1 ? '' : 's'}</span>
+            {trivia.winner ? null : <span style={{ fontVariantNumeric: 'tabular-nums', color: secondsLeft <= 60 ? '#FCA5A5' : '#FDE68A' }}>{clock}</span>}
+          </div>
+          <div style={{ fontSize: 24, lineHeight: 1.3, marginTop: 6, fontWeight: 600 }}>{trivia.question}</div>
+          <div style={{ fontSize: 16, marginTop: 8, color: trivia.winner ? '#86EFAC' : 'rgba(255,255,255,0.7)' }}>
+            {trivia.winner
+              ? `🎉 ${trivia.winner} got it — ${trivia.answer}`
+              : 'First correct answer in chat wins'}
+          </div>
+        </div>
+      ) : null}
+      {openTables.length ? (
+        <div style={{ ...widgetCard, padding: '10px 16px', fontSize: 18, fontWeight: 600 }}>
+          {openTables.map((line) => <div key={line}>{line}</div>)}
+        </div>
+      ) : null}
+      {track ? (
+        <div style={{ ...widgetCard, padding: '10px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
+          <span style={{ fontSize: 22 }}>🎶</span>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{track.name}</div>
+            <div style={{ fontSize: 15, color: 'rgba(255,255,255,0.7)' }}>{track.artists}</div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -231,7 +231,7 @@ export async function inspectTwitchChatSend(): Promise<TwitchChatSendStatus> {
     || '';
   const primary = candidates[0];
   const canHelix = candidates.some((candidate) => candidate.scopes.includes('user:write:chat'));
-  const canIrc = candidates.some((candidate) => candidate.scopes.includes('chat:write'));
+  const canIrc = candidates.some((candidate) => (candidate.scopes.includes('chat:edit') || candidate.scopes.includes('chat:write')));
 
   if (
     configuredUsername

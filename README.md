@@ -25,6 +25,20 @@ Elroy is an AI-driven Twitch chat bot and OBS overlay. He listens for mentions, 
 * **Chat:** TMI.js + Twitch Helix
 * **State:** Upstash Redis (trivia scores, games, user memory, live directives) — in-memory fallback locally
 
+## Self-hosting on a VPS (Docker)
+
+`docker compose up -d --build` runs the app, a local Redis (behind an Upstash-compatible REST shim),
+HTTPS via Caddy, and a **headless Studio listener**, so there's no `/studio` browser tab to keep open.
+Step-by-step with every key: [deploy/SETUP-GUIDE.md](deploy/SETUP-GUIDE.md). Server details: [deploy/VPS.md](deploy/VPS.md). Every setting is listed in [.env.example](.env.example).
+
+## Development
+
+```powershell
+npm install
+npm test          # unit tests (vitest): commands, mentions, games, guardrail, prompts
+npm run typecheck
+```
+
 ## Installation
 
 1. **Clone and install**
@@ -105,14 +119,14 @@ Bundled SFX live in `public/sounds/elroy/`. Optional fallback bong: `public/soun
 
 ### Studio broadcast listener
 
-The `/studio` page is a broadcaster browser-capture page that keeps Elroy from talking over the stream. It is still needed because Twitch does not provide raw broadcast audio directly to the Next.js app. Instead, the browser captures the Twitch tab or system audio with your permission.
+The `/studio` page is a broadcaster browser-capture page that keeps Elroy from talking over the stream. **On a VPS you can skip it:** the Docker `listener` service pulls the broadcast audio on the server (see [deploy/VPS.md](deploy/VPS.md#4-the-headless-listener-no-edge-tab)). Otherwise the browser captures the Twitch tab or system audio with your permission.
 
 It is broadcast-audio only: click **Start listening**, then share the Twitch tab or system audio when the browser prompts for screen/tab capture. Elroy does not use a microphone fallback.
 
 While Studio is running:
 
-* `/studio` posts voice activity to `/api/studio/ingest` every ~250ms.
-* The overlay polls `/api/studio/status` every ~500ms.
+* `/studio` (or the headless listener) posts voice activity to `/api/studio/ingest` when talking starts/stops, plus a heartbeat every ~1.5s.
+* The overlay polls `/api/studio/status` every ~500ms while a listener is live (every ~10s otherwise).
 * Before TTS plays, Elroy waits until broadcast audio is quiet, plus the configured silence tail (default **1500ms**).
 * If the stream stays busy for ~30s, Elroy skips voice and leaves the chat reply only.
 * Studio records short broadcast-audio chunks, sends them to `/api/studio/transcribe`, and stores recent host speech in Studio state.
@@ -167,6 +181,7 @@ Elroy ignores his own messages and won't reply to his opening lines or system br
 | --- | --- | --- |
 | `!trivia` | Everyone | Start a trivia round (optional: `cannabis`, `freaky`, `music90s`). Off until someone asks. |
 | `!leaderboard` / `!lb` | Everyone | Trivia leaders (cannabis / freaky / 90s). |
+| `!season` | Everyone | This month's trivia season (all categories, resets on the 1st — `ELROY_TIMEZONE`). |
 
 Categories: **cannabis**, **freaky**, **90s music** — intro emoji/text matches the actual question.
 
@@ -187,6 +202,7 @@ Everyone starts with **1000 chips**. Blackjack, roulette, and Pick 3/4 share the
 | `!loan` | +400 chips, +600 debt (stackable — Elroy roasts you each time) |
 | `!debt` | Outstanding loan |
 | `!bjtop` / `!bjlb` | Chip high rollers |
+| `!give @user <10-200>` | Send chips to someone (once a minute, not while you owe loan debt) |
 | `!bjstop` | **Mod** — cancel table, refund bets |
 
 #### Roulette
@@ -240,6 +256,9 @@ Example: `!p3bet straight 420 50` · `!p4bet box 1234 25`
 * **Highlighted messages** — Treated as notable chat (not spam).
 * **Command list** — Live docs at **`/commands`** (mobile-friendly). Elroy posts the link every **7 minutes** while live; type `!commands` anytime for the URL.
 * **Stream check-ins** — Periodic banter about viewer count and stream status (~15 min).
+* **Channel-point rewards** — create **Roast Me** and **Ask Elroy** rewards with *Require viewer to enter text* on. Elroy roasts the redeemer, or answers their question, with guaranteed voice. They're found by title when `TWITCH_OAUTH_TOKEN` has `channel:read:redemptions`, or you can set `ELROY_REWARD_ROAST_ID` / `ELROY_REWARD_ASK_ID`.
+* **Memory in replies** — when a regular mentions him, Elroy may bring up one thing he knows about them (sub tenure, trivia wins, how often they talk to him).
+* **Guardrail** — every AI line is checked for slurs and hate speech before it's posted. If a viewer baits him, he regenerates or deflects.
 
 ---
 
@@ -262,7 +281,7 @@ Example: `!p3bet straight 420 50` · `!p4bet box 1234 25`
 1. Create a [Spotify Developer app](https://developer.spotify.com/dashboard) with redirect URI `https://your-site.vercel.app/api/spotify/callback`.
 2. Set `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, and optional `SPOTIFY_REDIRECT_URI`.
 3. On **`/control/your-secret`**, click **Connect Spotify account**.
-4. While live, Elroy polls every ~5s and comments when the track changes (smoke/sex ratings, hot takes).
+4. While live, Elroy polls every ~10s and comments when the track changes (smoke/sex ratings, hot takes).
 
 Chat: `!np`, `!nowplaying`, or `!song` for an on-demand take.
 
@@ -301,9 +320,10 @@ Test: `https://your-site.vercel.app/api/sfx/<id>` · Chat: `!quota`
 
 1. Add a **Browser Source**.
 2. URL: `https://your-site.vercel.app/embed/YOUR_ELROY_CONTROL_SECRET` (or local `http://localhost:3000/embed/...`).
+   Add `?hud=off` to hide the diagnostics box on stream, or `?widgets=off` to hide the on-screen trivia/table/now-playing cards.
 3. Match canvas size (e.g. 1920×1080).
 4. Enable **Control audio via OBS** to mix voice separately.
-5. Open `/studio?key=YOUR_ELROY_CONTROL_SECRET` in a normal browser window and click **Start listening**.
+5. Open `/studio?key=YOUR_ELROY_CONTROL_SECRET` in a normal browser window and click **Start listening**. (Skip this and step 6 if the VPS listener is running.)
 6. Share the Twitch stream tab, OBS/program audio, or system audio when prompted. Keep this Studio page open while streaming so Elroy can wait for quiet spots and hear host mentions.
 7. For any Twitch/video source Elroy listens to, set OBS **Advanced Audio Properties** -> **Audio Monitoring** to **Monitor Off** so it does not play through your speakers/headphones.
 

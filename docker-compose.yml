@@ -1,0 +1,79 @@
+# Elroy on a VPS:  cp .env.example .env  →  fill it in  →  docker compose up -d --build
+# See deploy/VPS.md for the full walkthrough.
+
+x-app-env: &app-env
+  # Upstash-compatible REST shim in front of the local Redis — Elroy's code talks to it unchanged.
+  KV_REST_API_URL: http://redis-rest:80
+  KV_REST_API_TOKEN: ${REDIS_REST_TOKEN:?set REDIS_REST_TOKEN in .env}
+  ELROY_PUBLIC_URL: https://${ELROY_DOMAIN:?set ELROY_DOMAIN in .env}
+  # Without a secret every API route is open to the internet — refuse to start.
+  ELROY_CONTROL_SECRET: ${ELROY_CONTROL_SECRET:?set ELROY_CONTROL_SECRET in .env — anyone could drive Elroy without it}
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_TWITCH_CHANNEL: ${NEXT_PUBLIC_TWITCH_CHANNEL:?set NEXT_PUBLIC_TWITCH_CHANNEL in .env}
+        NEXT_PUBLIC_STREAMER_DISPLAY_NAME: ${NEXT_PUBLIC_STREAMER_DISPLAY_NAME:-}
+        NEXT_PUBLIC_TWITCH_BOT_LOGIN: ${NEXT_PUBLIC_TWITCH_BOT_LOGIN:-}
+        ELROY_BUILD_ID: ${ELROY_BUILD_ID:-dev}
+    env_file: .env
+    environment: *app-env
+    depends_on:
+      - redis-rest
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  redis-rest:
+    image: hiett/serverless-redis-http:latest
+    environment:
+      SRH_MODE: env
+      SRH_TOKEN: ${REDIS_REST_TOKEN}
+      SRH_CONNECTION_STRING: redis://redis:6379
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # Hears the broadcast on the server — no /studio browser tab needed. See deploy/VPS.md.
+  listener:
+    build: ./listener
+    environment:
+      ELROY_URL: http://app:3000
+      ELROY_CONTROL_SECRET: ${ELROY_CONTROL_SECRET}
+      NEXT_PUBLIC_TWITCH_CHANNEL: ${NEXT_PUBLIC_TWITCH_CHANNEL}
+      LISTEN_SOURCE: ${LISTEN_SOURCE:-twitch}
+      LISTEN_TRANSCRIBE: ${LISTEN_TRANSCRIBE:-true}
+    ports:
+      # Only used when LISTEN_SOURCE is an SRT URL fed from OBS (lowest delay option).
+      - "${LISTEN_SRT_PORT:-9000}:9000/udp"
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      ELROY_DOMAIN: ${ELROY_DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  caddy-data:
+  caddy-config:

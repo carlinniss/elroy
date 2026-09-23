@@ -119,7 +119,10 @@ export async function POST(request: Request) {
     }
 
     const upstreamForm = new FormData();
-    upstreamForm.set('file', new Blob([bytes], { type: audio.type || 'audio/webm' }), 'broadcast.webm');
+    // OpenAI sniffs the format from the filename — the browser sends webm, the VPS listener sends wav.
+    const audioType = audio.type || 'audio/webm';
+    const extension = audioType.includes('wav') ? 'wav' : audioType.includes('ogg') ? 'ogg' : 'webm';
+    upstreamForm.set('file', new Blob([bytes], { type: audioType }), `broadcast.${extension}`);
     upstreamForm.set('model', openAiAudioModelId());
     upstreamForm.set('language', 'en');
     upstreamForm.set('prompt', [

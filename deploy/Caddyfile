@@ -1,0 +1,6 @@
+# Caddy gets and renews the HTTPS certificate automatically.
+# Twitch EventSub and the Spotify callback both require a public HTTPS URL.
+{$ELROY_DOMAIN} {
+	encode gzip
+	reverse_proxy app:3000
+}

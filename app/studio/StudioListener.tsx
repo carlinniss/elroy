@@ -6,6 +6,8 @@ import { computeMicRms, INITIAL_MIC_VAD_STATE, stepMicVad } from '@/lib/mic-vad'
 
 const SECRET_STORAGE_KEY = 'elroy-control-secret';
 const INGEST_MS = 250;
+/** Send VAD state immediately on change; otherwise only a heartbeat so the overlay knows we're alive. */
+const INGEST_HEARTBEAT_MS = 1500;
 const ANALYSIS_MS = 80;
 const SETTINGS_POLL_MS = 5000;
 const TRANSCRIPT_CHUNK_MS = 10_000;
@@ -440,8 +442,14 @@ export function StudioListener({ initialSecret }: { initialSecret?: string }) {
         setSpeaking(next.speaking);
       }, ANALYSIS_MS);
 
+      let lastSentSpeaking: boolean | null = null;
+      let lastSentAt = 0;
       ingestTimerRef.current = setInterval(() => {
         const vad = vadRef.current;
+        const now = Date.now();
+        if (vad.speaking === lastSentSpeaking && now - lastSentAt < INGEST_HEARTBEAT_MS) return;
+        lastSentSpeaking = vad.speaking;
+        lastSentAt = now;
         void postIngest({
           listening: true,
           inputSource: 'broadcast',

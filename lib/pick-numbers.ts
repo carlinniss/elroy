@@ -61,6 +61,8 @@ export type PickActionResult = {
   ok: boolean;
   messages: string[];
   error?: string;
+  /** Tick only: whether the table still needs ticking. */
+  active?: boolean;
 };
 
 type MemoryStore = {
@@ -302,7 +304,7 @@ function betLabel(bet: PickBet): string {
   return `${typeLabels[bet.type]} ${bet.digits}`;
 }
 
-function evaluateBet(
+export function evaluateBet(
   game: PickGame,
   bet: PickBet,
   draw: string,
@@ -453,9 +455,15 @@ export async function handlePickAction(req: PickActionRequest): Promise<PickActi
   const label = gameLabel(game);
 
   if (req.action === 'tick') {
+    // Idle tables never advance — skip the lock + write round-trip (this runs every few seconds).
+    const peek = await loadTable(game);
+    if (peek.state === 'idle') return { ok: true, messages: [], active: false };
     return withTableMutation(game, async (table) => {
       const advanced = await advancePhase(game, table);
-      return { table: advanced.table, result: { ok: true, messages: advanced.messages } };
+      return {
+        table: advanced.table,
+        result: { ok: true, messages: advanced.messages, active: advanced.table.state !== 'idle' },
+      };
     });
   }
 

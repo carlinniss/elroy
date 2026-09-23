@@ -11,6 +11,7 @@ import {
   recordUserMemory,
 } from '@/lib/user-memory';
 import { getFollowInfo } from '@/lib/twitch-mod';
+import { guardrailFallback, isSafeToPost } from '@/lib/output-guard';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,7 +55,9 @@ export async function GET(request: Request) {
       prompt,
     });
 
-    return Response.json({ known, text: sanitizeElroyModLore(text.trim()) });
+    // Profile notes quote the viewer's own chat, so treat this output like any other brain reply.
+    const reply = sanitizeElroyModLore(text.trim());
+    return Response.json({ known, text: isSafeToPost(reply) ? reply : guardrailFallback() });
   } catch (error) {
     const message = mapBrainErrorMessage(error);
     console.error('ABOUTME BRAIN ERROR:', error instanceof Error ? error.message : error);
