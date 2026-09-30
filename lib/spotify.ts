@@ -6,7 +6,8 @@ const TOKEN_KEY = 'elroy:spotify:tokens';
 const SPOTIFY_ACCOUNTS = 'https://accounts.spotify.com';
 const SPOTIFY_API = 'https://api.spotify.com/v1';
 
-const SCOPES = ['user-read-currently-playing', 'user-read-playback-state'].join(' ');
+// user-modify-playback-state powers song requests (add to queue, skip). Needs Spotify Premium.
+const SCOPES = ['user-read-currently-playing', 'user-read-playback-state', 'user-modify-playback-state'].join(' ');
 
 export type SpotifyTrackSnapshot = {
   id: string;
@@ -236,6 +237,17 @@ async function getAccessToken(): Promise<string | null> {
     console.error('Spotify token refresh failed', error);
     return null;
   }
+}
+
+/** Authenticated call to the Spotify Web API as the connected account. Null when not connected. */
+export async function spotifyUserFetch(path: string, init: RequestInit = {}): Promise<Response | null> {
+  const accessToken = await getAccessToken();
+  if (!accessToken) return null;
+  return fetch(`${SPOTIFY_API}${path}`, {
+    ...init,
+    headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${accessToken}` },
+    cache: 'no-store',
+  });
 }
 
 function parseTrack(item: SpotifyTrack, playback: SpotifyPlayback): SpotifyTrackSnapshot | null {

@@ -17,7 +17,8 @@ export async function redisCommand(command: unknown[]): Promise<unknown | null> 
 
   const res = await fetch(config.url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${config.token}` },
+    // The self-hosted REST shim (Docker) requires the JSON content type; Upstash accepts it too.
+    headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(command),
     cache: 'no-store',
   });
@@ -43,7 +44,8 @@ export async function redisPipeline(commands: unknown[][]): Promise<unknown[] | 
 
   const res = await fetch(getRedisPipelineUrl(config.url), {
     method: 'POST',
-    headers: { Authorization: `Bearer ${config.token}` },
+    // The self-hosted REST shim (Docker) requires the JSON content type; Upstash accepts it too.
+    headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(commands),
     cache: 'no-store',
   });

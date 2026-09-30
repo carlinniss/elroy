@@ -1,5 +1,6 @@
 import { isControlAuthorized } from '@/lib/control-auth';
 import { fetchSpotifyNowPlaying } from '@/lib/spotify';
+import { advanceSongRequests } from '@/lib/song-requests';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,7 +11,14 @@ export async function GET(request: Request) {
 
   try {
     const snapshot = await fetchSpotifyNowPlaying();
-    return Response.json(snapshot, {
+    // The overlay polls this every ~10s while live — that's the song-request clock too.
+    const requests = snapshot.connected
+      ? await advanceSongRequests(snapshot).catch((error) => {
+        console.warn('Song request tick failed', error);
+        return { messages: [], requestedBy: null, intro: null };
+      })
+      : { messages: [], requestedBy: null, intro: null };
+    return Response.json({ ...snapshot, requestMessages: requests.messages, requestedBy: requests.requestedBy, requestIntro: requests.intro }, {
       headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
     });
   } catch (error) {

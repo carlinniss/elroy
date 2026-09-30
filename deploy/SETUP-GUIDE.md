@@ -240,6 +240,13 @@ To turn transcription off, set `LISTEN_TRANSCRIBE=false`.
 
 ---
 
+### Song requests (`!sr`)
+Viewers request songs with `!sr <song or Spotify link>`, and Elroy does a short intro before each one plays. He hypes 90s hip hop and roasts everything else.
+- Needs **Spotify Premium** (Spotify only lets apps add to the queue on Premium).
+- If you connected Spotify before song requests existed, click **Connect Spotify account** in `/control` once more so Elroy gets permission to queue and skip.
+- Limits: mods 5 songs waiting / no cooldown; VIPs and subs 3 / 1–2 min; followers of 3+ days 2 / 3 min; new viewers 1 / 10 min. No songs over 7 minutes.
+- Mods: `!queue` to see the line, `!srremove 2` or `!srremove @user` to remove, `!skip`, `!srclear`, and `!sr off` / `!sr on`.
+
 ## Part 10: Channel-point rewards (optional)
 
 1. Go to the **Twitch Creator Dashboard** and open **Viewer Rewards → Channel Points → Manage Rewards → Add New Custom Reward**.

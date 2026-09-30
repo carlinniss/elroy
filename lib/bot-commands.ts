@@ -12,6 +12,7 @@ export type BotCommandId =
   | 'roulette' | 'rbet' | 'rtable' | 'rstop'
   | 'pick3' | 'pick4' | 'p3bet' | 'p4bet' | 'p3table' | 'p4table' | 'p3stop' | 'p4stop'
   | 'stream' | 'np'
+  | 'sr' | 'queue' | 'wrongsong' | 'srremove' | 'skip' | 'srclear'
   | 'clip' | 'poll' | 'ding' | 'voice' | 'volume' | 'elroyoff';
 
 export type BotCommand = {
@@ -181,6 +182,25 @@ export const BOT_COMMAND_SECTIONS: BotCommandSection[] = [
         aliases: ['!nowplaying', '!song'],
         description: 'Elroy reacts to the current Spotify track (when connected).',
       },
+    ],
+  },
+  {
+    id: 'songs',
+    title: 'Song requests (Spotify)',
+    summary: 'Request songs into the stream music. Mods get the most requests, then VIPs, subs, and followers — brand-new viewers get one at a time.',
+    commands: [
+      {
+        id: 'sr',
+        command: '!sr',
+        aliases: ['!songrequest'],
+        description: 'Request a song by name or Spotify track link. Mods can turn requests on/off with !sr on / !sr off.',
+        example: '!sr Nuthin but a G Thang · !sr https://open.spotify.com/track/…',
+      },
+      { id: 'queue', command: '!queue', aliases: ['!songlist', '!sq'], description: 'See what\'s up next (🔒 = already sent to Spotify).' },
+      { id: 'wrongsong', command: '!wrongsong', description: 'Take back your most recent request.' },
+      { id: 'srremove', command: '!srremove', description: 'Remove a request by its number in !queue, or all of a viewer\'s requests.', audience: 'mod', example: '!srremove 2 · !srremove @someone' },
+      { id: 'skip', command: '!skip', aliases: ['!skipsong'], description: 'Skip the song that\'s playing.', audience: 'mod' },
+      { id: 'srclear', command: '!srclear', description: 'Clear every waiting request.', audience: 'mod' },
     ],
   },
   {

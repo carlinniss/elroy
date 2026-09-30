@@ -39,6 +39,7 @@ import { getBotInstanceId } from '@/lib/bot-instance';
 import { getBuildLabel } from '@/lib/build-version';
 import { formatDirectiveInjection } from '@/lib/live-directives';
 import { createElroyPromptBuilders } from '@/lib/elroy-prompts';
+import type { SongRequestAction } from '@/lib/song-requests';
 import {
   clampReplyLength,
   formatChatReplyBody,
@@ -128,7 +129,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     winner?: string;
     answer?: string;
   } | null>(null);
-  const [widgetTrack, setWidgetTrack] = useState<{ name: string; artists: string } | null>(null);
+  const [widgetTrack, setWidgetTrack] = useState<{ name: string; artists: string; requestedBy?: string } | null>(null);
   const [widgetTables, setWidgetTables] = useState({ blackjack: false, roulette: false, pick3: false, pick4: false });
   const [widgetNow, setWidgetNow] = useState(() => Date.now());
   const widgetTrackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1463,6 +1464,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     streamStartedAt: () => streamStartedAtRef.current,
   }), [sampleSessionChat, streamMetadataLine]);
   const {
+    buildSongRequestIntroPrompt,
     buildRoastRedeemPrompt,
     buildAskRedeemPrompt,
     buildChatAwarePrompt,
@@ -2520,7 +2522,20 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         playing?: boolean;
         track?: SpotifyTrackSnapshot | null;
         reason?: string;
+        requestMessages?: string[];
+        requestedBy?: string | null;
+        requestIntro?: { name: string; artists: string; releaseYear?: string; requestedByDisplay: string } | null;
       };
+      for (const line of data.requestMessages ?? []) {
+        if (line.trim()) void sayChat(line);
+      }
+      if (data.requestIntro) {
+        // Intro plays over the last ~25s of the current song, right before the request comes on.
+        void queueBongLogic(buildSongRequestIntroPrompt(data.requestIntro), undefined, {
+          forceVoice: true,
+          voicePriority: 'celebration',
+        });
+      }
       if (!data.connected) {
         maybeRemindSpotifyReconnect(data.reason);
         return;
@@ -2528,11 +2543,20 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       if (!data.playing || !data.track) return;
       lastSpotifyReconnectReminderAtRef.current = 0;
       if (data.track.id === lastSpotifyTrackIdRef.current) return;
-      commentOnSpotifyTrack(data.track);
+      if (data.requestedBy) {
+        // A request Elroy already introduced — show it on screen, skip the second AI comment.
+        const requester = data.requestedBy;
+        lastSpotifyTrackIdRef.current = data.track.id;
+        setWidgetTrack({ name: data.track.name, artists: data.track.artists.join(', '), requestedBy: requester });
+        if (widgetTrackTimerRef.current) clearTimeout(widgetTrackTimerRef.current);
+        widgetTrackTimerRef.current = setTimeout(() => setWidgetTrack(null), 15_000);
+      } else {
+        commentOnSpotifyTrack(data.track);
+      }
     } catch (error) {
       console.warn('Spotify poll failed', error);
     }
-  }, [commentOnSpotifyTrack, controlHeaders, maybeRemindSpotifyReconnect]);
+  }, [buildSongRequestIntroPrompt, commentOnSpotifyTrack, controlHeaders, maybeRemindSpotifyReconnect, queueBongLogic, sayChat]);
 
   const requestSpotifyComment = useCallback(async (username: string) => {
     if (isFullyMuted()) return;
@@ -3238,6 +3262,22 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     return true;
   }, [buildAskRedeemPrompt, buildRoastRedeemPrompt, playElroySfx, queueBongLogic, sayChat]);
 
+  const postSongRequestAction = useCallback(async (payload: SongRequestAction) => {
+    try {
+      const res = await fetch('/api/spotify/requests', {
+        method: 'POST',
+        headers: controlHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({})) as { messages?: string[] };
+      for (const line of data.messages ?? []) {
+        if (line.trim()) void sayChat(line);
+      }
+    } catch (error) {
+      console.warn('Song request failed', error);
+    }
+  }, [controlHeaders, sayChat]);
+
   const announceTriviaSeason = useCallback(async (user: string) => {
     try {
       const res = await fetch('/api/trivia/season', { cache: 'no-store' });
@@ -3472,6 +3512,19 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         case 'commands': return void announceCommandsLink(username);
         case 'trivia': return void handleTriviaRequest(username, m);
         case 'np': return void requestSpotifyComment(username);
+        case 'sr': {
+          const arg0 = command.args[0]?.toLowerCase();
+          if (isMod && command.args.length === 1 && (arg0 === 'on' || arg0 === 'off')) {
+            return void postSongRequestAction({ action: 'toggle', username, isMod, enabled: arg0 === 'on' });
+          }
+          const role = isMod ? 'mod' : t.badges?.vip ? 'vip' : t.subscriber || t.badges?.subscriber || t.badges?.founder ? 'sub' : 'viewer';
+          return void postSongRequestAction({ action: 'request', username, displayName, role, query: arg });
+        }
+        case 'queue': return void postSongRequestAction({ action: 'list', username });
+        case 'wrongsong': return void postSongRequestAction({ action: 'wrongsong', username, displayName });
+        case 'srremove': return void postSongRequestAction({ action: 'remove', username, isMod, target: arg });
+        case 'skip': return void postSongRequestAction({ action: 'skip', username, isMod });
+        case 'srclear': return void postSongRequestAction({ action: 'clear', username, isMod });
         case 'clip': return void handleClipCommand(username);
         case 'poll': return void handlePollCommand(username, m, isMod);
         case 'stream': return void announceStreamMetadata(username);
@@ -3823,7 +3876,7 @@ function OverlayWidgets({
   now,
 }: {
   trivia: { category: TriviaCategory; question: string; points: number; endsAt: number; winner?: string; answer?: string } | null;
-  track: { name: string; artists: string } | null;
+  track: { name: string; artists: string; requestedBy?: string } | null;
   tables: { blackjack: boolean; roulette: boolean; pick3: boolean; pick4: boolean };
   now: number;
 }) {
@@ -3865,6 +3918,9 @@ function OverlayWidgets({
           <div>
             <div style={{ fontSize: 18, fontWeight: 700 }}>{track.name}</div>
             <div style={{ fontSize: 15, color: 'rgba(255,255,255,0.7)' }}>{track.artists}</div>
+            {track.requestedBy ? (
+              <div style={{ fontSize: 14, color: '#C4B5FD', marginTop: 2 }}>requested by {track.requestedBy}</div>
+            ) : null}
           </div>
         </div>
       ) : null}
