@@ -181,20 +181,29 @@ type SpotifyApiTrack = {
   album?: { release_date?: string };
 };
 
-async function findTrack(query: string): Promise<SpotifyApiTrack | null | 'not_connected'> {
+async function findTrack(query: string): Promise<SpotifyApiTrack | null | 'not_connected' | { status: number }> {
   const id = parseSpotifyTrackRef(query);
-  const res = id
-    ? await spotifyUserFetch(`/tracks/${id}?market=from_token`)
-    : await spotifyUserFetch(`/search?q=${encodeURIComponent(query)}&type=track&limit=1&market=from_token`);
+  const lookup = async (market: boolean) => {
+    const suffix = market ? '&market=from_token' : '';
+    return id
+      ? spotifyUserFetch(`/tracks/${id}${market ? '?market=from_token' : ''}`)
+      : spotifyUserFetch(`/search?q=${encodeURIComponent(query)}&type=track&limit=1${suffix}`);
+  };
+  let res = await lookup(true);
   if (!res) return 'not_connected';
-  if (!res.ok) return null;
+  // Some accounts reject market=from_token — retry plain before giving up.
+  if (!res.ok && res.status === 400) res = await lookup(false) ?? res;
+  if (!res.ok) {
+    console.warn('Spotify track lookup failed', res.status, await res.text().catch(() => ''));
+    return { status: res.status };
+  }
   const data = await res.json() as SpotifyApiTrack & { tracks?: { items?: SpotifyApiTrack[] } };
   return id ? data : data.tracks?.items?.[0] ?? null;
 }
 
 function spotifyErrorLine(status: number) {
   if (status === 404) return 'no active Spotify device — start playing music first.';
-  if (status === 403) return 'Spotify blocked it — needs Premium, and Spotify must be reconnected in /control once so Elroy can control playback.';
+  if (status === 403) return 'Spotify blocked it — the account must be added under User Management in the Spotify developer app, have Premium for queueing, and be reconnected in /control.';
   if (status === 401) return 'Spotify link expired — reconnect it in /control.';
   return `Spotify error ${status}.`;
 }
@@ -286,6 +295,7 @@ export async function handleSongRequestAction(req: SongRequestAction): Promise<S
 
   const track = await findTrack(query);
   if (track === 'not_connected') return { ok: false, messages: [`@${display} Spotify isn't connected — the streamer can link it in /control.`] };
+  if (track && 'status' in track) return { ok: false, messages: [`@${display} Spotify said no — ${spotifyErrorLine(track.status)}`] };
   if (!track?.id || !track.uri || !track.name) return { ok: false, messages: [`@${display} couldn't find that on Spotify.`] };
   if (track.is_playable === false) return { ok: false, messages: [`@${display} that track isn't playable here.`] };
   if ((track.duration_ms ?? 0) > MAX_DURATION_MS && req.role !== 'mod') {
