@@ -10,7 +10,9 @@ const SETTINGS_KEY = 'elroy:studio:settings';
 
 type StorePart = 'vad' | 'speech' | 'settings';
 const MAX_HOST_SPEECH_ITEMS = 10;
-const DUPLICATE_HOST_SPEECH_WINDOW_MS = 45_000;
+// Only catches the same words arriving twice from back-to-back clips. It used to be 45s, which
+// swallowed the host saying "Elroy" a second time.
+const DUPLICATE_HOST_SPEECH_WINDOW_MS = 6_000;
 
 export type StudioSettings = {
   silenceTailMs: number;
