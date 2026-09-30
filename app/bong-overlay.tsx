@@ -2598,9 +2598,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         requestedBy?: string | null;
         requestIntro?: { name: string; artists: string; releaseYear?: string; requestedByDisplay: string } | null;
       };
-      musicPlayingUntilRef.current = data.connected && data.playing && data.track
-        ? Date.now() + 25_000
-        : 0;
+      // Only ever extend the quiet window. A single "not playing" reading (the gap between songs)
+      // must not unmute him; voice comes back ~25s after the music has actually stopped.
+      if (data.connected && data.playing && data.track) {
+        musicPlayingUntilRef.current = Date.now() + 25_000;
+      }
       for (const line of data.requestMessages ?? []) {
         if (line.trim()) void sayChat(line);
       }
