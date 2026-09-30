@@ -1458,7 +1458,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
   }, [controlHeaders, formatSpeechHudError, parseSpeechApiError, playElroySfx]);
 
-  const speak = useCallback((text: string, prefetched?: Promise<Response>) => {
+  const speak = useCallback((text: string, prefetched?: Promise<Response>, allowDuringMusic = false) => {
     if (shouldSkipVoicePlayback(text)) {
       setRuntimeHud((prev) => ({ ...prev, tts: 'recent voice skipped' }));
       return speechQueueRef.current;
@@ -1467,6 +1467,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     speechQueueRef.current = speechQueueRef.current
       .then(() => {
         lastSpeechInterruptedRef.current = false;
+        // A line waiting in the queue can't sneak out once music has started.
+        if (isMusicPlaying() && !allowDuringMusic) {
+          lastSpeechInterruptedRef.current = true;
+          return undefined;
+        }
         return speakNow(text, prefetched);
       })
       .then(() => {
@@ -1696,6 +1701,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
               return;
             }
           }
+          // Music may have started while the reply was being written or while waiting for the host.
+          if (isMusicPlaying() && !opts.allowDuringMusic) {
+            setRuntimeHud((prev) => ({ ...prev, tts: 'music started — chat only' }));
+            return;
+          }
           // Start generating the voice now so it's ready the moment the bong finishes.
           const speech = fetchSpeech(voiceText);
           if (playDing) {
@@ -1719,7 +1729,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
             );
             if (gateResult === 'clear') {
               syncStudioHud(studioRef.current);
-              void speak(voiceText, speech);
+              if (isMusicPlaying() && !opts.allowDuringMusic) return;
+              void speak(voiceText, speech, Boolean(opts.allowDuringMusic));
               return;
             }
             setRuntimeHud((prev) => ({
@@ -1729,7 +1740,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
             syncStudioHud(studioRef.current);
             return;
           }
-          void speak(voiceText, speech);
+          void speak(voiceText, speech, Boolean(opts.allowDuringMusic));
         })();
       }
     } catch (e) { console.error(e); }
