@@ -43,3 +43,14 @@ describe('stripElroyFromMessage', () => {
     expect(stripElroyFromMessage('@elroy what is the answer')).toBe('what is the answer');
   });
 });
+
+describe('hostSpeechMentionsElroy', () => {
+  it('forgives common speech-to-text spellings of Elroy', async () => {
+    const { hostSpeechMentionsElroy } = await import('@/lib/elroy-mention');
+    for (const text of ['hey Leroy what do you think', 'yo El Rey', 'Elroi say something', 'L Roy wake up', 'elroy you there']) {
+      expect(hostSpeechMentionsElroy(text), text).toBe(true);
+    }
+    expect(hostSpeechMentionsElroy('we went to the hotel royale')).toBe(false);
+    expect(hostSpeechMentionsElroy('relay race')).toBe(false);
+  });
+});

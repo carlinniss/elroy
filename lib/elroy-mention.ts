@@ -70,6 +70,16 @@ export function mentionsElroy(text: string): boolean {
   return collapsedIncludesElroyName(text);
 }
 
+/**
+ * Speech-to-text often hears "Elroy" as "Leroy", "El Rey", etc. Used only for the host's mic
+ * transcripts — in typed chat "Leroy" is a different name.
+ */
+const TRANSCRIPT_ELROY = /\b(le+roy|el+ ?roi|el ?rey|elroi|l ?roy)\b/i;
+
+export function hostSpeechMentionsElroy(text: string): boolean {
+  return mentionsElroy(text) || TRANSCRIPT_ELROY.test(text);
+}
+
 export function misnamesElroyAsLRoy(text: string): boolean {
   if (mentionsElroy(text)) return false;
   if (/\bl[\s.\-_]*roy\b/i.test(text)) return true;

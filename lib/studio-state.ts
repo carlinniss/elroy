@@ -1,5 +1,5 @@
 import { hasRedisStorage, redisCommand, redisPipeline } from '@/lib/redis-rest';
-import { mentionsElroy } from '@/lib/elroy-mention';
+import { hostSpeechMentionsElroy } from '@/lib/elroy-mention';
 
 const STORE_KEY = 'elroy:studio';
 // Host speech and settings live in their own keys. The VAD heartbeat rewrites STORE_KEY constantly;
@@ -120,7 +120,7 @@ function parseStore(raw: unknown): StudioStore {
         .map((entry) => ({
           ...entry,
           text: entry.text.replace(/\s+/g, ' ').trim().slice(0, 500),
-          mentionsElroy: entry.mentionsElroy === true || mentionsElroy(entry.text),
+          mentionsElroy: entry.mentionsElroy === true || hostSpeechMentionsElroy(entry.text),
         }))
         .filter((entry) => entry.text.length > 0)
         .slice(-MAX_HOST_SPEECH_ITEMS)
@@ -280,7 +280,7 @@ export async function ingestStudio(payload: StudioIngestPayload): Promise<Studio
           id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
           text: text.slice(0, 500),
           at: now,
-          mentionsElroy: mentionsElroy(text),
+          mentionsElroy: hostSpeechMentionsElroy(text),
         },
       ].slice(-MAX_HOST_SPEECH_ITEMS);
     }

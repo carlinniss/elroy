@@ -59,7 +59,7 @@ function applyVoicePace(tier: VoiceQuotaTier, pace: VoicePace): VoiceQuotaTier {
   }
   return {
     ...tier,
-    voiceCooldownMs: scaleCooldown(tier.voiceCooldownMs, 0.35, 15_000),
+    voiceCooldownMs: scaleCooldown(tier.voiceCooldownMs, 0.25, 10_000),
     celebrationVoiceCooldownMs: scaleCooldown(tier.celebrationVoiceCooldownMs, 0.5, 6_000),
     // Ambient voice once there's a comfortable cushion; below that, save credits for real moments.
     ambientVoice: tier.ambientVoice || (!tier.celebrationsVoiceOnly && tier.tier !== 'moderate'),

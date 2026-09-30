@@ -65,7 +65,7 @@ const CONTROL_SECRET_STORAGE_KEY = 'elroy-control-secret';
 const CHAT_BRAIN_TIMEOUT_MS = 45_000;
 const STUDIO_POLL_MS = 500;
 const STUDIO_VOICE_WAIT_MS = 30_000;
-const STUDIO_TRANSCRIPT_LAG_BUFFER_MS = 2_500;
+const STUDIO_TRANSCRIPT_LAG_BUFFER_MS = 1_200;
 const STREAMER_DISPLAY_NAME = getStreamerDisplayName();
 
 async function fetchWithTimeout(
@@ -176,6 +176,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const bargeInRef = useRef(false);
   const lastSpeechInterruptedRef = useRef(false);
   const lastMentionReplyByUserRef = useRef<Map<string, number>>(new Map());
+  const mentionHistoryByUserRef = useRef<Map<string, number[]>>(new Map());
   const recentVoicePlaybackRef = useRef<Array<{ fingerprint: string; at: number }>>([]);
 
   const ELROY_SYSTEM_BROADCAST = /^elroy initiated\./i;
@@ -192,7 +193,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const FOLLOWER_POLL_MS = 45_000;
   const CHANNEL_EVENTS_POLL_MS = 5_000;
   const STREAM_CHECKIN_MS = 20 * 60 * 1000;
-  const HOST_MENTION_RESPONSE_COOLDOWN_MS = 3 * 60 * 1000;
+  // No real cooldown for the host — just enough to not answer one sentence twice.
+  const HOST_MENTION_RESPONSE_COOLDOWN_MS = 3_000;
   const STREAM_POLL_MS = 15_000;
   const TRIVIA_ANSWER_WINDOW_MS = 5 * 60 * 1000;
   const TRIVIA_CHECK_MS = 30_000;
@@ -208,7 +210,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const SESSION_CHAT_MAX = 600;
   const SESSION_STORAGE_KEY = 'elroy-stream-session';
   const SESSION_RESUME_MAX_GAP_MS = 20 * 60 * 1000;
-  const MENTION_USER_COOLDOWN_MS = 20_000;
+  const MENTION_USER_COOLDOWN_MS = 6_000;
+  /** Spam guard: more than this many mentions from one viewer in a minute → they wait a minute. */
+  const MENTION_BURST_LIMIT = 4;
+  const MENTION_BURST_WINDOW_MS = 60_000;
   const RECENT_REPLY_MEMORY = 6;
   const AUTO_RESUME_STORAGE_KEY = 'elroy-auto-resume';
   const POST_UPDATE_DIAGNOSTICS_KEY = 'elroy-post-update-diagnostics';
@@ -1308,13 +1313,16 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     return () => stopVersionPolling();
   }, [startVersionPolling, stopVersionPolling]);
 
-  const speakNow = async (text: string) => {
+  const fetchSpeech = (text: string) => fetch('/api/speech', {
+    method: 'POST',
+    headers: controlHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ text }),
+  });
+
+  const speakNow = async (text: string, prefetched?: Promise<Response>) => {
     try {
-      const res = await fetch('/api/speech', {
-        method: 'POST',
-        headers: controlHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ text }),
-      });
+      // Audio may already be generating (started while the bong played) — no dead air.
+      const res = await (prefetched ?? fetchSpeech(text));
       const contentType = res.headers.get('content-type') || '';
       if (!res.ok || contentType.includes('application/json')) {
         const errMsg = await parseSpeechApiError(res);
@@ -1441,7 +1449,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
   }, [controlHeaders, formatSpeechHudError, parseSpeechApiError, playElroySfx]);
 
-  const speak = useCallback((text: string) => {
+  const speak = useCallback((text: string, prefetched?: Promise<Response>) => {
     if (shouldSkipVoicePlayback(text)) {
       setRuntimeHud((prev) => ({ ...prev, tts: 'recent voice skipped' }));
       return speechQueueRef.current;
@@ -1450,7 +1458,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     speechQueueRef.current = speechQueueRef.current
       .then(() => {
         lastSpeechInterruptedRef.current = false;
-        return speakNow(text);
+        return speakNow(text, prefetched);
       })
       .then(() => {
         // No cough after being cut off — it would land on top of the host.
@@ -1675,9 +1683,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
               return;
             }
           }
+          // Start generating the voice now so it's ready the moment the bong finishes.
+          const speech = fetchSpeech(voiceText);
           if (playDing) {
             await playBongRip(volumeRef.current);
-            await new Promise<void>((resolve) => setTimeout(resolve, 1600));
+            await new Promise<void>((resolve) => setTimeout(resolve, 250));
           }
           if (isStreamerBlockingVoice(studioRef.current, Date.now(), {
             extraTailMs: STUDIO_TRANSCRIPT_LAG_BUFFER_MS,
@@ -1696,7 +1706,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
             );
             if (gateResult === 'clear') {
               syncStudioHud(studioRef.current);
-              void speak(voiceText);
+              void speak(voiceText, speech);
               return;
             }
             setRuntimeHud((prev) => ({
@@ -1706,7 +1716,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
             syncStudioHud(studioRef.current);
             return;
           }
-          void speak(voiceText);
+          void speak(voiceText, speech);
         })();
       }
     } catch (e) { console.error(e); }
@@ -1871,12 +1881,16 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         mention
         && !processedHostMentionIdsRef.current.has(mention.id)
         && !isFullyMuted()
+        && now - mention.at < 45_000
+        // Inside the cooldown the mention waits (next poll) instead of being thrown away.
+        && now - lastHostMentionResponseRef.current >= HOST_MENTION_RESPONSE_COOLDOWN_MS
       ) {
         processedHostMentionIdsRef.current.add(mention.id);
-        if (now - lastHostMentionResponseRef.current < HOST_MENTION_RESPONSE_COOLDOWN_MS) return;
         lastHostMentionResponseRef.current = now;
+        // The host talking to Elroy on mic always gets a spoken answer.
         void queueBongLogic(buildHostAwarePrompt(mention.text), undefined, {
-          voicePriority: 'normal',
+          voicePriority: 'celebration',
+          bypassVoiceCooldown: true,
         });
       }
     } catch (error) {
@@ -3155,9 +3169,19 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     // One viewer can't monopolize Elroy (or the Gemini/ElevenLabs budget) by spamming his name.
     const now = Date.now();
     const lastReplyAt = lastMentionReplyByUserRef.current.get(normalizedUser) ?? 0;
-    if (!isBroadcaster && now - lastReplyAt < MENTION_USER_COOLDOWN_MS) return;
+    if (!isBroadcaster) {
+      if (now - lastReplyAt < MENTION_USER_COOLDOWN_MS) return;
+      const recent = (mentionHistoryByUserRef.current.get(normalizedUser) ?? [])
+        .filter((at) => now - at < MENTION_BURST_WINDOW_MS);
+      if (recent.length >= MENTION_BURST_LIMIT) return;
+      mentionHistoryByUserRef.current.set(normalizedUser, [...recent, now]);
+    }
     lastMentionReplyByUserRef.current.set(normalizedUser, now);
-    void queueBongLogic(buildMentionPrompt(username, message, isBroadcaster), username, { viewer: username });
+    void queueBongLogic(buildMentionPrompt(username, message, isBroadcaster), username, {
+      viewer: username,
+      // The host typing to Elroy always gets voice; viewers share the normal voice cooldown.
+      ...(isBroadcaster ? { voicePriority: 'celebration' as const, bypassVoiceCooldown: true } : {}),
+    });
   }, [announceStreamMetadata, buildComebackPrompt, buildMentionPrompt, controlHeaders, isElroySystemBroadcast, isKnownElroySpeakerLogin, moderateOffensiveChatter, queueBongLogic, requestSpotifyComment]);
 
   const handleLRoyMisname = useCallback((username: string, displayName: string, message: string) => {
