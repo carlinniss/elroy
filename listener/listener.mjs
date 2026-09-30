@@ -241,6 +241,14 @@ async function runOnce() {
   return gotAudio;
 }
 
+// Song-request handoff clock. Runs on the server so requests reach Spotify on time even if the
+// OBS overlay is slow or reloading. Only touches Spotify when requests are waiting.
+const SONG_REQUEST_TICK_MS = 5_000;
+setInterval(() => {
+  fetch(`${ELROY_URL}/api/spotify/requests`, { headers: authHeaders(), signal: AbortSignal.timeout(8_000) })
+    .catch(() => { /* app restarting — next tick */ });
+}, SONG_REQUEST_TICK_MS);
+
 let stopping = false;
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, async () => {

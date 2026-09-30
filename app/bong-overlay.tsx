@@ -172,6 +172,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const elroySpeakerUserIdsRef = useRef<Set<string>>(new Set());
   const recentElroyOutboundRef = useRef<Array<{ fingerprint: string; at: number }>>([]);
   const recentElroyRepliesRef = useRef<string[]>([]);
+  /** Spotify is playing (refreshed by the now-playing poll; expires if polls stop). */
+  const musicPlayingUntilRef = useRef(0);
+  const isMusicPlaying = () => Date.now() < musicPlayingUntilRef.current;
   const voicePaceRef = useRef<VoicePace>('normal');
   const bargeInRef = useRef(false);
   const lastSpeechInterruptedRef = useRef(false);
@@ -668,9 +671,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       forceVoice?: boolean;
       bypassVoiceCooldown?: boolean;
       voicePriority?: 'celebration' | 'normal';
+      allowDuringMusic?: boolean;
     },
   ) => {
     if (opts.chatOnly) return 'chat-only mode';
+    if (isMusicPlaying() && !opts.allowDuringMusic) return 'music playing — chat only';
     if (!voiceEnabledRef.current && !opts.forceVoice) return 'voice off — !voice to toggle on';
     if (isSilenced() && silenceModeRef.current === 'voice') return 'silenced (voice off)';
     if (!quotaVoiceAllowedRef.current) {
@@ -1529,6 +1534,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       voicePriority?: 'celebration' | 'normal';
       /** Viewer login whose memory file should inform the reply. */
       viewer?: string;
+      /** Song-request intros are the one thing Elroy says out loud while music plays. */
+      allowDuringMusic?: boolean;
     } = {},
   ) => {
     try {
@@ -1563,8 +1570,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         opts.bypassVoiceCooldown || canUseVoice(voicePriority)
       );
       // Voice works offline too, so the host can hear Elroy before going live.
+      const mutedForMusic = isMusicPlaying() && !opts.allowDuringMusic;
       const willUseVoice = Boolean(
         !opts.chatOnly
+        && !mutedForMusic
         && voiceAllowed
         && (opts.forceVoice || voiceEnabledRef.current),
       );
@@ -1737,6 +1746,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       voicePriority?: 'celebration' | 'normal';
       /** Viewer login whose memory file should inform the reply. */
       viewer?: string;
+      /** Song-request intros are the one thing Elroy says out loud while music plays. */
+      allowDuringMusic?: boolean;
     } = {},
   ) => {
     responseQueueRef.current = responseQueueRef.current
@@ -2587,6 +2598,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         requestedBy?: string | null;
         requestIntro?: { name: string; artists: string; releaseYear?: string; requestedByDisplay: string } | null;
       };
+      musicPlayingUntilRef.current = data.connected && data.playing && data.track
+        ? Date.now() + 25_000
+        : 0;
       for (const line of data.requestMessages ?? []) {
         if (line.trim()) void sayChat(line);
       }
@@ -2595,6 +2609,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         void queueBongLogic(buildSongRequestIntroPrompt(data.requestIntro), undefined, {
           forceVoice: true,
           voicePriority: 'celebration',
+          bypassVoiceCooldown: true,
+          allowDuringMusic: true,
         });
       }
       if (!data.connected) {

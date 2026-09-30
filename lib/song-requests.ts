@@ -55,6 +55,11 @@ export type SongRequestState = {
   lastPushErrorId?: string;
   /** Don't retry a failed handoff before this time. */
   pushRetryAt?: number;
+  /**
+   * Chat lines + intro produced by a server-side tick, waiting for the overlay to post/speak them.
+   * The listener container ticks every few seconds; the overlay collects these on its next poll.
+   */
+  outbox?: { messages: string[]; intro: SongRequest | null };
 };
 
 export type SongRequestAction =
@@ -182,29 +187,115 @@ type SpotifyApiTrack = {
   name?: string;
   duration_ms?: number;
   is_playable?: boolean;
+  explicit?: boolean;
   artists?: Array<{ name?: string }>;
   album?: { release_date?: string };
 };
 
+// ── matching ─────────────────────────────────────────────────────────────────
+function normalizeForMatch(text: string) {
+  return text
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\(.*?\)|\[.*?\]/g, ' ')
+    .replace(/\s-\s.*$/, ' ')
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** "blind by korn", "korn - blind", "blind - korn" → title/artist hints. */
+export function parseRequestQuery(query: string): { title: string; artist?: string } {
+  const trimmed = query.trim().replace(/^["']|["']$/g, '');
+  const by = trimmed.match(/^(.+?)\s+by\s+(.+)$/i);
+  if (by) return { title: by[1]!.trim(), artist: by[2]!.trim() };
+  const dash = trimmed.match(/^(.+?)\s+[-–—]\s+(.+)$/);
+  if (dash) return { title: dash[2]!.trim(), artist: dash[1]!.trim() };
+  return { title: trimmed };
+}
+
+const JUNK_VERSION = /\b(karaoke|instrumental|tribute|cover|8[- ]?bit|lullaby|made famous|originally performed|in the style of|backing track|piano version|music box)\b/i;
+const ALT_VERSION = /\b(remix|live|acoustic|sped up|slowed|reverb|nightcore|demo|edit|version|remaster(ed)?|mix)\b/i;
+
+type MatchCandidate = { name?: string; artists?: Array<{ name?: string }>; explicit?: boolean };
+
+/** Score a search result against what the viewer typed. Higher is better. */
+export function scoreTrackMatch(query: string, track: MatchCandidate, rank: number): number {
+  const q = normalizeForMatch(query);
+  const qWords = q.split(' ').filter(Boolean);
+  const title = normalizeForMatch(track.name ?? '');
+  const artists = (track.artists ?? []).map((a) => normalizeForMatch(a.name ?? '')).join(' ');
+  // Coverage uses the full title (with "- Live", "(Remix)" etc.) so asked-for versions count.
+  const fullTitle = (track.name ?? '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const haystack = `${fullTitle} ${artists}`;
+  const { title: wantTitle, artist: wantArtist } = parseRequestQuery(query);
+  const wantTitleN = normalizeForMatch(wantTitle);
+
+  let score = 0;
+  // Every word they typed should be in the title or artist.
+  const covered = qWords.filter((w) => haystack.split(' ').includes(w)).length;
+  score += qWords.length ? (covered / qWords.length) * 60 : 0;
+  // Exact title match beats "title appears somewhere".
+  if (title === wantTitleN) score += 35;
+  else if (wantArtist && title.includes(wantTitleN)) score += 15;
+  else if (!wantArtist && q.includes(title) && title.length >= 3) score += 25;
+  if (wantArtist && artists.includes(normalizeForMatch(wantArtist))) score += 30;
+  // Prefer the real recording over karaoke/tribute versions, and originals over remixes —
+  // unless that's what they asked for.
+  if (JUNK_VERSION.test(track.name ?? '') && !JUNK_VERSION.test(query)) score -= 60;
+  if (ALT_VERSION.test(track.name ?? '') && !ALT_VERSION.test(query)) score -= 12;
+  if (track.explicit) score += 2; // originals are usually the explicit cut
+  score -= rank * 1.5; // Spotify's own ranking breaks ties
+  return score;
+}
+
+export function pickBestTrack<T extends MatchCandidate>(query: string, tracks: T[]): T | null {
+  let best: T | null = null;
+  let bestScore = -Infinity;
+  tracks.forEach((track, rank) => {
+    const score = scoreTrackMatch(query, track, rank);
+    if (score > bestScore) { best = track; bestScore = score; }
+  });
+  return best;
+}
+
+async function searchTracks(q: string, market: boolean) {
+  return spotifyUserFetch(`/search?q=${encodeURIComponent(q)}&type=track&limit=10${market ? '&market=from_token' : ''}`);
+}
+
 async function findTrack(query: string): Promise<SpotifyApiTrack | null | 'not_connected' | { status: number }> {
   const id = parseSpotifyTrackRef(query);
-  const lookup = async (market: boolean) => {
-    const suffix = market ? '&market=from_token' : '';
-    return id
-      ? spotifyUserFetch(`/tracks/${id}${market ? '?market=from_token' : ''}`)
-      : spotifyUserFetch(`/search?q=${encodeURIComponent(query)}&type=track&limit=1${suffix}`);
-  };
-  // Plain lookup first: market=from_token needs the user-read-private scope, and tokens from
-  // before that scope was added get "403 Insufficient client scope".
-  let res = await lookup(false);
-  if (!res) return 'not_connected';
-  if (!res.ok && (res.status === 400 || res.status === 403)) res = await lookup(true) ?? res;
-  if (!res.ok) {
-    console.warn('Spotify track lookup failed', res.status, await res.text().catch(() => ''));
-    return { status: res.status };
+  if (id) {
+    let res = await spotifyUserFetch(`/tracks/${id}`);
+    if (!res) return 'not_connected';
+    if (!res.ok && (res.status === 400 || res.status === 403)) res = await spotifyUserFetch(`/tracks/${id}?market=from_token`) ?? res;
+    if (!res.ok) {
+      console.warn('Spotify track lookup failed', res.status, await res.text().catch(() => ''));
+      return { status: res.status };
+    }
+    return await res.json() as SpotifyApiTrack;
   }
-  const data = await res.json() as SpotifyApiTrack & { tracks?: { items?: SpotifyApiTrack[] } };
-  return id ? data : data.tracks?.items?.[0] ?? null;
+
+  // "title by artist" gets a precise field search first; plain text as the fallback.
+  const { title, artist } = parseRequestQuery(query);
+  const searches = artist ? [`track:${title} artist:${artist}`, query] : [query];
+  const found: SpotifyApiTrack[] = [];
+  for (const q of searches) {
+    let res = await searchTracks(q, false);
+    if (!res) return 'not_connected';
+    if (!res.ok && (res.status === 400 || res.status === 403)) res = await searchTracks(q, true) ?? res;
+    if (!res.ok) {
+      console.warn('Spotify track lookup failed', res.status, await res.text().catch(() => ''));
+      if (found.length) break;
+      return { status: res.status };
+    }
+    const data = await res.json() as { tracks?: { items?: SpotifyApiTrack[] } };
+    found.push(...(data.tracks?.items ?? []));
+    if (found.length >= 5) break;
+  }
+  const unique = found.filter((t, i) => t.id && found.findIndex((o) => o.id === t.id) === i);
+  return pickBestTrack(query, unique);
 }
 
 function spotifyErrorLine(status: number) {
@@ -327,22 +418,34 @@ export async function handleSongRequestAction(req: SongRequestAction): Promise<S
   state.lastRequestAt[login] = Date.now();
   await saveState(state);
   const position = state.queue.length + (state.pushed ? 1 : 0);
-  return { ok: true, messages: [`🎶 @${display} added ${track.name} — ${artists} (#${position} in line).`] };
+  return { ok: true, messages: [`🎶 @${display} added ${track.name} — ${artists} (#${position} in line). Wrong one? !wrongsong, then try "song by artist" or a Spotify link.`] };
 }
 
 /** Called on every now-playing poll: announce requests as they start, hand the next one to Spotify. */
-export async function advanceSongRequests(snapshot?: SpotifyNowPlayingSnapshot): Promise<{
+export async function advanceSongRequests(
+  snapshot?: SpotifyNowPlayingSnapshot,
+  opts: { deliver?: boolean } = { deliver: true },
+): Promise<{
   messages: string[];
   requestedBy: string | null;
   /** Set when a request was just handed to Spotify — Elroy introduces it before it comes on. */
   intro: SongRequest | null;
 }> {
   const state = await loadState();
-  if (!state.queue.length && !state.pushed && !state.playing) return { messages: [], requestedBy: null, intro: null };
+  const pendingOutbox = state.outbox;
+  if (!state.queue.length && !state.pushed && !state.playing) {
+    if (opts.deliver && pendingOutbox && (pendingOutbox.messages.length || pendingOutbox.intro)) {
+      state.outbox = undefined;
+      await saveState(state);
+      return { messages: pendingOutbox.messages, requestedBy: null, intro: pendingOutbox.intro };
+    }
+    return { messages: [], requestedBy: null, intro: null };
+  }
   const now = snapshot ?? await fetchSpotifyNowPlaying();
+  if (!now.connected) return { messages: [], requestedBy: null, intro: null };
   const plan = planSongRequestTick(state, now);
-  const messages = [...plan.messages];
-  let intro: SongRequest | null = null;
+  const messages = [...(pendingOutbox?.messages ?? []), ...plan.messages];
+  let intro: SongRequest | null = pendingOutbox?.intro ?? null;
 
   if (plan.push) {
     const res = await spotifyUserFetch(`/me/player/queue?uri=${encodeURIComponent(plan.push.uri)}`, { method: 'POST' });
@@ -363,6 +466,14 @@ export async function advanceSongRequests(snapshot?: SpotifyNowPlayingSnapshot):
       intro = plan.push;
     }
   }
+  const requestedBy = plan.state.playing?.requestedByDisplay ?? null;
+  if (opts.deliver) {
+    plan.state.outbox = undefined;
+    await saveState(plan.state);
+    return { messages, requestedBy, intro };
+  }
+  // Server-side tick: nobody to post to — park everything for the overlay's next poll.
+  plan.state.outbox = { messages, intro };
   await saveState(plan.state);
-  return { messages, requestedBy: plan.state.playing?.requestedByDisplay ?? null, intro };
+  return { messages: [], requestedBy, intro: null };
 }

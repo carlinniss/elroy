@@ -87,3 +87,36 @@ describe('song request mod tools', () => {
     expect(missing.messages[0]).toContain('no #3');
   });
 });
+
+describe('song matching', () => {
+  it('reads "song by artist" and "artist - song"', async () => {
+    const { parseRequestQuery } = await import('@/lib/song-requests');
+    expect(parseRequestQuery('blind by korn')).toEqual({ title: 'blind', artist: 'korn' });
+    expect(parseRequestQuery('Korn - Blind')).toEqual({ title: 'Blind', artist: 'Korn' });
+    expect(parseRequestQuery('korn blind')).toEqual({ title: 'korn blind' });
+  });
+
+  it('picks the real song over covers, karaoke and unrelated top results', async () => {
+    const { pickBestTrack } = await import('@/lib/song-requests');
+    const results = [
+      { name: 'Blinding Lights', artists: [{ name: 'The Weeknd' }] },
+      { name: 'Blind (Karaoke Version)', artists: [{ name: 'Karaoke Kings' }] },
+      { name: 'Blind', artists: [{ name: 'Korn' }], explicit: true },
+      { name: 'Blind - Live', artists: [{ name: 'Korn' }] },
+    ];
+    expect(pickBestTrack('korn blind', results)?.artists?.[0]?.name).toBe('Korn');
+    expect(pickBestTrack('korn blind', results)?.name).toBe('Blind');
+    expect(pickBestTrack('blind by korn', results)?.name).toBe('Blind');
+    expect(pickBestTrack('blind live korn', results)?.name).toBe('Blind - Live');
+  });
+
+  it('keeps an exact title match first when no artist is given', async () => {
+    const { pickBestTrack } = await import('@/lib/song-requests');
+    const results = [
+      { name: 'Peaches (feat. Daniel Caesar & Giveon)', artists: [{ name: 'Justin Bieber' }] },
+      { name: 'Peaches', artists: [{ name: 'The Presidents of the United States of America' }] },
+    ];
+    expect(pickBestTrack('peaches presidents', results)?.artists?.[0]?.name).toContain('Presidents');
+    expect(pickBestTrack('peaches justin bieber', results)?.artists?.[0]?.name).toBe('Justin Bieber');
+  });
+});
