@@ -1,8 +1,7 @@
-import { generateText } from 'ai';
+import { generateBrainText } from '@/lib/brain';
 import { mapBrainErrorMessage, sanitizeElroyModLore } from '@/lib/chat-reply';
 import { isControlAuthorized } from '@/lib/control-auth';
 import { getElroySystemPrompt } from '@/lib/elroy-system-prompt';
-import { getGeminiModel } from '@/lib/gemini-model';
 import {
   buildAboutMePrompt,
   buildAboutMeUnknownPrompt,
@@ -26,8 +25,7 @@ export async function GET(request: Request) {
       return Response.json({ error: 'username required' }, { status: 400 });
     }
 
-    const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    if (!apiKey) {
+    if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY && !process.env.OPENAI_API_KEY) {
       return Response.json({ error: 'GOOGLE_GENERATIVE_AI_API_KEY missing' }, { status: 500 });
     }
 
@@ -49,11 +47,7 @@ export async function GET(request: Request) {
       ? buildAboutMePrompt(enrichedProfile, follow?.tenure)
       : buildAboutMeUnknownPrompt(username, follow?.tenure);
 
-    const { text } = await generateText({
-      model: getGeminiModel(),
-      system,
-      prompt,
-    });
+    const { text } = await generateBrainText({ system, prompt });
 
     // Profile notes quote the viewer's own chat, so treat this output like any other brain reply.
     const reply = sanitizeElroyModLore(text.trim());

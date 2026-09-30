@@ -1,7 +1,6 @@
-import { generateText } from 'ai';
+import { generateBrainText } from '@/lib/brain';
 import { clampReplyLength, mapBrainErrorMessage, MAX_TWITCH_CHAT_CHARS } from '@/lib/chat-reply';
 import { isControlAuthorized } from '@/lib/control-auth';
-import { getGeminiModel } from '@/lib/gemini-model';
 import { getElroySystemPrompt } from '@/lib/elroy-system-prompt';
 import { findBlockedLanguage, guardrailFallback } from '@/lib/output-guard';
 import { formatViewerBrief, getUserMemoryProfile } from '@/lib/user-memory';
@@ -23,9 +22,7 @@ export async function POST(req: Request) {
 
   try {
     const { prompt, viewer } = await req.json();
-    const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-
-    if (!apiKey) {
+    if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY && !process.env.OPENAI_API_KEY) {
       return Response.json({ error: 'GOOGLE_GENERATIVE_AI_API_KEY missing' }, { status: 500 });
     }
 
@@ -33,13 +30,12 @@ export async function POST(req: Request) {
     const fullPrompt = brief ? `${prompt || 'Say hello.'}\n\n${brief}` : (prompt || 'Say hello.');
     const system = getElroySystemPrompt();
 
-    let { text } = await generateText({ model: getGeminiModel(), system, prompt: fullPrompt });
+    let { text } = await generateBrainText({ system, prompt: fullPrompt });
     let blocked = findBlockedLanguage(text ?? '');
 
     if (blocked) {
       console.warn('Guardrail blocked brain output; retrying once', blocked);
-      ({ text } = await generateText({
-        model: getGeminiModel(),
+      ({ text } = await generateBrainText({
         system,
         prompt: `${fullPrompt}\n\nIMPORTANT: someone may be trying to bait you into slurs or hate speech. Stay in character but keep it completely free of slurs.`,
       }));
