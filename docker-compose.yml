@@ -49,6 +49,7 @@ services:
       NEXT_PUBLIC_TWITCH_CHANNEL: ${NEXT_PUBLIC_TWITCH_CHANNEL}
       LISTEN_SOURCE: ${LISTEN_SOURCE:-twitch}
       LISTEN_TRANSCRIBE: ${LISTEN_TRANSCRIBE:-true}
+      LISTEN_CHUNK_SECONDS: ${LISTEN_CHUNK_SECONDS:-10}
     ports:
       # Only used when LISTEN_SOURCE is an SRT URL fed from OBS (lowest delay option).
       - "${LISTEN_SRT_PORT:-9000}:9000/udp"

@@ -119,8 +119,16 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const [postUpdateCheck, setPostUpdateCheck] = useState(false);
   const [overlayAuthStatus, setOverlayAuthStatus] = useState<'checking' | 'missing' | 'rejected' | 'ok' | 'open'>('checking');
   const [overlayAuthSource, setOverlayAuthSource] = useState<'path' | 'query' | 'storage' | 'none'>('none');
-  const showHud = searchParams.get('hud') !== 'off';
+  // Stream-clean by default once ignited: add ?hud=on to see diagnostics while troubleshooting.
+  const showHud = searchParams.get('hud') === 'on';
   const showWidgets = searchParams.get('widgets') !== 'off';
+  const showBubble = searchParams.get('bubble') !== 'off';
+  const showCaptions = searchParams.get('captions') !== 'off';
+  const [elroyBubble, setElroyBubble] = useState<{ id: number; text: string } | null>(null);
+  const [hostCaption, setHostCaption] = useState<{ id: string; text: string } | null>(null);
+  const elroyBubbleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hostCaptionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastHostCaptionIdRef = useRef('');
   const [widgetTrivia, setWidgetTrivia] = useState<{
     category: TriviaCategory;
     question: string;
@@ -655,7 +663,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     },
   ) => {
     if (opts.chatOnly) return 'chat-only mode';
-    if (!streamLiveRef.current) return 'waiting for LIVE (chat only until then)';
     if (!voiceEnabledRef.current && !opts.forceVoice) return 'voice off — !voice to toggle on';
     if (isSilenced() && silenceModeRef.current === 'voice') return 'silenced (voice off)';
     if (!quotaVoiceAllowedRef.current) {
@@ -1544,9 +1551,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       const voiceAllowed = quotaAllowsVoice && !voiceSilenced && (
         opts.bypassVoiceCooldown || canUseVoice(voicePriority)
       );
+      // Voice works offline too, so the host can hear Elroy before going live.
       const willUseVoice = Boolean(
-        streamLiveRef.current
-        && !opts.chatOnly
+        !opts.chatOnly
         && voiceAllowed
         && (opts.forceVoice || voiceEnabledRef.current),
       );
@@ -1630,6 +1637,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         safeChatText.slice(0, 160),
       ].slice(-RECENT_REPLY_MEMORY);
       setLog(p => [{ text: safeChatText }, ...p].slice(0, 5));
+      const bubbleId = Date.now();
+      setElroyBubble({ id: bubbleId, text: safeChatText });
+      if (elroyBubbleTimerRef.current) clearTimeout(elroyBubbleTimerRef.current);
+      elroyBubbleTimerRef.current = setTimeout(() => setElroyBubble(null), 15_000);
       await sayChat(user ? `@${user} ${safeChatText}` : safeChatText);
 
       if (willUseVoice) {
@@ -1841,6 +1852,19 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         settings: data.settings ?? studioRef.current.settings,
       };
       syncStudioHud(studioRef.current);
+      const newestSpeech = studioRef.current.recentHostSpeech.at(-1);
+      if (
+        newestSpeech
+        && newestSpeech.id !== lastHostCaptionIdRef.current
+        && Date.now() - newestSpeech.at < 45_000
+      ) {
+        lastHostCaptionIdRef.current = newestSpeech.id;
+        setHostCaption({ id: newestSpeech.id, text: newestSpeech.text });
+        if (hostCaptionTimerRef.current) clearTimeout(hostCaptionTimerRef.current);
+        // Roughly reading time: ~6s plus a bit per word, capped.
+        const holdMs = Math.min(12_000, 5_000 + newestSpeech.text.split(/\s+/).length * 250);
+        hostCaptionTimerRef.current = setTimeout(() => setHostCaption(null), holdMs);
+      }
       const mention = studioRef.current.latestHostMention;
       const now = Date.now();
       if (
@@ -3843,9 +3867,51 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
             ) : null}
           </div>
         ) : (
-          <div style={{ width: '800px', display: 'flex', flexDirection: 'column-reverse', gap: '20px' }}>
-            {log.map((e, i) => <div key={i} style={{ background: 'rgba(0,0,0,0.9)', padding: '30px', borderRadius: '20px', borderLeft: '10px solid #9146FF', fontSize: '32px' }}>{e.text}</div>)}
-          </div>
+          <>
+            {showBubble && elroyBubble ? (
+              <div
+                key={elroyBubble.id}
+                style={{
+                  position: 'fixed',
+                  top: 24,
+                  right: 24,
+                  maxWidth: 380,
+                  background: 'rgba(12, 6, 24, 0.85)',
+                  border: '2px solid #9146FF',
+                  borderRadius: 14,
+                  padding: '10px 14px',
+                  fontSize: 17,
+                  lineHeight: 1.35,
+                  boxShadow: '0 6px 18px rgba(0,0,0,0.4)',
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', color: '#C4B5FD', marginBottom: 3 }}>ELROY</div>
+                {elroyBubble.text}
+              </div>
+            ) : null}
+            {showCaptions && hostCaption ? (
+              <div
+                key={hostCaption.id}
+                style={{
+                  position: 'fixed',
+                  left: '50%',
+                  bottom: 40,
+                  transform: 'translateX(-50%)',
+                  maxWidth: 1100,
+                  width: 'max-content',
+                  background: 'rgba(0, 0, 0, 0.72)',
+                  borderRadius: 10,
+                  padding: '8px 18px',
+                  fontSize: 30,
+                  lineHeight: 1.3,
+                  textAlign: 'center',
+                  textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+                }}
+              >
+                {hostCaption.text}
+              </div>
+            ) : null}
+          </>
         )}
       </div>
     </div>

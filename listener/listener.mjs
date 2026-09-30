@@ -28,7 +28,8 @@ const FRAME_MS = 80;
 const FRAME_SAMPLES = (SAMPLE_RATE * FRAME_MS) / 1000;
 const FRAME_BYTES = FRAME_SAMPLES * 2;
 const HEARTBEAT_MS = 1500;
-const CHUNK_MS = 10_000;
+/** Seconds of audio per transcript. Shorter = captions appear sooner, but more OpenAI requests. */
+const CHUNK_MS = Math.min(15, Math.max(3, Number(env('LISTEN_CHUNK_SECONDS', '10')) || 10)) * 1000;
 const SETTINGS_REFRESH_MS = 30_000;
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
@@ -85,6 +86,9 @@ function wavFromPcm(pcm) {
 
 let transcribing = false;
 let transcribeBackoffUntil = 0;
+/** OpenAI credit ran out: keep detecting the host's voice, retry transcripts every 30 min. */
+const BILLING_BACKOFF_MS = 30 * 60_000;
+let billingPaused = false;
 async function transcribe(pcm, vad) {
   if (!TRANSCRIBE || transcribing || Date.now() < transcribeBackoffUntil) return;
   transcribing = true;
@@ -99,9 +103,21 @@ async function transcribe(pcm, vad) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
+      if (data.billing) {
+        if (!billingPaused) {
+          log('OpenAI is out of credit — switching to voice detection only (Elroy still waits for you to finish talking). Retrying transcripts every 30 min.');
+        }
+        billingPaused = true;
+        transcribeBackoffUntil = Date.now() + BILLING_BACKOFF_MS;
+        return;
+      }
       log('transcribe error:', data.error || res.status);
       transcribeBackoffUntil = Date.now() + 60_000;
       return;
+    }
+    if (billingPaused) {
+      billingPaused = false;
+      log('OpenAI credit is back — transcripts resumed.');
     }
     if (data.warning) {
       log('transcribe:', data.warning);

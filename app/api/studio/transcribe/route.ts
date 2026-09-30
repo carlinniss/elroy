@@ -40,6 +40,10 @@ function parseRetryAfterMs(value: string | null) {
 function isOpenAiRateLimit(status: number, code?: string, message = '') {
   const lowerCode = code?.toLowerCase() || '';
   const lower = message.toLowerCase();
+  // OpenAI also answers 429 when the account has no credit — that's billing, not a rate limit.
+  if (lowerCode.includes('insufficient_quota') || lower.includes('insufficient_quota') || lower.includes('exceeded your current quota')) {
+    return false;
+  }
   return (
     status === 429
     || lowerCode.includes('rate_limit')
@@ -164,6 +168,8 @@ export async function POST(request: Request) {
       }
       return Response.json({
         error: mapOpenAiTranscriptionError(providerMessage, response.status, data.error?.code),
+        // Out of credit / billing problem — the listener drops to voice-detection-only when it sees this.
+        billing: /insufficient_quota|billing|exceeded your current quota/i.test(`${data.error?.code ?? ''} ${providerMessage}`),
       }, { status: response.status });
     }
 
