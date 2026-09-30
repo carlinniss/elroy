@@ -137,9 +137,10 @@ export function formatQueueMessage(state: SongRequestState, max = 5): string {
   state.queue.slice(0, max).forEach((req, index) => {
     lines.push(`${index + 1}. ${req.name} — ${req.artists} (@${req.requestedByDisplay})`);
   });
-  if (!lines.length) return `🎵 Request line is empty${state.enabled ? ' — !sr <song> to add one.' : ' (requests are off).'}`;
+  const status = state.enabled ? 'Requests ON' : 'Requests OFF';
+  if (!lines.length) return `🎵 ${status} · line is empty${state.enabled ? ' — !sr <song> to add one.' : '.'}`;
   const more = state.queue.length > max ? ` · +${state.queue.length - max} more` : '';
-  let message = `🎵 Up next: ${lines.join(' · ')}${more}`;
+  let message = `🎵 ${status} · Up next: ${lines.join(' · ')}${more}`;
   if (message.length > 480) message = `${message.slice(0, 477)}…`;
   return message;
 }
@@ -148,6 +149,20 @@ export function formatQueueMessage(state: SongRequestState, max = 5): string {
  * Decide what to do on a now-playing poll. Pure: returns the next state, an optional track to hand
  * to Spotify, and chat lines.
  */
+function looseTrackKey(name: string, artist: string) {
+  const clean = (text: string) => text.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\(.*?\)|\[.*?\]/g, ' ').replace(/\s-\s.*$/, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+  return `${clean(name)}|${clean(artist)}`;
+}
+
+/** Same song? Spotify can play a relinked copy with a different id, so fall back to title + lead artist. */
+export function isSameTrack(req: Pick<SongRequest, 'trackId' | 'name' | 'artists'>, current: { id: string; name: string; artists: string[] } | null | undefined) {
+  if (!current) return false;
+  if (current.id === req.trackId) return true;
+  const reqArtist = req.artists.split(',')[0] ?? '';
+  return looseTrackKey(req.name, reqArtist) === looseTrackKey(current.name, current.artists[0] ?? '');
+}
+
 export function planSongRequestTick(
   state: SongRequestState,
   snapshot: Pick<SpotifyNowPlayingSnapshot, 'playing' | 'track'>,
@@ -157,12 +172,12 @@ export function planSongRequestTick(
   const messages: string[] = [];
   const current = snapshot.track;
 
-  if (next.pushed && current?.id === next.pushed.trackId) {
+  if (next.pushed && isSameTrack(next.pushed, current)) {
     const { pushedAt: _pushedAt, ...req } = next.pushed;
     next.playing = req;
     next.pushed = null;
     messages.push(`🎶 Now playing @${req.requestedByDisplay}'s request: ${req.name} — ${req.artists}`);
-  } else if (next.playing && current && current.id !== next.playing.trackId) {
+  } else if (next.playing && current && !isSameTrack(next.playing, current)) {
     next.playing = null;
   }
 
@@ -371,7 +386,11 @@ export async function handleSongRequestAction(req: SongRequestAction): Promise<S
   // ── request ──
   const display = req.displayName?.trim() || req.username;
   const query = req.query.trim();
-  if (!query) return { ok: false, messages: [`@${display} use !sr <song name> or a Spotify track link.`] };
+  if (!query) {
+    return { ok: false, messages: [state.enabled
+      ? `🎵 Song requests are ON — @${display} use !sr <song name> or a Spotify track link.`
+      : `🎵 Song requests are OFF right now (${state.queue.length} still in line).`] };
+  }
   if (!state.enabled && req.role !== 'mod') return { ok: false, messages: [`@${display} song requests are off right now.`] };
   if (state.queue.length >= MAX_QUEUE && req.role !== 'mod') {
     return { ok: false, messages: [`@${display} the request line is full (${MAX_QUEUE}) — try again in a bit.`] };
@@ -422,6 +441,11 @@ export async function handleSongRequestAction(req: SongRequestAction): Promise<S
 }
 
 /** Called on every now-playing poll: announce requests as they start, hand the next one to Spotify. */
+/** For the now-playing card's "requests on/off" tag. */
+export async function songRequestsEnabled(): Promise<boolean> {
+  return (await loadState()).enabled;
+}
+
 export async function advanceSongRequests(
   snapshot?: SpotifyNowPlayingSnapshot,
   opts: { deliver?: boolean } = { deliver: true },

@@ -242,7 +242,7 @@ async function runOnce() {
 }
 
 // Song-request handoff clock. Runs on the server so requests reach Spotify on time even if the
-// OBS overlay is slow or reloading. Only touches Spotify when requests are waiting.
+// OBS overlay is slow or reloading. Also logs every song played (scripts/songs.sh).
 const SONG_REQUEST_TICK_MS = 5_000;
 setInterval(() => {
   fetch(`${ELROY_URL}/api/spotify/requests`, { headers: authHeaders(), signal: AbortSignal.timeout(8_000) })

@@ -286,7 +286,19 @@ export async function disconnectSpotify() {
   await writeTokens(null);
 }
 
-export async function fetchSpotifyNowPlaying(): Promise<SpotifyNowPlayingSnapshot> {
+let nowPlayingCache: { at: number; value: Promise<SpotifyNowPlayingSnapshot> } | null = null;
+
+/** Cached for 3s so the overlay poll and the server tick share one Spotify call. */
+export function fetchSpotifyNowPlaying(): Promise<SpotifyNowPlayingSnapshot> {
+  const now = Date.now();
+  if (nowPlayingCache && now - nowPlayingCache.at < 3_000) return nowPlayingCache.value;
+  const value = fetchSpotifyNowPlayingFresh();
+  nowPlayingCache = { at: now, value };
+  value.catch(() => { nowPlayingCache = null; });
+  return value;
+}
+
+async function fetchSpotifyNowPlayingFresh(): Promise<SpotifyNowPlayingSnapshot> {
   if (!spotifyConfigured()) {
     return { connected: false, playing: false, track: null, reason: 'not_configured' };
   }
@@ -317,7 +329,7 @@ export async function fetchSpotifyNowPlaying(): Promise<SpotifyNowPlayingSnapsho
   }
 
   if (!res.ok) {
-    console.warn('Spotify now playing failed', res.status);
+    console.warn('Spotify now playing failed', res.status, res.headers.get('retry-after') ?? '');
     return { connected: true, playing: false, track: null, reason: 'api_error' };
   }
 

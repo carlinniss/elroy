@@ -137,7 +137,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     winner?: string;
     answer?: string;
   } | null>(null);
-  const [widgetTrack, setWidgetTrack] = useState<{ name: string; artists: string; requestedBy?: string } | null>(null);
+  const [widgetTrack, setWidgetTrack] = useState<{ name: string; artists: string; requestedBy?: string; requestsOff?: boolean } | null>(null);
   const [widgetTables, setWidgetTables] = useState({ blackjack: false, roulette: false, pick3: false, pick4: false });
   const [widgetNow, setWidgetNow] = useState(() => Date.now());
   const widgetTrackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -175,6 +175,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const recentElroyRepliesRef = useRef<string[]>([]);
   /** Spotify is playing (refreshed by the now-playing poll; expires if polls stop). */
   const musicPlayingUntilRef = useRef(0);
+  const lastMusicConfirmedAtRef = useRef(0);
   const isMusicPlaying = () => Date.now() < musicPlayingUntilRef.current;
   const voicePaceRef = useRef<VoicePace>('normal');
   const bargeInRef = useRef(false);
@@ -2605,28 +2606,44 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         reason?: string;
         requestMessages?: string[];
         requestedBy?: string | null;
+        requestsOn?: boolean;
         requestIntro?: { name: string; artists: string; releaseYear?: string; requestedByDisplay: string } | null;
       };
-      // Only ever extend the quiet window. A single "not playing" reading (the gap between songs)
-      // must not unmute him; voice comes back ~25s after the music has actually stopped.
+      // Spotify hiccup (rate limit / API error): unknown, not "stopped". Keep everything as-is,
+      // but never stretch the quiet window more than ~90s past the last confirmed song.
+      if (data.connected && data.reason === 'api_error') {
+        if (isMusicPlaying()) {
+          musicPlayingUntilRef.current = Math.max(musicPlayingUntilRef.current, Math.min(Date.now() + 25_000, lastMusicConfirmedAtRef.current + 90_000));
+        }
+        return;
+      }
       if (data.connected && data.playing && data.track) {
-        musicPlayingUntilRef.current = Date.now() + 25_000;
+        // Quiet until this song is over (plus a gap for the next one), not just 25s —
+        // so a missed poll mid-song can't let him talk.
+        const remaining = Math.max(0, data.track.durationMs - (data.track.progressMs ?? 0));
+        lastMusicConfirmedAtRef.current = Date.now();
+        musicPlayingUntilRef.current = Math.max(musicPlayingUntilRef.current, Date.now() + Math.max(25_000, remaining + 20_000));
         // Now-playing card stays up for the whole song.
         notPlayingPollsRef.current = 0;
         const card = {
           name: data.track.name,
           artists: data.track.artists.join(', '),
           requestedBy: data.requestedBy ?? undefined,
+          requestsOff: data.requestsOn === false,
         };
         setWidgetTrack((prev) => (
-          prev && prev.name === card.name && prev.artists === card.artists && prev.requestedBy === card.requestedBy
+          prev && prev.name === card.name && prev.artists === card.artists && prev.requestedBy === card.requestedBy && prev.requestsOff === card.requestsOff
             ? prev
             : card
         ));
-      } else {
-        // Two quiet polls in a row (~20s) before hiding, so gaps between songs don't flicker it.
+      } else if (data.connected) {
+        // Spotify really says nothing's playing. Three in a row (~30s) = music stopped/paused:
+        // hide the card and let him talk again shortly after.
         notPlayingPollsRef.current += 1;
-        if (notPlayingPollsRef.current >= 2) setWidgetTrack(null);
+        if (notPlayingPollsRef.current >= 3) {
+          setWidgetTrack(null);
+          musicPlayingUntilRef.current = Math.min(musicPlayingUntilRef.current, Date.now() + 5_000);
+        }
       }
       for (const line of data.requestMessages ?? []) {
         if (line.trim()) void sayChat(line);
@@ -4028,7 +4045,7 @@ function OverlayWidgets({
   now,
 }: {
   trivia: { category: TriviaCategory; question: string; points: number; endsAt: number; winner?: string; answer?: string } | null;
-  track: { name: string; artists: string; requestedBy?: string } | null;
+  track: { name: string; artists: string; requestedBy?: string; requestsOff?: boolean } | null;
   tables: { blackjack: boolean; roulette: boolean; pick3: boolean; pick4: boolean };
   now: number;
 }) {
@@ -4071,8 +4088,12 @@ function OverlayWidgets({
             <div style={{ fontSize: 18, fontWeight: 700 }}>{track.name}</div>
             <div style={{ fontSize: 15, color: 'rgba(255,255,255,0.7)' }}>{track.artists}</div>
             {track.requestedBy ? (
-              <div style={{ fontSize: 14, color: '#C4B5FD', marginTop: 2 }}>requested by {track.requestedBy}</div>
-            ) : null}
+              <div style={{ fontSize: 14, color: '#C4B5FD', marginTop: 2 }}>requested by @{track.requestedBy.replace(/^@/, '')}</div>
+            ) : (
+              <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>
+                {track.requestsOff ? 'song requests off' : 'type !sr <song> to request'}
+              </div>
+            )}
           </div>
         </div>
       ) : null}

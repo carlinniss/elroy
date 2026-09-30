@@ -1,6 +1,7 @@
 import { isControlAuthorized } from '@/lib/control-auth';
 import { fetchSpotifyNowPlaying } from '@/lib/spotify';
-import { advanceSongRequests } from '@/lib/song-requests';
+import { advanceSongRequests, songRequestsEnabled } from '@/lib/song-requests';
+import { recordSongPlay } from '@/lib/song-history';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +19,9 @@ export async function GET(request: Request) {
         return { messages: [], requestedBy: null, intro: null };
       })
       : { messages: [], requestedBy: null, intro: null };
-    return Response.json({ ...snapshot, requestMessages: requests.messages, requestedBy: requests.requestedBy, requestIntro: requests.intro }, {
+    await recordSongPlay(snapshot, requests.requestedBy).catch(() => {});
+    const requestsOn = snapshot.connected ? await songRequestsEnabled().catch(() => true) : true;
+    return Response.json({ ...snapshot, requestMessages: requests.messages, requestedBy: requests.requestedBy, requestIntro: requests.intro, requestsOn }, {
       headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
     });
   } catch (error) {
