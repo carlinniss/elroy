@@ -7,7 +7,7 @@ const SPOTIFY_ACCOUNTS = 'https://accounts.spotify.com';
 const SPOTIFY_API = 'https://api.spotify.com/v1';
 
 // user-modify-playback-state powers song requests (add to queue, skip). Needs Spotify Premium.
-const SCOPES = ['user-read-currently-playing', 'user-read-playback-state', 'user-modify-playback-state'].join(' ');
+const SCOPES = ['user-read-currently-playing', 'user-read-playback-state', 'user-modify-playback-state', 'user-read-private'].join(' ');
 
 export type SpotifyTrackSnapshot = {
   id: string;

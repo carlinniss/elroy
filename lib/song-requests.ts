@@ -189,10 +189,11 @@ async function findTrack(query: string): Promise<SpotifyApiTrack | null | 'not_c
       ? spotifyUserFetch(`/tracks/${id}${market ? '?market=from_token' : ''}`)
       : spotifyUserFetch(`/search?q=${encodeURIComponent(query)}&type=track&limit=1${suffix}`);
   };
-  let res = await lookup(true);
+  // Plain lookup first: market=from_token needs the user-read-private scope, and tokens from
+  // before that scope was added get "403 Insufficient client scope".
+  let res = await lookup(false);
   if (!res) return 'not_connected';
-  // Some accounts reject market=from_token — retry plain before giving up.
-  if (!res.ok && res.status === 400) res = await lookup(false) ?? res;
+  if (!res.ok && (res.status === 400 || res.status === 403)) res = await lookup(true) ?? res;
   if (!res.ok) {
     console.warn('Spotify track lookup failed', res.status, await res.text().catch(() => ''));
     return { status: res.status };
