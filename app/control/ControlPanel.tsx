@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import type { DirectiveKind, LiveDirective } from '@/lib/live-directives';
 import type { BotControlsSnapshot } from '@/lib/bot-controls';
 import { BOT_COMMAND_SECTIONS } from '@/lib/bot-commands';
-import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
+import { describeVoiceQuotaTier, parseVoicePace, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
 
 const SECRET_STORAGE_KEY = 'elroy-control-secret';
 
@@ -200,7 +200,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
         return;
       }
       const remaining = Number(data.remaining) || 0;
-      const tier = voiceQuotaTierFromRemaining(remaining);
+      const tier = voiceQuotaTierFromRemaining(remaining, parseVoicePace((data as { voicePace?: string }).voicePace));
       const voiceBlocked = data.voiceBlocked === true;
       setQuotaStatus({
         remaining,

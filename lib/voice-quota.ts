@@ -23,8 +23,57 @@ export type VoiceQuotaTier = {
   chatActivityChance: number;
 };
 
+/**
+ * How chatty Elroy's voice is, set with ELROY_VOICE_PACE. Credit tiers still apply on top —
+ * even "liberal" slows down automatically as the ElevenLabs balance drops.
+ */
+export type VoicePace = 'conservative' | 'normal' | 'liberal';
+
+export function parseVoicePace(raw: unknown): VoicePace {
+  const value = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  return value === 'liberal' || value === 'conservative' ? value : 'normal';
+}
+
+/** Spoken-line length target per pace — liberal talks more often but keeps each line short. */
+export function voiceLineCharTarget(pace: VoicePace): { min: number; max: number } {
+  if (pace === 'liberal') return { min: 100, max: 240 };
+  if (pace === 'conservative') return { min: 120, max: 300 };
+  return { min: 180, max: 480 };
+}
+
+function scaleCooldown(ms: number, factor: number, floorMs: number) {
+  if (!Number.isFinite(ms)) return ms;
+  return Math.max(floorMs, Math.round(ms * factor));
+}
+
+function applyVoicePace(tier: VoiceQuotaTier, pace: VoicePace): VoiceQuotaTier {
+  if (pace === 'normal' || !tier.voiceAllowed) return tier;
+  if (pace === 'conservative') {
+    return {
+      ...tier,
+      voiceCooldownMs: scaleCooldown(tier.voiceCooldownMs, 1.5, 60_000),
+      celebrationVoiceCooldownMs: scaleCooldown(tier.celebrationVoiceCooldownMs, 1.5, 20_000),
+      ambientVoice: false,
+      chatActivityThreshold: Math.round(tier.chatActivityThreshold * 1.3),
+    };
+  }
+  return {
+    ...tier,
+    voiceCooldownMs: scaleCooldown(tier.voiceCooldownMs, 0.35, 15_000),
+    celebrationVoiceCooldownMs: scaleCooldown(tier.celebrationVoiceCooldownMs, 0.5, 6_000),
+    // Ambient voice once there's a comfortable cushion; below that, save credits for real moments.
+    ambientVoice: tier.ambientVoice || (!tier.celebrationsVoiceOnly && tier.tier !== 'moderate'),
+    chatActivityThreshold: Math.max(20, Math.round(tier.chatActivityThreshold * 0.6)),
+    chatActivityChance: Math.min(0.85, tier.chatActivityChance + 0.15),
+  };
+}
+
 /** Map remaining ElevenLabs characters to voice pacing (use credits when high, conserve when low). */
-export function voiceQuotaTierFromRemaining(remaining: number): VoiceQuotaTier {
+export function voiceQuotaTierFromRemaining(remaining: number, pace: VoicePace = 'normal'): VoiceQuotaTier {
+  return applyVoicePace(baseVoiceQuotaTier(remaining), pace);
+}
+
+function baseVoiceQuotaTier(remaining: number): VoiceQuotaTier {
   if (remaining <= 0) {
     return {
       tier: 'depleted',

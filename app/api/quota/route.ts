@@ -1,4 +1,5 @@
 import { isControlAuthorized } from '@/lib/control-auth';
+import { parseVoicePace } from '@/lib/voice-quota';
 
 function voiceBlockFromSubscription(data: Record<string, unknown>) {
   const status = typeof data.status === 'string' ? data.status.trim().toLowerCase() : '';
@@ -39,6 +40,10 @@ export async function GET(request: Request) {
       resetDate: new Date(Number(data.next_character_count_reset_unix) * 1000).toLocaleDateString(),
       subscriptionStatus: typeof data.status === 'string' ? data.status : 'unknown',
       tier: typeof data.tier === 'string' ? data.tier : undefined,
+      voicePace: parseVoicePace(process.env.ELROY_VOICE_PACE),
+      // Stop Elroy mid-line when the host starts talking. Only safe when the listener hears the
+      // host's mic alone — otherwise it hears Elroy's own voice and cuts him off.
+      bargeIn: process.env.ELROY_VOICE_BARGE_IN?.trim().toLowerCase() === 'true',
       ...block,
     }, { headers: { 'Content-Type': 'application/json' } });
   } catch {

@@ -92,3 +92,18 @@ describe('prompts', () => {
     expect(builders.buildStreamGreetingPrompt(12, 'fact')).toContain('I AM ALIVE!');
   });
 });
+
+describe('voice pace', () => {
+  it('liberal talks more often but still respects the credit tiers', async () => {
+    const { voiceQuotaTierFromRemaining, parseVoicePace } = await import('@/lib/voice-quota');
+    const normal = voiceQuotaTierFromRemaining(132_323, 'normal');
+    const liberal = voiceQuotaTierFromRemaining(132_323, 'liberal');
+    expect(liberal.voiceCooldownMs).toBeLessThan(normal.voiceCooldownMs);
+    expect(liberal.voiceCooldownMs).toBeGreaterThanOrEqual(15_000);
+    expect(liberal.ambientVoice).toBe(true);
+    expect(voiceQuotaTierFromRemaining(0, 'liberal').voiceAllowed).toBe(false);
+    expect(voiceQuotaTierFromRemaining(3_000, 'liberal').ambientVoice).toBe(false);
+    expect(parseVoicePace('LIBERAL')).toBe('liberal');
+    expect(parseVoicePace('nonsense')).toBe('normal');
+  });
+});

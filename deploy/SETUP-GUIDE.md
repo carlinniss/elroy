@@ -134,10 +134,9 @@ A browser opens. Make sure it says you're logged in **as the bot**, then click *
 ```
 TWITCH_BOT_OAUTH_TOKEN=<User Access Token>
 TWITCH_BOT_USERNAME=elroybot
-NEXT_PUBLIC_TWITCH_BOT_LOGIN=elroybot
 ```
 
-Use the bot's login name in lowercase for the last two lines. Save the refresh token somewhere private; see "Token expiry" below.
+`TWITCH_BOT_USERNAME` is optional: the bot's login name in lowercase. If it's set, Elroy refuses to post when the token belongs to a different account, which catches pasting the wrong token. Save the refresh token somewhere private; see "Token expiry" below.
 
 ---
 
@@ -297,6 +296,26 @@ The default listener hears the stream through Twitch, a few seconds behind live.
 
 ---
 
+### Voice pacing and "stop talking when I talk"
+
+Two `.env` settings control how much Elroy speaks:
+
+| Setting | What it does |
+| --- | --- |
+| `ELROY_VOICE_PACE=liberal` | Talks about 3× more often, in shorter 1–2 sentence lines. At 100k+ credits that's voice roughly every 20 seconds, celebrations every ~8 seconds, and more unprompted chatter. As the ElevenLabs balance drops he slows down on his own, and voice stops completely under 1,000 characters. |
+| `ELROY_VOICE_BARGE_IN=true` | If you start talking while Elroy is mid-sentence, he fades out within about half a second. |
+
+Even without barge-in, Elroy always **waits for you to finish talking before he starts**. That just needs the listener running.
+
+**Barge-in needs the listener to hear your mic alone.** The default Twitch listener hears the whole stream: game audio, music, and Elroy's own voice. With barge-in on, it would cut Elroy off with his own voice. So turn barge-in on only after this setup:
+
+1. Use the SRT option above (`LISTEN_SOURCE=srt://0.0.0.0:9000?mode=listener`).
+2. In OBS, go to **Edit → Advanced Audio Properties**. On your **Mic/Aux** row, tick track **2**. On **every other source** (game, desktop audio, music, and the Elroy browser source), untick track **2**.
+3. In **Settings → Output → Recording** (the custom FFmpeg output), select **Audio Track 2** only.
+4. `.env`: `ELROY_VOICE_BARGE_IN=true`, then `docker compose up -d`.
+
+As a bonus, the "hey Elroy" transcripts get cleaner too, because the listener only hears you.
+
 ## Part 13: First-run checklist
 
 With the HUD visible (no `?hud=off`), the status box should show:
@@ -333,7 +352,7 @@ Then test in chat:
 | `TWITCH_BROADCASTER_LOGIN` | No | Same as your channel login |
 | `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` | Yes | Part 3 |
 | `TWITCH_BOT_OAUTH_TOKEN` | Yes | Part 4 |
-| `TWITCH_BOT_USERNAME` / `NEXT_PUBLIC_TWITCH_BOT_LOGIN` | Recommended | Bot login name |
+| `TWITCH_BOT_USERNAME` | Optional | Bot login name (safety check that the token matches) |
 | `TWITCH_OAUTH_TOKEN` | Yes | Part 5 |
 | `TWITCH_EVENTSUB_CALLBACK` | No | Leave blank on Docker |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Yes | Part 6 |
@@ -344,6 +363,8 @@ Then test in chat:
 | `OPENAI_TRANSCRIPTION_MODEL` | No | Leave blank |
 | `LISTEN_SOURCE` | No | `twitch` (default) or the SRT URL (Part 12) |
 | `LISTEN_TRANSCRIBE` | No | `true` / `false` |
+| `ELROY_VOICE_PACE` | No | `liberal` / `normal` / `conservative` (Part 12) |
+| `ELROY_VOICE_BARGE_IN` | No | `true` only with a mic-only listener feed (Part 12) |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | Optional | Part 9 |
 | `SPOTIFY_REDIRECT_URI` | No | Leave blank on Docker |
 | `ELROY_REWARD_ROAST_ID` / `ELROY_REWARD_ASK_ID` | No | Part 10, only if auto-detect fails |

@@ -3,7 +3,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import tmi from 'tmi.js';
-import { describeVoiceQuotaTier, voiceQuotaTierFromRemaining } from '@/lib/voice-quota';
+import {
+  describeVoiceQuotaTier,
+  parseVoicePace,
+  voiceLineCharTarget,
+  voiceQuotaTierFromRemaining,
+  type VoicePace,
+} from '@/lib/voice-quota';
 import { getElroySfxPlaybackUrl } from '@/lib/elroy-sfx';
 import {
   alignTriviaQuestionCategory,
@@ -157,6 +163,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const elroySpeakerUserIdsRef = useRef<Set<string>>(new Set());
   const recentElroyOutboundRef = useRef<Array<{ fingerprint: string; at: number }>>([]);
   const recentElroyRepliesRef = useRef<string[]>([]);
+  const voicePaceRef = useRef<VoicePace>('normal');
+  const bargeInRef = useRef(false);
+  const lastSpeechInterruptedRef = useRef(false);
   const lastMentionReplyByUserRef = useRef<Map<string, number>>(new Map());
   const recentVoicePlaybackRef = useRef<Array<{ fingerprint: string; at: number }>>([]);
 
@@ -500,8 +509,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const seedElroySpeakerLogins = useCallback(async (normalizedChannel: string) => {
     const logins = new Set<string>([normalizedChannel]);
     const userIds = new Set<string>();
-    const envBotLogin = process.env.NEXT_PUBLIC_TWITCH_BOT_LOGIN?.trim().toLowerCase();
-    if (envBotLogin) logins.add(envBotLogin);
+    // The bot's own login comes from its OAuth token (via /api/twitch/chat-status below).
 
     try {
       const res = await fetch('/api/twitch/chat-status', {
@@ -663,8 +671,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     return null;
   }, []);
 
-  const applyVoiceQuotaTier = useCallback((remaining: number) => {
-    const tier = voiceQuotaTierFromRemaining(remaining);
+  const applyVoiceQuotaTier = useCallback((remaining: number, pace: VoicePace = voicePaceRef.current) => {
+    voicePaceRef.current = pace;
+    const tier = voiceQuotaTierFromRemaining(remaining, pace);
     voiceCooldownMsRef.current = tier.voiceCooldownMs;
     celebrationVoiceCooldownMsRef.current = tier.celebrationVoiceCooldownMs;
     quotaVoiceAllowedRef.current = tier.voiceAllowed;
@@ -716,7 +725,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       });
       const data = await res.json();
       if (!res.ok || data.error) throw new Error('Quota lookup failed');
-      applyVoiceQuotaTier(Number(data.remaining) || 0);
+      bargeInRef.current = data.bargeIn === true;
+      applyVoiceQuotaTier(Number(data.remaining) || 0, parseVoicePace(data.voicePace));
       applySubscriptionVoiceBlock(data);
     } catch (e) {
       console.warn('ElevenLabs quota poll failed', e);
@@ -1221,7 +1231,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       const qData = await quotaRes.json();
 
       if (quotaRes.ok && !qData.error) {
-        applyVoiceQuotaTier(Number(qData.remaining) || 0);
+        bargeInRef.current = qData.bargeIn === true;
+        applyVoiceQuotaTier(Number(qData.remaining) || 0, parseVoicePace(qData.voicePace));
         applySubscriptionVoiceBlock(qData);
       }
 
@@ -1312,28 +1323,49 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       isSpeakingRef.current = true;
       setRuntimeHud((prev) => ({ ...prev, tts: 'speaking…' }));
       await new Promise<void>((resolve) => {
-        const finish = () => {
+        let bargeTimer: ReturnType<typeof setInterval> | null = null;
+        let finished = false;
+        const finish = (hudText = 'audio ready') => {
+          if (finished) return;
+          finished = true;
+          if (bargeTimer) clearInterval(bargeTimer);
           isSpeakingRef.current = false;
           URL.revokeObjectURL(audioUrl);
-          setRuntimeHud((prev) => ({ ...prev, tts: 'audio ready' }));
+          setRuntimeHud((prev) => ({ ...prev, tts: hudText }));
           resolve();
         };
 
-        audio.onended = finish;
+        // Barge-in: host starts talking while Elroy is mid-line → fade him out fast.
+        if (bargeInRef.current) {
+          const startedAt = Date.now();
+          bargeTimer = setInterval(() => {
+            const studio = studioRef.current;
+            if (!isStudioGateActive(studio) || !studio.streamerSpeaking) return;
+            if (Date.now() - startedAt < 400) return;
+            if (bargeTimer) clearInterval(bargeTimer);
+            const startVolume = audio.volume;
+            let step = 0;
+            const fade = setInterval(() => {
+              step += 1;
+              audio.volume = Math.max(0, startVolume * (1 - step / 6));
+              if (step >= 6) {
+                clearInterval(fade);
+                audio.pause();
+                lastSpeechInterruptedRef.current = true;
+                finish('host talking — Elroy stopped');
+              }
+            }, 40);
+          }, 100);
+        }
+
+        audio.onended = () => finish();
         audio.onerror = () => {
           console.warn('Audio element error');
-          setRuntimeHud((prev) => ({ ...prev, tts: 'playback error — check OBS audio' }));
-          finish();
+          finish('playback error — check OBS audio');
         };
         audio.play().catch((error) => {
           console.warn('Audio playback blocked', error);
-          setRuntimeHud((prev) => ({
-            ...prev,
-            tts: 'playback blocked — OBS: Control audio via OBS + unmute source',
-          }));
-          isSpeakingRef.current = false;
-          URL.revokeObjectURL(audioUrl);
-          resolve();
+          finish('playback blocked — OBS: Control audio via OBS + unmute source');
         });
       });
     } catch (e) {
@@ -1408,8 +1440,14 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     }
     lastElroyVoiceRef.current = Date.now();
     speechQueueRef.current = speechQueueRef.current
-      .then(() => speakNow(text))
-      .then(() => { void playElroySfx('cough'); })
+      .then(() => {
+        lastSpeechInterruptedRef.current = false;
+        return speakNow(text);
+      })
+      .then(() => {
+        // No cough after being cut off — it would land on top of the host.
+        if (!lastSpeechInterruptedRef.current) void playElroySfx('cough');
+      })
       .catch((e) => { console.error(e); });
     return speechQueueRef.current;
   }, [playElroySfx, shouldSkipVoicePlayback]);
@@ -1523,8 +1561,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       const personalizationRule = user
         ? `- Personalize the response directly for ${user} by name (say their username naturally in the message).`
         : `- Keep it general for the whole chat, not aimed at one person.`;
+      const voiceTarget = voiceLineCharTarget(voicePaceRef.current);
       const lengthRule = willUseVoice
-        ? `- Voice: 2-3 sentences, about 180-${MAX_VOICE_REPLY_CHARS} characters total. Say the full thought — do not stop mid-sentence.`
+        ? voicePaceRef.current === 'liberal'
+          ? `- Voice: 1-2 punchy sentences, about ${voiceTarget.min}-${voiceTarget.max} characters total. Say the full thought — do not stop mid-sentence.`
+          : `- Voice: 2-3 sentences, about ${voiceTarget.min}-${voiceTarget.max} characters total. Say the full thought — do not stop mid-sentence.`
         : `- Chat only: 2-4 sentences, about 200-${MAX_TWITCH_CHAT_CHARS} characters total.
 - Hard cap ${MAX_TWITCH_CHAT_CHARS} characters. No bullet lists or paragraphs — keep it flowing chat prose.`;
       const recentReplies = recentElroyRepliesRef.current;
@@ -1591,7 +1632,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
       if (willUseVoice) {
         const playDing = dingEnabledRef.current && !opts.skipDing;
-        const voiceText = clampReplyLength(safeChatText, MAX_VOICE_REPLY_CHARS);
+        // Liberal pace speaks more often, so each spoken line is capped shorter to stretch credits.
+        const voiceText = clampReplyLength(
+          safeChatText,
+          Math.min(MAX_VOICE_REPLY_CHARS, voiceLineCharTarget(voicePaceRef.current).max + 40),
+        );
         void (async () => {
           if (isStudioGateActive(studioRef.current)) {
             const gateLabel = describeStreamerGate(studioRef.current, Date.now(), {
