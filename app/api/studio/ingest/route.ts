@@ -1,5 +1,6 @@
 import { ingestStudio } from '@/lib/studio-state';
 import { isControlAuthorized } from '@/lib/control-auth';
+import { appendTranscript } from '@/lib/transcript';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +29,10 @@ export async function POST(request: Request) {
       lastSpeechAt: typeof body.lastSpeechAt === 'number' ? body.lastSpeechAt : undefined,
       hostTranscript: typeof body.hostTranscript === 'string' ? body.hostTranscript : undefined,
     });
+
+    if (typeof body.hostTranscript === 'string' && body.hostTranscript.trim()) {
+      void appendTranscript('host', body.hostTranscript);
+    }
 
     return Response.json(snapshot);
   } catch (error) {

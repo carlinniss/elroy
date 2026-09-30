@@ -141,6 +141,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const [widgetTables, setWidgetTables] = useState({ blackjack: false, roulette: false, pick3: false, pick4: false });
   const [widgetNow, setWidgetNow] = useState(() => Date.now());
   const widgetTrackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notPlayingPollsRef = useRef(0);
   const widgetTriviaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [runtimeHud, setRuntimeHud] = useState({
     stream: 'checking…',
@@ -2557,9 +2558,6 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     if (!streamLiveRef.current || isFullyMuted()) return;
 
     lastSpotifyTrackIdRef.current = track.id;
-    setWidgetTrack({ name: track.name, artists: track.artists.join(', ') });
-    if (widgetTrackTimerRef.current) clearTimeout(widgetTrackTimerRef.current);
-    widgetTrackTimerRef.current = setTimeout(() => setWidgetTrack(null), 15_000);
     void queueBongLogic(buildSpotifyTrackPrompt(track), requestedBy, { chatOnly: true });
   }, [queueBongLogic]);
 
@@ -2602,6 +2600,22 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       // must not unmute him; voice comes back ~25s after the music has actually stopped.
       if (data.connected && data.playing && data.track) {
         musicPlayingUntilRef.current = Date.now() + 25_000;
+        // Now-playing card stays up for the whole song.
+        notPlayingPollsRef.current = 0;
+        const card = {
+          name: data.track.name,
+          artists: data.track.artists.join(', '),
+          requestedBy: data.requestedBy ?? undefined,
+        };
+        setWidgetTrack((prev) => (
+          prev && prev.name === card.name && prev.artists === card.artists && prev.requestedBy === card.requestedBy
+            ? prev
+            : card
+        ));
+      } else {
+        // Two quiet polls in a row (~20s) before hiding, so gaps between songs don't flicker it.
+        notPlayingPollsRef.current += 1;
+        if (notPlayingPollsRef.current >= 2) setWidgetTrack(null);
       }
       for (const line of data.requestMessages ?? []) {
         if (line.trim()) void sayChat(line);
@@ -2623,12 +2637,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       lastSpotifyReconnectReminderAtRef.current = 0;
       if (data.track.id === lastSpotifyTrackIdRef.current) return;
       if (data.requestedBy) {
-        // A request Elroy already introduced — show it on screen, skip the second AI comment.
-        const requester = data.requestedBy;
+        // A request Elroy already introduced — skip the second AI comment (the card shows the requester).
         lastSpotifyTrackIdRef.current = data.track.id;
-        setWidgetTrack({ name: data.track.name, artists: data.track.artists.join(', '), requestedBy: requester });
-        if (widgetTrackTimerRef.current) clearTimeout(widgetTrackTimerRef.current);
-        widgetTrackTimerRef.current = setTimeout(() => setWidgetTrack(null), 15_000);
       } else {
         commentOnSpotifyTrack(data.track);
       }

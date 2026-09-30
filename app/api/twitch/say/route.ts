@@ -1,5 +1,6 @@
 import { isControlAuthorized } from '@/lib/control-auth';
 import { sendTwitchChatMessage } from '@/lib/twitch-chat';
+import { appendTranscript } from '@/lib/transcript';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +17,7 @@ export async function POST(request: Request) {
     }
 
     const sent = await sendTwitchChatMessage(message.slice(0, 500));
+    void appendTranscript('elroy', message.slice(0, 500));
     return Response.json({ ok: true, sender_login: sent.login });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Twitch send failed';
