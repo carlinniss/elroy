@@ -176,6 +176,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const bargeInRef = useRef(false);
   const lastSpeechInterruptedRef = useRef(false);
   const lastMentionReplyByUserRef = useRef<Map<string, number>>(new Map());
+  const hostMentionTimesRef = useRef<number[]>([]);
   const mentionHistoryByUserRef = useRef<Map<string, number[]>>(new Map());
   const recentVoicePlaybackRef = useRef<Array<{ fingerprint: string; at: number }>>([]);
 
@@ -195,6 +196,8 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const STREAM_CHECKIN_MS = 20 * 60 * 1000;
   // No real cooldown for the host — just enough to not answer one sentence twice.
   const HOST_MENTION_RESPONSE_COOLDOWN_MS = 3_000;
+  /** Safety cap even for the host: at most this many mic-triggered replies per minute. */
+  const HOST_MENTION_MAX_PER_MINUTE = 5;
   const STREAM_POLL_MS = 15_000;
   const TRIVIA_ANSWER_WINDOW_MS = 5 * 60 * 1000;
   const TRIVIA_CHECK_MS = 30_000;
@@ -1877,16 +1880,34 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
       }
       const mention = studioRef.current.latestHostMention;
       const now = Date.now();
+      // Feedback guard: if the "host" transcript is really Elroy's own voice leaking into the
+      // mic (speakers, monitoring), it mostly repeats words he just said — skip it.
+      const soundsLikeElroy = (text: string) => {
+        const words = text.toLowerCase().match(/[a-z']{3,}/g) ?? [];
+        if (words.length < 3) return false;
+        return recentElroyRepliesRef.current.some((line) => {
+          const spoken = new Set(line.toLowerCase().match(/[a-z']{3,}/g) ?? []);
+          const overlap = words.filter((word) => spoken.has(word)).length;
+          return overlap / words.length >= 0.5;
+        });
+      };
+      hostMentionTimesRef.current = hostMentionTimesRef.current.filter((at) => now - at < 60_000);
+      if (mention && !processedHostMentionIdsRef.current.has(mention.id) && soundsLikeElroy(mention.text)) {
+        processedHostMentionIdsRef.current.add(mention.id);
+        console.info('Ignoring host transcript that echoes Elroy:', mention.text);
+      }
       if (
         mention
         && !processedHostMentionIdsRef.current.has(mention.id)
         && !isFullyMuted()
+        && hostMentionTimesRef.current.length < HOST_MENTION_MAX_PER_MINUTE
         && now - mention.at < 45_000
         // Inside the cooldown the mention waits (next poll) instead of being thrown away.
         && now - lastHostMentionResponseRef.current >= HOST_MENTION_RESPONSE_COOLDOWN_MS
       ) {
         processedHostMentionIdsRef.current.add(mention.id);
         lastHostMentionResponseRef.current = now;
+        hostMentionTimesRef.current.push(now);
         // The host talking to Elroy on mic always gets a spoken answer.
         void queueBongLogic(buildHostAwarePrompt(mention.text), undefined, {
           voicePriority: 'celebration',
@@ -2547,7 +2568,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   }, [sayChat]);
 
   const pollSpotifyNowPlaying = useCallback(async () => {
-    if (!streamLiveRef.current || isFullyMuted()) return;
+    // Runs offline too so song requests hand off and get intros before a stream.
+    // Unprompted track-change comments stay live-only (commentOnSpotifyTrack checks that).
+    if (isFullyMuted()) return;
 
     try {
       const res = await fetch(`/api/spotify/now-playing?t=${Date.now()}`, {

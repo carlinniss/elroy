@@ -51,6 +51,10 @@ export type SongRequestState = {
   pushed: (SongRequest & { pushedAt: number }) | null;
   playing: SongRequest | null;
   lastRequestAt: Record<string, number>;
+  /** Last request whose handoff failed and was already reported — never re-announce it. */
+  lastPushErrorId?: string;
+  /** Don't retry a failed handoff before this time. */
+  pushRetryAt?: number;
 };
 
 export type SongRequestAction =
@@ -160,6 +164,7 @@ export function planSongRequestTick(
   if (next.pushed && now - next.pushed.pushedAt > STALE_PUSH_MS) next.pushed = null;
 
   let push: SongRequest | null = null;
+  if ((next.pushRetryAt ?? 0) > now) return { state: next, push: null, messages };
   if (!next.pushed && next.queue.length && snapshot.playing && current && current.durationMs > 0) {
     const remaining = current.durationMs - (current.progressMs ?? 0);
     if (remaining <= PUSH_WHEN_REMAINING_MS) {
@@ -345,8 +350,16 @@ export async function advanceSongRequests(snapshot?: SpotifyNowPlayingSnapshot):
       // Put it back at the front; try again next poll (or tell chat why it can't work).
       plan.state.queue.unshift(plan.push);
       plan.state.pushed = null;
-      if (res && res.status !== 404) messages.push(`⚠️ Couldn't queue ${plan.push.name}: ${spotifyErrorLine(res.status)}`);
+      plan.state.pushRetryAt = Date.now() + 60_000;
+      const status = res?.status ?? 0;
+      console.warn('Spotify queue handoff failed', status, res ? await res.text().catch(() => '') : 'no token');
+      // Say it in chat once per song, not every poll.
+      if (status !== 404 && plan.state.lastPushErrorId !== plan.push.id) {
+        plan.state.lastPushErrorId = plan.push.id;
+        messages.push(`⚠️ Couldn't queue ${plan.push.name}: ${spotifyErrorLine(status)}`);
+      }
     } else {
+      plan.state.pushRetryAt = undefined;
       intro = plan.push;
     }
   }
