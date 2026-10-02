@@ -13,7 +13,7 @@ export type BotCommandId =
   | 'pick3' | 'pick4' | 'p3bet' | 'p4bet' | 'p3table' | 'p4table' | 'p3stop' | 'p4stop'
   | 'stream' | 'np'
   | 'sr' | 'queue' | 'wrongsong' | 'srremove' | 'skip' | 'srclear'
-  | 'clip' | 'poll' | 'ding' | 'voice' | 'volume' | 'elroyoff';
+  | 'clip' | 'poll' | 'ding' | 'captions' | 'voice' | 'volume' | 'elroyoff';
 
 export type BotCommand = {
   /** Omit only for documentation rows that aren't typed commands (e.g. "Mention Elroy"). */
@@ -215,6 +215,7 @@ export const BOT_COMMAND_SECTIONS: BotCommandSection[] = [
         example: '!poll Best strain? | OG Kush | Blue Dream',
       },
       { id: 'ding', command: '!ding', aliases: ['!gong'], description: 'Toggle bong rip before voice.', audience: 'mod' },
+      { id: 'captions', command: '!captions', aliases: ['!cc'], description: 'Turn the on-screen captions on or off.', audience: 'mod', example: '!captions off · !captions on' },
       { id: 'voice', command: '!voice', description: 'Toggle voice on/off (chat stays on).', audience: 'mod' },
       {
         id: 'volume', command: '!volume',
@@ -228,7 +229,7 @@ export const BOT_COMMAND_SECTIONS: BotCommandSection[] = [
 ];
 
 /** Commands mods/broadcaster can still run while a "Shut Elroy Up" full mute is active. */
-export const COMMANDS_ALLOWED_WHILE_MUTED = new Set<BotCommandId>(['ding', 'voice', 'volume', 'elroyoff']);
+export const COMMANDS_ALLOWED_WHILE_MUTED = new Set<BotCommandId>(['ding', 'captions', 'voice', 'volume', 'elroyoff']);
 
 const COMMAND_LOOKUP: Map<string, BotCommandId> = (() => {
   const map = new Map<string, BotCommandId>();

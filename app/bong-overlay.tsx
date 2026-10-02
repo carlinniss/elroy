@@ -123,7 +123,10 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
   const showHud = searchParams.get('hud') === 'on';
   const showWidgets = searchParams.get('widgets') !== 'off';
   const showBubble = searchParams.get('bubble') !== 'off';
-  const showCaptions = searchParams.get('captions') !== 'off';
+  const captionsAllowedByUrl = searchParams.get('captions') !== 'off';
+  const [captionsOn, setCaptionsOn] = useState(true);
+  const captionsOnRef = useRef(true);
+  const showCaptions = captionsAllowedByUrl && captionsOn;
   const [elroyBubble, setElroyBubble] = useState<{ id: number; text: string } | null>(null);
   const [hostCaption, setHostCaption] = useState<{ id: string; text: string } | null>(null);
   const elroyBubbleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1826,6 +1829,7 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         settings?: {
           voiceEnabled?: boolean;
           dingEnabled?: boolean;
+          captionsEnabled?: boolean;
           volume?: number;
         };
         commands?: Array<{ id: string; type: string }>;
@@ -1841,6 +1845,11 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
         if (typeof data.settings?.dingEnabled === 'boolean') {
           dingEnabledRef.current = data.settings.dingEnabled;
           setIsDingOn(data.settings.dingEnabled);
+        }
+        if (typeof data.settings?.captionsEnabled === 'boolean') {
+          captionsOnRef.current = data.settings.captionsEnabled;
+          setCaptionsOn(data.settings.captionsEnabled);
+          if (!data.settings.captionsEnabled) setHostCaption(null);
         }
         if (typeof data.settings?.volume === 'number' && Number.isFinite(data.settings.volume)) {
           volumeRef.current = Math.min(1, Math.max(0, data.settings.volume));
@@ -3291,6 +3300,22 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
     void sayChat(user ? `@${user} ding ${nextState ? 'on' : 'off'}.` : `ding ${nextState ? 'on' : 'off'}.`);
   }, [controlHeaders, sayChat]);
 
+  const setCaptions = useCallback((user: string, arg: string) => {
+    const word = arg.trim().toLowerCase();
+    const nextState = word === 'on' ? true : word === 'off' ? false : !captionsOnRef.current;
+    captionsOnRef.current = nextState;
+    setCaptionsOn(nextState);
+    if (!nextState) setHostCaption(null);
+    void fetch('/api/bot/controls', {
+      method: 'POST',
+      headers: controlHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ settings: { captionsEnabled: nextState } }),
+    }).catch((error) => {
+      console.warn('Bot controls sync failed', error);
+    });
+    void sayChat(`@${user} captions ${nextState ? 'on' : 'off'}.`);
+  }, [controlHeaders, sayChat]);
+
   const toggleVoice = useCallback((user?: string) => {
     const nextState = !voiceEnabledRef.current;
     voiceEnabledRef.current = nextState;
@@ -3670,6 +3695,9 @@ function BongContent({ initialControlSecret = '' }: { initialControlSecret?: str
 
         case 'ding':
           if (isMod) toggleDing(username);
+          return;
+        case 'captions':
+          if (isMod) setCaptions(username, arg);
           return;
         case 'voice':
           if (isMod) toggleVoice(username);
@@ -4061,6 +4089,27 @@ function OverlayWidgets({
   if (!trivia && !track && !openTables.length) return null;
 
   return (
+    <>
+    {track ? (
+      // Song card lives top-left so it never covers the captions along the bottom.
+      <div style={{ position: 'fixed', left: 32, top: 24, zIndex: 900, maxWidth: 520 }}>
+        <div style={{ ...widgetCard, padding: '10px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
+          <span style={{ fontSize: 22 }}>🎶</span>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{track.name}</div>
+            <div style={{ fontSize: 15, color: 'rgba(255,255,255,0.7)' }}>{track.artists}</div>
+            {track.requestedBy ? (
+              <div style={{ fontSize: 14, color: '#C4B5FD', marginTop: 2 }}>requested by @{track.requestedBy.replace(/^@/, '')}</div>
+            ) : (
+              <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>
+                {track.requestsOff ? 'song requests off' : 'type !sr <song> to request'}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    ) : null}
+    {trivia || openTables.length ? (
     <div style={{ position: 'fixed', left: 32, bottom: 32, display: 'flex', flexDirection: 'column', gap: 12, zIndex: 900 }}>
       {trivia ? (
         <div style={widgetCard}>
@@ -4081,23 +4130,9 @@ function OverlayWidgets({
           {openTables.map((line) => <div key={line}>{line}</div>)}
         </div>
       ) : null}
-      {track ? (
-        <div style={{ ...widgetCard, padding: '10px 16px', display: 'flex', gap: 10, alignItems: 'center' }}>
-          <span style={{ fontSize: 22 }}>🎶</span>
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>{track.name}</div>
-            <div style={{ fontSize: 15, color: 'rgba(255,255,255,0.7)' }}>{track.artists}</div>
-            {track.requestedBy ? (
-              <div style={{ fontSize: 14, color: '#C4B5FD', marginTop: 2 }}>requested by @{track.requestedBy.replace(/^@/, '')}</div>
-            ) : (
-              <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>
-                {track.requestsOff ? 'song requests off' : 'type !sr <song> to request'}
-              </div>
-            )}
-          </div>
-        </div>
-      ) : null}
     </div>
+    ) : null}
+    </>
   );
 }
 

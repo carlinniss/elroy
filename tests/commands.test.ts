@@ -30,6 +30,6 @@ describe('parseChatCommand', () => {
   });
 
   it('only lets production toggles through a full mute', () => {
-    expect([...COMMANDS_ALLOWED_WHILE_MUTED].sort()).toEqual(['ding', 'elroyoff', 'voice', 'volume']);
+    expect([...COMMANDS_ALLOWED_WHILE_MUTED].sort()).toEqual(['captions', 'ding', 'elroyoff', 'voice', 'volume']);
   });
 });

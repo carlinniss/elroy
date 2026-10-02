@@ -69,6 +69,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
   const [botControls, setBotControls] = useState({
     voiceEnabled: true,
     dingEnabled: true,
+    captionsEnabled: true,
     volume: 85,
   });
   const [pollTitle, setPollTitle] = useState('');
@@ -233,6 +234,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
     setBotControls({
       voiceEnabled: snapshot.settings.voiceEnabled ?? true,
       dingEnabled: snapshot.settings.dingEnabled ?? true,
+      captionsEnabled: snapshot.settings.captionsEnabled ?? true,
       volume: Math.round((snapshot.settings.volume ?? 0.85) * 100),
     });
   }, []);
@@ -259,7 +261,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
   }, [authState, refreshBotControls]);
 
   const patchBotControls = useCallback(async (
-    settings: Partial<{ voiceEnabled: boolean; dingEnabled: boolean; volume: number }>,
+    settings: Partial<{ voiceEnabled: boolean; dingEnabled: boolean; captionsEnabled: boolean; volume: number }>,
   ) => {
     if (!savedSecret) return false;
     setBusy(true);
@@ -267,6 +269,7 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
       const payload: Record<string, boolean | number> = {};
       if (typeof settings.voiceEnabled === 'boolean') payload.voiceEnabled = settings.voiceEnabled;
       if (typeof settings.dingEnabled === 'boolean') payload.dingEnabled = settings.dingEnabled;
+      if (typeof settings.captionsEnabled === 'boolean') payload.captionsEnabled = settings.captionsEnabled;
       if (typeof settings.volume === 'number') {
         payload.volume = Math.min(1, Math.max(0, settings.volume / 100));
       }
@@ -814,6 +817,19 @@ export function ControlPanel({ initialSecret }: { initialSecret?: string }) {
                   }}
                 >
                   {botControls.dingEnabled ? 'On' : 'Off'}
+                </button>
+              </div>
+              <div style={controlRowStyle}>
+                <span style={controlLabelStyle}>On-screen captions</span>
+                <button
+                  type="button"
+                  disabled={busy || !savedSecret}
+                  style={toggleButtonStyle(botControls.captionsEnabled)}
+                  onClick={() => {
+                    void patchBotControls({ captionsEnabled: !botControls.captionsEnabled });
+                  }}
+                >
+                  {botControls.captionsEnabled ? 'On' : 'Off'}
                 </button>
               </div>
               <div style={{ ...controlRowStyle, alignItems: 'center' }}>

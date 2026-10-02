@@ -6,6 +6,7 @@ const MAX_COMMANDS = 8;
 export type BotControlsSettings = {
   voiceEnabled?: boolean;
   dingEnabled?: boolean;
+  captionsEnabled?: boolean;
   volume?: number;
 };
 
@@ -52,6 +53,9 @@ function parseStore(raw: unknown): BotControlsStore {
   }
   if (typeof data.settings?.dingEnabled === 'boolean') {
     settings.dingEnabled = data.settings.dingEnabled;
+  }
+  if (typeof data.settings?.captionsEnabled === 'boolean') {
+    settings.captionsEnabled = data.settings.captionsEnabled;
   }
   if (typeof data.settings?.volume === 'number' && Number.isFinite(data.settings.volume)) {
     settings.volume = Math.min(1, Math.max(0, data.settings.volume));
@@ -117,6 +121,9 @@ export async function updateBotControls(settings: BotControlsSettings): Promise<
   }
   if (typeof settings.dingEnabled === 'boolean') {
     nextSettings.dingEnabled = settings.dingEnabled;
+  }
+  if (typeof settings.captionsEnabled === 'boolean') {
+    nextSettings.captionsEnabled = settings.captionsEnabled;
   }
   if (typeof settings.volume === 'number' && Number.isFinite(settings.volume)) {
     nextSettings.volume = Math.min(1, Math.max(0, settings.volume));
