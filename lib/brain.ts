@@ -1,5 +1,6 @@
 /**
  * Elroy's brain: Gemini first (free tier / cheap), OpenAI as automatic backup.
+ * Set ELROY_BRAIN=openai to flip it: OpenAI first, Gemini as backup.
  *
  * When Gemini fails — daily free quota used up, rate limited, overloaded — the same prompt goes
  * to OpenAI (if OPENAI_API_KEY is set). After a quota error Gemini is skipped for a while so
@@ -49,9 +50,38 @@ async function askOpenAi(system: string, prompt: string): Promise<string> {
   return data.choices?.[0]?.message?.content?.trim() || '';
 }
 
+const OPENAI_PAUSE_MS = 15 * 60_000;
+const openAiState = globalThis as typeof globalThis & { __elroyOpenAiPausedUntil?: number };
+
+/** ELROY_BRAIN=openai → OpenAI answers first, Gemini is the backup. Default: Gemini first. */
+function preferOpenAi() {
+  return process.env.ELROY_BRAIN?.trim().toLowerCase() === 'openai';
+}
+
 export async function generateBrainText(opts: { system: string; prompt: string }): Promise<{ text: string; provider: BrainProvider }> {
   const hasOpenAi = Boolean(process.env.OPENAI_API_KEY?.trim());
   const hasGemini = Boolean(process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim());
+
+  if (preferOpenAi() && hasOpenAi && (openAiState.__elroyOpenAiPausedUntil ?? 0) <= Date.now()) {
+    try {
+      const text = await askOpenAi(opts.system, opts.prompt);
+      if (text) return { text, provider: 'openai' };
+      throw new Error('OpenAI returned an empty reply');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!hasGemini) throw error;
+      if (/insufficient_quota|billing|quota|429/i.test(message)) {
+        openAiState.__elroyOpenAiPausedUntil = Date.now() + OPENAI_PAUSE_MS;
+        console.warn('OpenAI out of credit / rate limited — using Gemini for the next 15 minutes.');
+      } else {
+        console.warn('OpenAI failed, trying Gemini backup:', message);
+      }
+      const { text } = await generateText({ model: getGeminiModel(), system: opts.system, prompt: opts.prompt });
+      if (text?.trim()) return { text, provider: 'gemini' };
+      throw new Error('Gemini returned an empty reply');
+    }
+  }
+
   const geminiPaused = (globalState.__elroyGeminiPausedUntil ?? 0) > Date.now();
 
   if (hasGemini && !(geminiPaused && hasOpenAi)) {

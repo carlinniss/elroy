@@ -16,6 +16,7 @@ export const MAX_QUEUE = 20;
 export const MAX_DURATION_MS = 7 * 60_000;
 export const PUSH_WHEN_REMAINING_MS = 25_000;
 const STALE_PUSH_MS = 20 * 60_000;
+const SKIP_DEBOUNCE_MS = 8_000;
 /** Followers of at least this long count as regulars. */
 const REGULAR_FOLLOW_MS = 3 * 24 * 60 * 60_000;
 
@@ -42,19 +43,23 @@ export type SongRequest = {
   requestedBy: string;
   requestedByDisplay: string;
   requestedAt: number;
+  /** Already brought back once after an accidental skip. */
+  recovered?: boolean;
 };
 
 export type SongRequestState = {
   enabled: boolean;
   queue: SongRequest[];
   /** Handed to Spotify's queue; can no longer be removed, only skipped once it plays. */
-  pushed: (SongRequest & { pushedAt: number }) | null;
+  pushed: (SongRequest & { pushedAt: number; /** Track that was playing when we handed it off. */ fromTrackId?: string; /** When that track was due to end. */ fromEndsAt?: number }) | null;
   playing: SongRequest | null;
   lastRequestAt: Record<string, number>;
   /** Last request whose handoff failed and was already reported — never re-announce it. */
   lastPushErrorId?: string;
   /** Don't retry a failed handoff before this time. */
   pushRetryAt?: number;
+  /** Last !skip — a second !skip within a few seconds is ignored (two mods skipping the same song). */
+  lastSkipAt?: number;
   /**
    * Chat lines + intro produced by a server-side tick, waiting for the overlay to post/speak them.
    * The listener container ticks every few seconds; the overlay collects these on its next poll.
@@ -167,13 +172,13 @@ export function planSongRequestTick(
   state: SongRequestState,
   snapshot: Pick<SpotifyNowPlayingSnapshot, 'playing' | 'track'>,
   now = Date.now(),
-): { state: SongRequestState; push: SongRequest | null; messages: string[] } {
+): { state: SongRequestState; push: SongRequest | null; messages: string[]; verifyPushed: boolean } {
   const next: SongRequestState = { ...state, queue: [...state.queue] };
   const messages: string[] = [];
   const current = snapshot.track;
 
   if (next.pushed && isSameTrack(next.pushed, current)) {
-    const { pushedAt: _pushedAt, ...req } = next.pushed;
+    const { pushedAt: _pushedAt, fromTrackId: _from, fromEndsAt: _ends, ...req } = next.pushed;
     next.playing = req;
     next.pushed = null;
     messages.push(`🎶 Now playing @${req.requestedByDisplay}'s request: ${req.name} — ${req.artists}`);
@@ -182,17 +187,23 @@ export function planSongRequestTick(
   }
 
   if (next.pushed && now - next.pushed.pushedAt > STALE_PUSH_MS) next.pushed = null;
+  // The song moved on but we never saw the request play (double skip, or it was skipped between
+  // polls). Ask Spotify's queue whether it's still coming instead of stalling the line.
+  const verifyPushed = Boolean(
+    next.pushed && current && next.pushed.fromTrackId
+    && current.id !== next.pushed.fromTrackId && !isSameTrack(next.pushed, current),
+  );
 
   let push: SongRequest | null = null;
-  if ((next.pushRetryAt ?? 0) > now) return { state: next, push: null, messages };
+  if ((next.pushRetryAt ?? 0) > now) return { state: next, push: null, messages, verifyPushed };
   if (!next.pushed && next.queue.length && snapshot.playing && current && current.durationMs > 0) {
     const remaining = current.durationMs - (current.progressMs ?? 0);
     if (remaining <= PUSH_WHEN_REMAINING_MS) {
       push = next.queue.shift()!;
-      next.pushed = { ...push, pushedAt: now };
+      next.pushed = { ...push, pushedAt: now, fromTrackId: current.id, fromEndsAt: now + remaining };
     }
   }
-  return { state: next, push, messages };
+  return { state: next, push, messages, verifyPushed };
 }
 
 // ── Spotify calls ────────────────────────────────────────────────────────────
@@ -346,6 +357,11 @@ export async function handleSongRequestAction(req: SongRequestAction): Promise<S
 
   if (req.action === 'skip') {
     if (!req.isMod) return { ok: false, messages: [] };
+    if (Date.now() - (state.lastSkipAt ?? 0) < SKIP_DEBOUNCE_MS) {
+      return { ok: false, messages: [`@${req.username} already skipped — give it a sec.`] };
+    }
+    state.lastSkipAt = Date.now();
+    await saveState(state);
     const res = await spotifyUserFetch('/me/player/next', { method: 'POST' });
     if (!res) return { ok: false, messages: [`@${req.username} Spotify isn't connected.`] };
     if (!res.ok) return { ok: false, messages: [`@${req.username} skip failed — ${spotifyErrorLine(res.status)}`] };
@@ -470,6 +486,40 @@ export async function advanceSongRequests(
   const plan = planSongRequestTick(state, now);
   const messages = [...(pendingOutbox?.messages ?? []), ...plan.messages];
   let intro: SongRequest | null = pendingOutbox?.intro ?? null;
+
+  if (plan.verifyPushed && plan.state.pushed) {
+    const lost = plan.state.pushed;
+    const res = await spotifyUserFetch('/me/player/queue');
+    if (res?.ok) {
+      const data = await res.json().catch(() => ({})) as { queue?: Array<{ id?: string; name?: string; artists?: Array<{ name?: string }> }> };
+      const stillQueued = (data.queue ?? []).some((item) => isSameTrack(lost, {
+        id: item.id ?? '',
+        name: item.name ?? '',
+        artists: (item.artists ?? []).map((a) => a.name ?? ''),
+      }));
+      if (stillQueued) {
+        // Someone played something else first — it's still coming. Check again after this song.
+        plan.state.pushed = { ...lost, fromTrackId: now.track?.id };
+      } else if (!lost.recovered && !(lost.fromEndsAt && (plan.state.lastSkipAt ?? 0) > lost.fromEndsAt - 2_000)) {
+        // (A mod's !skip that landed after the previous song had already ended was aimed at the
+        // request itself — that one stays skipped.)
+        // Spotify jumped past it (double skip, or skipped before we saw it). Put it back on now:
+        // queue it and skip to it, so the background playlist/album carries on afterwards.
+        const queued = await spotifyUserFetch(`/me/player/queue?uri=${encodeURIComponent(lost.uri)}`, { method: 'POST' });
+        const jumped = queued?.ok ? await spotifyUserFetch('/me/player/next', { method: 'POST' }) : null;
+        if (jumped?.ok) {
+          plan.state.pushed = { ...lost, recovered: true, pushedAt: Date.now(), fromTrackId: undefined };
+          messages.push(`↩️ @${lost.requestedByDisplay}'s request got skipped by accident — running it back: ${lost.name}`);
+        } else {
+          plan.state.pushed = null;
+          messages.push(`⏭️ Couldn't bring back @${lost.requestedByDisplay}'s request (${lost.name}) — moving on.`);
+        }
+      } else {
+        plan.state.pushed = null;
+        messages.push(`⏭️ @${lost.requestedByDisplay}'s request (${lost.name}) got skipped — moving on to the next one.`);
+      }
+    }
+  }
 
   if (plan.push) {
     const res = await spotifyUserFetch(`/me/player/queue?uri=${encodeURIComponent(plan.push.uri)}`, { method: 'POST' });
